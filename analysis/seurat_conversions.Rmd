@@ -1,0 +1,146 @@
+---
+title: "Convert Seurat objects"
+output: html_notebook
+---
+
+Notebook for converting collected data into Seurat objects, when necessary. Datasets will not be saved within this project folder, only soft linked in data/expression
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(SeuratDisk)
+library(qs)
+```
+
+
+
+# Tosches et al. 2018
+
+Converting the Tosches et al. data into Seurat V3. See also [this thread on installing Seurat V2] (https://github.com/satijalab/seurat/issues/2625) for the V1 to V2 conversion (more notes in README.md).
+
+Load Tosches V2 data
+
+```{r}
+pathToFiles = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Tosches2018/"
+lizard_all = readRDS(paste0(pathToFiles, "v2obj/lizard.all.cells_v2.RDS"))
+lizard_neurons = readRDS(paste0(pathToFiles, "v2obj/lizard.neurons.cells_v2.RDS"))
+
+turtle_all = readRDS(paste0(pathToFiles, "v2obj/turtle.all.cells_v2.RDS"))
+turtle_neurons = readRDS(paste0(pathToFiles, "v2obj/turtle.neurons.cells_v2.RDS"))
+```
+
+Update objects and save
+
+```{r}
+lizard_all_v3 = UpdateSeuratObject(lizard_all)
+saveRDS(lizard_all_v3, file = paste0(pathToFiles, "v3obj/lizard_all_v3.RDS"))
+lizard_neurons_v3 = UpdateSeuratObject(lizard_neurons)
+saveRDS(lizard_neurons_v3, file = paste0(pathToFiles, "v3obj/lizard_neurons_v3.RDS"))
+
+turtle_all_v3 = UpdateSeuratObject(turtle_all)
+saveRDS(turtle_all_v3, file = paste0(pathToFiles, "v3obj/turtle_all_v3.RDS"))
+turtle_neurons_v3 = UpdateSeuratObject(turtle_neurons)
+saveRDS(turtle_neurons_v3, file = paste0(pathToFiles, "v3obj/turtle_neurons_v3.RDS"))
+```
+
+
+
+# La Manno et al. 2020
+Load loom files
+
+```{r}
+p = "/links/groups/treutlein/USERS/tomasgomes/data/published/mousebrain/"
+l5_all = Connect(filename = paste0(p, "l5_all.loom"), mode = "r")
+dev_all = Connect(filename = paste0(p, "dev_all.loom"), mode = "r")
+
+l5_all_seurat = as.Seurat(l5_all)
+#dev_all_seurat = as.Seurat(dev_all)
+```
+
+Save objects
+
+```{r}
+saveRDS(l5_all_seurat, file = paste0(p, "l5_all_seurat.RDS"))
+#saveRDS(dev_all_seurat, file = paste0(p, "dev_all_seurat.RDS"))
+# dev data was ceded by Zhisong
+```
+
+
+
+# Raj et al. 2018
+
+Similarly to Tosches data, this also has first to be converted from Seurat v1 to v2. I'm doing it in a different system with Seurat 2.3.4 installed.
+
+Load Seurat v2 object
+
+```{r}
+p = "/links/groups/treutlein/USERS/tomasgomes/data/published/Raj2018_brain/"
+fall_v2 = readRDS(paste0(p, "GSE105010_fall_v2.inDrops.RData"))
+```
+
+Update and save
+
+```{r}
+drerio_brain_v3 = UpdateSeuratObject(fall_v2)
+saveRDS(drerio_brain_v3, file = paste0(p, "drerio_brain_v3.RDS"))
+```
+
+
+
+# Colquitt et al. 2021
+
+```{r}
+pathToFiles = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Colquitt2021/projects/HVC_RA_X/"
+load(paste0(pathToFiles, "HVC_RA_X.RData"))
+saveRDS(HVC_RA_X, file = paste0(pathToFiles, "HVC_RA_X.RDS"))
+
+pathToFiles = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Colquitt2021/projects/X/"
+load(paste0(pathToFiles, "MCX_COMBINED_C_seurat.RData"))
+saveRDS(MCX_COMBINED_C_seurat, file = paste0(pathToFiles, "MCX_COMBINED_C_seurat.RDS"))
+```
+
+
+
+# Allen Brain Human
+
+```{r}
+pathToFiles = "/links/groups/treutlein/USERS/tomasgomes/data/published/Allen_human/"
+dat10x = read.csv(paste0(pathToFiles, "matrix_10x.csv"), header = T, row.names = 1)
+datSS = read.csv(paste0(pathToFiles, "matrix_SS.csv"), header = T, row.names = 1)
+meta10x = read.csv(paste0(pathToFiles, "metadata_10x.csv"), header = T, row.names = 1)
+metaSS = read.csv(paste0(pathToFiles, "metadata_SS.csv"), header = T, row.names = 1)
+```
+
+Make Seurat objects and save
+
+```{r}
+human_10x = CreateSeuratObject(counts = t(dat10x), meta.data = meta10x)
+human_SS = CreateSeuratObject(counts = t(datSS), meta.data = metaSS)
+
+saveRDS(human_10x, file = paste0(pathToFiles, "human_10x.RDS"))
+saveRDS(human_SS, file = paste0(pathToFiles, "human_SS.RDS"))
+```
+
+

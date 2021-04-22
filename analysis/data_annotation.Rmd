@@ -1,0 +1,339 @@
+---
+title: "Data annotation"
+output: html_notebook
+---
+
+Notebook for cell type identity annotation. Annotations will be structured in 3 levels:
+ - classes (GABAergic, Glutamatergic, and other non-neuron types)
+ - subclasses (each functional subtype of those major classes)
+ - clusters (when available, more specific subtypes, which may or may not have a proper annotation)
+ - region (spatial location of the sample. if not available, then it will be just brain)
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(tidyverse)
+```
+
+
+# Load and prepare data
+Load Seurat data
+
+```{r}
+lizard_all = readRDS("data/expression/lizard_all_v3.RDS")
+turtle_all = readRDS("data/expression/turtle_all_v3.RDS")
+lizard_neurons = readRDS("data/expression/lizard_neurons_v3.RDS")
+turtle_neurons = readRDS("data/expression/turtle_neurons_v3.RDS")
+drerio_brain = readRDS("data/expression/drerio_brain_v3.RDS")
+finches_brain = readRDS("data/expression/HVC_RA_X.RDS")
+finches_list = SplitObject(finches_brain, split.by = "species")
+load("data/expression/MCX_COMBINED_C_seurat.RData") # contains replacement data for some finch cells
+mouse_brain = readRDS("data/expression/l5_all_seurat.RDS")
+human_10x = readRDS("data/expression/human_10x.RDS")
+human_SS = readRDS("data/expression/human_SS.RDS")
+```
+
+Load axolotl data
+
+```{r}
+axolotl_gaba = readRDS(file = "data/expression/axolotl/pallium_neuronal_GABA_res07_harmony.RDS")
+axolotl_glut = readRDS(file = "data/expression/axolotl/pallium_neuronal_Glut_res05_harmony.RDS")
+axolotl_neurons = readRDS(file = "data/expression/axolotl/pallium_neuronal_res07_harmony.RDS")
+axolotl_all = readRDS(file = "data/expression/axolotl/palliumres07_harmony.RDS")
+```
+
+
+
+# Make uniform annotations
+## Lizard
+
+Exc, glutamatergic excitatory neurons; Inh, GABAergic inhibitory interneurons; NPC, neural progenitor cells; Olig, mature oligodendrocytes; OPC, oligodendrocyte precursors; EG, ependymoglial cells; MG, microglia; Leu, leucocytes; Mur, mural cells; Vend, vascular endothelial cells
+
+Part of spatial location is inferred
+
+```{r}
+lizard_merge = merge(lizard_all@meta.data, lizard_neurons@meta.data, by = 0, all = T)
+rownames(lizard_merge) = lizard_merge[,1]
+lizard_merge = lizard_merge[,-c(1,2,4:11,13:25,28,29)]
+lizard_merge$pallial.area[is.na(lizard_merge$pallial.area)] = ""
+lizard_merge$areaident.x = paste0(lizard_merge$areaident.x, "_", lizard_merge$pallial.area)
+lizard_merge$classes = ifelse(grepl("Inh", lizard_merge$clusters.x), "GABAergic",
+                       ifelse(grepl("Exc", lizard_merge$clusters.x), "Glutamatergic",
+                       ifelse(grepl("Vend", lizard_merge$clusters.x), "Endothelial",
+                       ifelse(grepl("Leu", lizard_merge$clusters.x), "Leukocytes",
+                       ifelse(grepl("Mur", lizard_merge$clusters.x), "Other vascular",
+                       ifelse(grepl("Olig", lizard_merge$clusters.x), "Glia",
+                       ifelse(grepl("OPC", lizard_merge$clusters.x), "Glia",
+                       ifelse(grepl("EG", lizard_merge$clusters.x), "Glia",
+                       ifelse(grepl("MG", lizard_merge$clusters.x), "Microglia",
+                       "NPC")))))))))
+
+lizard_umeta = data.frame(row.names = rownames(lizard_merge),
+                          "classes" = lizard_merge$classes, 
+                          "subclasses" = lizard_merge$clusters.x, 
+                          "cellclusters" = lizard_merge$clusters.y, 
+                          "regions" = lizard_merge$areaident.x)
+write.csv(lizard_umeta, file = "../data/annotations/lizard_all_umeta.csv", 
+          row.names = T, col.names = T, quote = F)
+```
+
+## Turtle
+
+Exc, glutamatergic excitatory neurons; Inh, GABAergic inhibitory interneurons; NPC, neural progenitor cells; Olig, mature oligodendrocytes; OPC, oligodendrocyte precursors; EG, ependymoglial cells; MG, microglia; Leu, leucocytes; Mur, mural cells; Vend, vascular endothelial cells
+
+Part of spatial location is inferred
+
+```{r}
+turtle_merge = merge(turtle_all@meta.data, turtle_neurons@meta.data, by = 0, all = T)
+rownames(turtle_merge) = turtle_merge[,1]
+turtle_merge = turtle_merge[,-c(1,2,4:12,14:26,29,30)]
+turtle_merge$pallial.area[is.na(turtle_merge$pallial.area)] = ""
+turtle_merge$areaident.x = paste0(turtle_merge$areaident.x, "_", turtle_merge$pallial.area)
+turtle_merge$classes = ifelse(grepl("Inh", turtle_merge$cluster), "GABAergic",
+                       ifelse(grepl("Exc", turtle_merge$cluster), "Glutamatergic",
+                       ifelse(grepl("Vend", turtle_merge$cluster), "Endothelial",
+                       ifelse(grepl("Leu", turtle_merge$cluster), "Leukocytes",
+                       ifelse(grepl("Mur", turtle_merge$cluster), "Other vascular",
+                       ifelse(grepl("Olig", turtle_merge$cluster), "Glia",
+                       ifelse(grepl("OPC", turtle_merge$cluster), "Glia",
+                       ifelse(grepl("EG", turtle_merge$cluster), "Glia",
+                       ifelse(grepl("MG", turtle_merge$cluster), "Microglia",
+                       ifelse(grepl("NPC", turtle_merge$cluster), "NPC",
+                       "doublets"))))))))))
+
+turtle_umeta = data.frame(row.names = rownames(turtle_merge),
+                          "classes" = turtle_merge$classes, 
+                          "subclasses" = turtle_merge$cluster, 
+                          "cellclusters" = turtle_merge$clusters, 
+                          "regions" = turtle_merge$areaident.x)
+write.csv(turtle_umeta, file = "data/annotations/turtle_all_umeta.csv", 
+          row.names = T, col.names = T, quote = F)
+```
+
+
+## Zebra fish
+Requires a (modified) supplementary table
+
+```{r}
+drerio_umeta = data.frame(row.names = colnames(drerio_brain),
+                          "cellclusters" = as.character(drerio_brain$Mod2.5))
+cl_matches = readxl::read_xlsx("data/expression/41587_2018_BFnbt4103_MOESM56_ESM.xlsx")[1:63,]
+cl_matches$Section[9] = "All"
+cl_matches$Section[18] = "S2"
+cl_matches$Section[20] = "S3"
+cl_matches$Section[23] = "S1/S2"
+cl_matches$Section[25] = "All"
+cl_matches$Section[26] = "All"
+cl_matches$Section[37] = "S2"
+cl_matches$Section[18] = "S2"
+cl_matches$Section[40:41] = "All"
+cl_matches$Section[18] = "S2"
+cl_matches$Section[45] = "All"
+cl_matches$Section[46] = "S2/S3"
+cl_matches$Section[47:48] = "All"
+cl_matches$Section[51:52] = "All"
+cl_matches$Section[55] = "S1/S2"
+cl_matches$Section[57:58] = "All"
+cl_matches$Section[60] = "All"
+
+drerio_umeta = data.frame(row.names = colnames(drerio_brain),
+                          "classes" = cl_matches$Classes[match(drerio_umeta$cellclusters,
+                                                                   cl_matches$Cluster)],
+                          "subclasses" = cl_matches$Identity[match(drerio_umeta$cellclusters,
+                                                                   cl_matches$Cluster)], 
+                          "cellclusters" = drerio_umeta$cellclusters, 
+                          "regions" = cl_matches$Section[match(drerio_umeta$cellclusters,
+                                                               cl_matches$Cluster)])
+drerio_umeta$regions = factor(drerio_umeta$regions)
+levels(drerio_umeta$regions) = c("All" = "All", "S1" = "Forebrain", "S1/S2" = "Fore/Midbrain", 
+                                 "S2" = "Midbrain", "S2/S3" = "Mid/Hindbrain", "S3" = "Hindbrain")
+write.csv(drerio_umeta, file = "data/annotations/drerio_all_umeta.csv", 
+          row.names = T, col.names = T, quote = F)
+```
+
+
+## Both Finches
+ZF - Check Colquitt et al and Xiao et al
+
+```{r}
+zfinch_umeta = data.frame(row.names = colnames(finches_list$ZF),
+                          "classes" = finches_list$ZF$cluster_orig,
+                          "subclasses" = finches_list$ZF$cluster_orig, 
+                          "cellclusters" = finches_list$ZF$cluster_orig,
+                          "regions" = finches_list$ZF$region)
+
+# get the clusters as listed in Xiao et al.
+zfinch_X = data.frame(row.names = gsub("_1", "_5", colnames(MCX_COMBINED_C_seurat)),
+                      "subclasses" = factor(MCX_COMBINED_C_seurat@active.ident),
+                      "cellclusters" = MCX_COMBINED_C_seurat@active.ident)
+zfinch_X = zfinch_X[MCX_COMBINED_C_seurat$orig.ident=="MCX20",]
+levels(zfinch_X$subclasses) = c("1" = "MSN_1", "2" = "MSN_2", "3" = "MSN_3", "4" = "MSN_4", "5" = "MSN_5", 
+                                "6" = "Astro", "7" = "Astro", "8" = "Oligo", "9" = "Glut-9", "10" = "Glut-10",
+                                "11" = "RBC", "12" = "Palidal-like neuron", "13" = "Inter_13", 
+                                "14" = "Inter_14", "15" = "Endo", "16" = "Inter_16", "17" = "Inter_17", 
+                                "18" = "Inter_18", "19" = "Inter_19", "20" = "OPC", "21" = "Inter_21", 
+                                "22" = "Micro", "23" = "Inter_23")
+zfinch_umeta[rownames(zfinch_X), "classes"] = as.character(zfinch_X$subclasses)
+zfinch_umeta[rownames(zfinch_X), "subclasses"] = as.character(zfinch_X$subclasses)
+zfinch_umeta[rownames(zfinch_X), "cellclusters"] = as.character(zfinch_X$cellclusters)
+
+zfinch_umeta$classes = ifelse(grepl("Pre", zfinch_umeta$classes), "NPC",
+                       ifelse(grepl("GABA", zfinch_umeta$classes), "GABAergic",
+                       ifelse(grepl("Glut", zfinch_umeta$classes), "Glutamatergic",
+                       ifelse(grepl("MSN", zfinch_umeta$classes), "Medium Spiny Neuron",
+                       ifelse(grepl("Inter", zfinch_umeta$classes), "Interneuron",
+                       ifelse(grepl("Palidal-like neuron", zfinch_umeta$classes), "Palidal-like neuron",
+                       ifelse(grepl("Oligo", zfinch_umeta$classes), "Glia",
+                       ifelse(grepl("OPC", zfinch_umeta$classes), "Glia",
+                       ifelse(grepl("Micro", zfinch_umeta$classes), "Microglia",
+                       ifelse(grepl("RBC", zfinch_umeta$classes), "Erythrocytes",
+                       ifelse(grepl("Endo", zfinch_umeta$classes), "Endothelial",
+                       ifelse(grepl("Mural", zfinch_umeta$classes), "Other vascular",
+                       ifelse(grepl("Astro", zfinch_umeta$classes), "Glia",
+                       ifelse(grepl("Epen", zfinch_umeta$classes), "Glia", "Other vascular"))))))))))))))
+
+write.csv(zfinch_umeta, file = "data/annotations/zfinch_all_umeta.csv", 
+          row.names = T, col.names = T, quote = F)
+```
+
+BF - Check Colquitt et al and Xiao et al
+
+```{r}
+bfinch_umeta = data.frame(row.names = colnames(finches_list$BF),
+                          "classes" = finches_list$BF$cluster_orig,
+                          "subclasses" = finches_list$BF$cluster_orig, 
+                          "cellclusters" = finches_list$BF$cluster_orig,
+                          "regions" = finches_list$BF$region)
+
+bfinch_umeta$classes = ifelse(grepl("Pre", bfinch_umeta$classes), "NPC",
+                       ifelse(grepl("GABA", bfinch_umeta$classes), "GABAergic",
+                       ifelse(grepl("Glut", bfinch_umeta$classes), "Glutamatergic",
+                       ifelse(grepl("Oligo", bfinch_umeta$classes), "Glia",
+                       ifelse(grepl("OPC", bfinch_umeta$classes), "Glia",
+                       ifelse(grepl("Micro", bfinch_umeta$classes), "Microglia",
+                       ifelse(grepl("RBC", bfinch_umeta$classes), "Erythrocytes",
+                       ifelse(grepl("Endo", bfinch_umeta$classes), "Endothelial",
+                       ifelse(grepl("Mural", bfinch_umeta$classes), "Other vascular",
+                       ifelse(grepl("Astro", bfinch_umeta$classes), "Glia",
+                       ifelse(grepl("Epen", bfinch_umeta$classes), "Glia", "Other vascular")))))))))))
+
+write.csv(bfinch_umeta, file = "data/annotations/bfinch_all_umeta.csv", 
+          row.names = T, col.names = T, quote = F)
+```
+
+
+## Mouse
+
+```{r}
+mouse_umeta = data.frame(row.names = colnames(mouse_brain), "classes" = mouse_brain$TaxonomyRank3,
+                         "subclasses" = mouse_brain$Taxonomy_group, "cellclusters" = mouse_brain$ClusterName,
+                         "regions" = mouse_brain$Tissue)
+
+write.csv(mouse_umeta, file = "data/annotations/mouse_all_umeta.csv", 
+          row.names = T, col.names = T, quote = F)
+```
+
+
+## Axolotl
+Merge axolotl annotations together into a single object
+
+```{r}
+gaba_cl = paste0("GABA_", axolotl_gaba$seurat_clusters)
+names(gaba_cl) = colnames(axolotl_gaba)
+glut_cl = paste0("Glut_", axolotl_glut$seurat_clusters)
+names(glut_cl) = colnames(axolotl_glut)
+other = axolotl_all$classification_2[!(colnames(axolotl_all) %in% c(names(glut_cl), names(gaba_cl)))]
+all_annot = data.frame("all_annot" = c(other, gaba_cl, glut_cl))
+axolotl_all = AddMetaData(axolotl_all, metadata = all_annot)
+axolotl_all@meta.data$all_annot[is.na(axolotl_all@meta.data$all_annot)] = as.character(axolotl_all@meta.data$class[is.na(axolotl_all@meta.data$all_annot)])
+```
+
+Make meta table
+
+```{r}
+axolotl_umeta = data.frame(row.names = colnames(axolotl_all), "classes" = axolotl_all$class,
+                           "subclasses" = axolotl_all$all_annot, "cellclusters" = axolotl_all$all_annot,
+                           "regions" = axolotl_all$region)
+
+axolotl_umeta$classes = ifelse(grepl("GABA", axolotl_umeta$subclasses), "GABAergic",
+                        ifelse(grepl("Glut", axolotl_umeta$subclasses), "Glutamatergic",
+                        ifelse(grepl("microglia", axolotl_umeta$subclasses), "Microglia",
+                        ifelse(grepl("glia", axolotl_umeta$subclasses), "Glia",
+                        ifelse(grepl("oligodendrocyte", axolotl_umeta$subclasses), "Glia",
+                        ifelse(grepl("endothelial", axolotl_umeta$subclasses), "Endothelial", 
+                               "Neuron"))))))
+
+write.csv(axolotl_umeta, file = "data/annotations/axolotl_all_umeta.csv", 
+          row.names = T, col.names = T, quote = F)
+```
+
+
+## Human
+10x
+
+```{r}
+human10x_umeta = data.frame(row.names = colnames(human_10x), "classes" = human_10x$class_label,
+                            "subclasses" = human_10x$cluster_label, 
+                            "cellclusters" = human_10x$cluster_label, "regions" = human_10x$region_label)
+
+human10x_umeta$classes = ifelse(grepl("Inh ", human10x_umeta$subclasses), "GABAergic",
+                         ifelse(grepl("Exc ", human10x_umeta$subclasses), "Glutamatergic",
+                         ifelse(grepl("Astro ", human10x_umeta$subclasses), "Glia",
+                         ifelse(grepl("Endo ", human10x_umeta$subclasses), "Endothelial",
+                         ifelse(grepl("Micro ", human10x_umeta$subclasses), "Microglia",
+                         ifelse(grepl("Oligo", human10x_umeta$subclasses), "Glia", 
+                         ifelse(grepl("OPC", human10x_umeta$subclasses), "Glia", 
+                                "Other vascular")))))))
+
+write.csv(human10x_umeta, file = "data/annotations/human10x_all_umeta.csv", 
+          row.names = T, col.names = T, quote = F)
+```
+
+SS
+
+```{r}
+humanSS_umeta = data.frame(row.names = colnames(human_SS), "classes" = human_SS$class_label,
+                           "subclasses" = human_SS$cluster_label, 
+                           "cellclusters" = human_SS$cluster_label, 
+                           "regions" = paste0(human_SS@meta.data$region_label, "_",
+                                              human_SS$cortical_layer_label))
+humanSS_umeta$subclasses[humanSS_umeta$subclasses==""] = human_SS$outlier_type[humanSS_umeta$subclasses==""]
+humanSS_umeta$cellclusters[humanSS_umeta$cellclusters==""] = human_SS$outlier_type[humanSS_umeta$cellclusters==""]
+
+humanSS_umeta$classes = ifelse(grepl("Donor ", humanSS_umeta$subclasses), "doublets",
+                        ifelse(grepl("Outlier ", humanSS_umeta$subclasses), "doublets",
+                        ifelse(grepl("Inh ", humanSS_umeta$subclasses), "GABAergic",
+                        ifelse(grepl("Exc ", humanSS_umeta$subclasses), "Glutamatergic",
+                        ifelse(grepl("Astro ", humanSS_umeta$subclasses), "Glia",
+                        ifelse(grepl("Endo ", humanSS_umeta$subclasses), "Endothelial",
+                        ifelse(grepl("Micro ", humanSS_umeta$subclasses), "Microglia",
+                        ifelse(grepl("Oligo", humanSS_umeta$subclasses), "Glia", 
+                        ifelse(grepl("OPC", humanSS_umeta$subclasses), "Glia", 
+                               "Other vascular")))))))))
+
+write.csv(humanSS_umeta, file = "data/annotations/humanSS_all_umeta.csv", 
+          row.names = T, col.names = T, quote = F)
+```

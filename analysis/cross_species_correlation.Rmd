@@ -1,0 +1,330 @@
+---
+title: "Cross species correlation"
+output: html_notebook
+---
+
+Notebook for cell type identity correlations
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(tidyverse)
+library(igraph)
+library(UpSetR)
+```
+
+
+
+# Load and reformat data
+Load Seurat data
+
+```{r}
+lizard_all = readRDS("data/expression/lizard_all_v3.RDS")
+turtle_all = readRDS("data/expression/turtle_all_v3.RDS")
+drerio_brain = readRDS("data/expression/drerio_brain_v3.RDS")
+finches_brain = readRDS("data/expression/HVC_RA_X.RDS")
+finches_list = SplitObject(finches_brain, split.by = "species")
+mouse_brain = readRDS("data/expression/l5_all_seurat.RDS")
+```
+
+Load axolotl data
+
+```{r}
+axolotl_gaba = readRDS(file = "data/expression/axolotl/pallium_neuronal_GABA_res07_harmony.RDS")
+axolotl_glut = readRDS(file = "data/expression/axolotl/pallium_neuronal_Glut_res05_harmony.RDS")
+axolotl_neurons = readRDS(file = "data/expression/axolotl/pallium_neuronal_res07_harmony.RDS")
+axolotl_all = readRDS(file = "data/expression/axolotl/palliumres07_harmony.RDS")
+```
+
+Merge axolotl annotations together into a single object
+
+```{r}
+gaba_cl = paste0("GABA_", axolotl_gaba$seurat_clusters)
+names(gaba_cl) = colnames(axolotl_gaba)
+glut_cl = paste0("Glut_", axolotl_glut$seurat_clusters)
+names(glut_cl) = colnames(axolotl_glut)
+other = axolotl_all$classification_2[!(colnames(axolotl_all) %in% c(names(glut_cl), names(gaba_cl)))]
+all_annot = data.frame("all_annot" = c(other, gaba_cl, glut_cl))
+axolotl_all = AddMetaData(axolotl_all, metadata = all_annot)
+axolotl_all_filt = axolotl_all[,!is.na(axolotl_all$all_annot) & !grepl("neuron", axolotl_all$all_annot)]
+```
+
+Organise metadata into a list
+
+```{r}
+meta_list = list("exp_tur" = turtle_all@meta.data, "exp_liz" = lizard_all@meta.data, 
+                 "exp_dre" = drerio_brain@meta.data, "exp_zef" = finches_list$ZF@meta.data, 
+                 "exp_bef" = finches_list$BF@meta.data, "exp_mou" = mouse_brain@meta.data, 
+                 "exp_axo" = axolotl_all_filt@meta.data)
+cl_id_list = list("cluster", "clusters", "Mod2.5", "seurat_clusters", "seurat_clusters", "Taxonomy_group",
+                  "all_annot")
+names(cl_id_list) = names(meta_list)
+```
+
+Load necessary eggNOG data
+
+```{r}
+annot_list = readRDS(file = "data/eggNOG/annotation_list.RDS")
+```
+
+
+
+# Prepare datasets
+Reformat matrices to have only one2one orthologs that are shared
+
+```{r}
+counts_list = list(exp_tur = turtle_all@assays$RNA@counts, exp_liz = lizard_all@assays$RNA@counts,
+                   exp_dre = drerio_brain@assays$RNA@counts, exp_zef = finches_list$ZF@assays$RNA@counts,
+                   exp_bef = finches_list$BF@assays$RNA@counts, exp_mou = mouse_brain@assays$RNA@counts,
+                   exp_axo = axolotl_all_filt@assays$RNA@counts)
+
+reformatWithOrth = function(eggnog_annot, counts_l, sp_list = c("Cpicta", "Pvitticeps")){
+  l_g_sp = list()
+  for(spi in 1:length(sp_list)){
+    cp = names(counts_l)[spi]
+    sp = sp_list[spi]
+    l_g_sp[[cp]] = eggnog_annot[[sp]][,c(2,5)]
+    l_g_sp[[cp]] = l_g_sp[[cp]][l_g_sp[[cp]]$Preferred_name!="-" & !is.na(l_g_sp[[cp]]$Preferred_name),]
+    l_g_sp[[cp]]$Preferred_name = toupper(l_g_sp[[cp]]$Preferred_name)
+    l_g_sp[[cp]] = unique(l_g_sp[[cp]])
+    l_g_sp[[cp]] = l_g_sp[[cp]][!(l_g_sp[[cp]]$gene %in% l_g_sp[[sp]]$gene[duplicated(l_g_sp[[cp]]$gene)]),]
+    l_g_sp[[cp]] = l_g_sp[[cp]][!(l_g_sp[[cp]]$Preferred_name %in% l_g_sp[[cp]]$Preferred_name[duplicated(l_g_sp[[cp]]$Preferred_name)]),]
+  }
+  
+  all_sp_match = l_g_sp %>% reduce(full_join, by = "Preferred_name")
+  all_sp_match = all_sp_match[,c(2,1,3:ncol(all_sp_match))]
+  colnames(all_sp_match) = c("Preferred_name", names(counts_l))
+  
+  # only keep genes appearing in exp matrix
+  g_in = lapply(colnames(all_sp_match)[-1], 
+                function(x) toupper(all_sp_match[,x]) %in% toupper(rownames(counts_l[[x]])))
+  keep = rep(T, nrow(all_sp_match))
+  for(n in 1:length(g_in)){
+    keep = keep & g_in[[n]]
+  }
+  all_sp_match_filt = all_sp_match[keep,]
+  
+  # remove duplicated - only want one2one
+  g_du = lapply(colnames(all_sp_match_filt)[-1], 
+                function(x) !(all_sp_match_filt[,x] %in% all_sp_match_filt[,x][duplicated(all_sp_match_filt[,x])]))
+  keep = rep(T, nrow(all_sp_match_filt))
+  for(n in 1:length(g_du)){
+    keep = keep & g_du[[n]]
+  }
+  all_sp_match_filt = all_sp_match_filt[keep,]
+  
+  # putting everything into uppercase because the drerio data is in uppercase for some reason...
+  for(n in colnames(all_sp_match_filt)){all_sp_match_filt[,n] = toupper(all_sp_match_filt[,n])}
+  
+  return(all_sp_match_filt)
+}
+
+gene_match = reformatWithOrth(annot_list, counts_list, 
+                              sp_list = c("Cpicta", "Pvitticeps", "Drerio", "Tguttata", 
+                                          "Tguttata", "Mmusculus", "Amexicanum"))
+gene_match_comp = gene_match[complete.cases(gene_match),]
+
+lapply(counts_list, dim)
+for(n in names(counts_list)){
+  counts_list[[n]] = counts_list[[n]][toupper(rownames(counts_list[[n]])) %in% gene_match_comp[,n],]
+  rownames(counts_list[[n]]) = gene_match_comp$Preferred_name[match(toupper(rownames(counts_list[[n]])),
+                                                                    gene_match_comp[,n])]
+}
+lapply(counts_list, dim)
+
+# make sure they have the same ordering
+counts_list = lapply(counts_list, function(x) x[rownames(counts_list$exp_axo),])
+```
+
+Renormalise, get mean expression and markers
+
+```{r}
+seurat_one2one = list()
+avg_exp = list()
+mk_list = list()
+for(n in names(counts_list)){
+  print(n)
+  seurat_one2one[[n]] = CreateSeuratObject(counts_list[[n]], meta.data = meta_list[[n]])
+  Idents(seurat_one2one[[n]]) = seurat_one2one[[n]]@meta.data[,cl_id_list[[n]]]
+  seurat_one2one[[n]] = suppressWarnings(SCTransform(seurat_one2one[[n]], do.correct.umi = T, verbose = F, 
+                                                     seed.use = 1, vars.to.regress = "nCount_RNA",
+                                                     variable.features.rv.th = 1, return.only.var.genes = F,
+                                                     variable.features.n = NULL))
+  avg_exp[[n]] = AverageExpression(seurat_one2one[[n]], assays = "SCT")$SCT
+  mk_list[[n]] = FindAllMarkers(seurat_one2one[[n]], logfc.threshold = 0.2, only.pos = T,
+                                pseudocount.use = 0.1, assay = "SCT")
+}
+save(seurat_one2one, avg_exp, mk_list, file = "results/cross_species_correlation/one2one_seurat_avg_mk.RData")
+```
+
+
+
+# Correlation analysis
+Load data
+
+```{r}
+load("results/cross_species_correlation/one2one_seurat_avg_mk.RData")
+```
+
+Select genes to use for correlations, normalise data
+
+```{r}
+# get top markers
+top_mk_list = lapply(mk_list, function(x) x[x$p_val_adj<=0.05 & x$avg_log2FC>0.2,])
+for(n in names(top_mk_list)){
+  top_mk_list[[n]] = unique(unlist((top_mk_list[[n]] %>% 
+                                      arrange(desc(avg_log2FC)) %>% 
+                                      group_by(cluster) %>% 
+                                      slice(1:500000))[,"gene"]))
+}
+
+common_genes = Reduce(intersect, top_mk_list)
+common_genes = common_genes[common_genes %in% Reduce(intersect, lapply(avg_exp, rownames))]
+avg_exp_sub = lapply(avg_exp, function(x) t(apply(x[common_genes,], 1, function(y) y/mean(y))))
+lapply(avg_exp_sub, dim)
+```
+
+
+
+```{r}
+upset(fromList(top_mk_list[c(6,4,5,2,1,7,3)]), sets = names(top_mk_list)[c(6,4,5,2,1,7,3)], 
+      order.by = "freq", keep.order = TRUE, number.angles = 0, nintersects = 30, point.size = 1.8)
+```
+
+Calculate correlations
+
+```{r, include = FALSE}
+sp_cor_l = list()
+for(i in names(avg_exp_sub)){
+  for(j in names(avg_exp_sub)){
+    print(paste(i, j))
+    sp_cor_l[[paste0(i, ".", j)]] = cor(avg_exp_sub[[i]], avg_exp_sub[[j]], method = "sp")
+  }
+}
+```
+
+Plot correlation matrices
+
+```{r}
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(100)
+for(n in names(sp_cor_l)){
+  pltmat = t(sp_cor_l[[n]])
+  br = c(seq(min(pltmat), 0, length.out = 51), seq(0, max(pltmat), length.out = 51)[-1])
+  pheatmap::pheatmap(pltmat, breaks = br, color = cols,
+                     clustering_method = "ward.D2", main = n)
+}
+```
+
+UMAP from mean expression
+
+```{r}
+for(n in names(avg_exp_sub)){
+  sp = strsplit(n, "_")[[1]][2]
+  colnames(avg_exp_sub[[n]]) = paste0(sp, "..", colnames(avg_exp_sub[[n]]))
+}
+avg_exp_all = t(Reduce(cbind, avg_exp_sub))
+set.seed(2954)
+l = uwot::umap(avg_exp_all, metric = "cosine", ret_nn = T, n_epochs = 1000)
+l_sp = data.frame(l$embedding)
+rownames(l_sp) = rownames(avg_exp_all)
+l_sp$cl = rownames(avg_exp_all)
+l_sp$sp = unlist(lapply(strsplit(l_sp$cl, "..", fixed = T), function(x) x[1]))
+l_sp$cl = unlist(lapply(strsplit(l_sp$cl, "..", fixed = T), function(x) x[2]))
+
+df_names = l_sp[l_sp$sp=="axo" | (l_sp$X2<(-4) & l_sp$sp=="mou") | (l_sp$X2>0.5 & l_sp$sp=="mou"),]
+ggplot(l_sp, aes(x = X1, y = X2, colour = sp))+
+  geom_point()+
+  ggrepel::geom_text_repel(data = df_names, mapping = aes(x = X1, y = X2, label = cl), max.overlaps = 100)+
+  theme_classic()
+```
+
+Network in MDS from correlations
+
+```{r}
+cor_tab_l = list()
+for(n in names(sp_cor_l)){
+  dat = reshape2::melt(sp_cor_l[[n]])
+  dat$sp1 = strsplit(strsplit(n, ".", fixed = T)[[1]][1], "_", fixed = T)[[1]][2]
+  dat$sp2 = strsplit(strsplit(n, ".", fixed = T)[[1]][2], "_", fixed = T)[[1]][2]
+  
+  dat$Var1 = paste0(dat$sp1, "_", dat$Var1)
+  dat$Var2 = paste0(dat$sp2, "_", dat$Var2)
+  cor_tab_l[[n]] = dat
+}
+cor_tab = Reduce(rbind, cor_tab_l)
+cor_sp = reshape2::dcast(cor_tab, Var1 ~ Var2, value.var = "value")
+rownames(cor_sp) = cor_sp[,1]
+cor_sp = cor_sp[,-1]
+adj_mat = cor_sp>=0.3
+
+# build graph, project with MDS
+network_sp = graph_from_adjacency_matrix(adj_mat, weighted=T, mode="undirected", diag=F)
+l_sp = igraph::layout_with_mds(network_sp)
+l_sp = data.frame(l_sp)
+l_sp$cl = colnames(adj_mat)
+rownames(l_sp) = colnames(adj_mat)
+l_sp$sp = unlist(lapply(strsplit(l_sp$cl, "_"), function(x) x[1]))
+l_sp$cl = unlist(lapply(strsplit(l_sp$cl, "_"), function(x) x[2]))
+
+df_names = l_sp[l_sp$sp=="axo",]
+ggplot(l_sp, aes(x = X1, y = X2, colour = sp))+
+  geom_point()+
+  ggrepel::geom_text_repel(data = df_names, mapping = aes(x = X1, y = X2, label = cl), max.overlaps = 100)+
+  theme_classic()
+```
+
+
+
+```{r}
+common_genes = Reduce(intersect, top_mk_list)
+any_genes = Reduce(union, top_mk_list)
+non_shared_genes = any_genes[!(any_genes %in% common_genes)]
+non_shared_genes = non_shared_genes[non_shared_genes %in% Reduce(intersect, lapply(avg_exp, rownames))]
+avg_exp_sub = lapply(avg_exp, function(x) t(apply(x[non_shared_genes,], 1, function(y) y/mean(y))))
+lapply(avg_exp_sub, dim)
+
+for(n in names(avg_exp_sub)){
+  sp = strsplit(n, "_")[[1]][2]
+  colnames(avg_exp_sub[[n]]) = paste0(sp, "..", colnames(avg_exp_sub[[n]]))
+}
+avg_exp_all = t(Reduce(cbind, avg_exp_sub))
+set.seed(2954)
+l = uwot::umap(avg_exp_all, metric = "cosine", ret_nn = T, n_epochs = 1000)
+l_sp = data.frame(l$embedding)
+rownames(l_sp) = rownames(avg_exp_all)
+l_sp$cl = rownames(avg_exp_all)
+l_sp$sp = unlist(lapply(strsplit(l_sp$cl, "..", fixed = T), function(x) x[1]))
+l_sp$cl = unlist(lapply(strsplit(l_sp$cl, "..", fixed = T), function(x) x[2]))
+
+df_names = l_sp[l_sp$sp=="axo",]
+ggplot(l_sp, aes(x = X1, y = X2, colour = sp))+
+  geom_point()+
+  ggrepel::geom_text_repel(data = df_names, mapping = aes(x = X1, y = X2, label = cl), 
+                           max.overlaps = 100, size = 3)+
+  theme_classic()
+```
+

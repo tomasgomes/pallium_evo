@@ -1,0 +1,359 @@
+---
+title: "Cross species correlation - pairwise genes (updated orthology)"
+output: html_notebook
+---
+
+Notebook for cell type identity correlations using pairwise genes. Subsetting will be needed since for some of the species we only used the first cell type name (which is what we're more interested in).
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(uwot)
+```
+
+
+
+# Load data
+Load average expression data
+
+```{r}
+means_list = list(
+  zebrafish = readRDS("results/pairwiseDE/drerio_avgExp.RDS")$subclasses,
+  axolotl = readRDS("results/pairwiseDE/axolotl_avgExp.RDS")$subclasses,
+  paintedturtle = readRDS("results/pairwiseDE/turtle_avgExp.RDS")$subclasses,
+  lizard = readRDS("results/pairwiseDE/lizard_avgExp.RDS")$subclasses,
+  zebrafinch = readRDS("results/pairwiseDE/zfinch_avgExp.RDS")$subclasses,
+  bengalesefinch = readRDS("results/pairwiseDE/bfinch_avgExp.RDS")$subclasses,
+  mouse = readRDS("results/pairwiseDE/mouse_avgExp.RDS")$subclasses,
+  human = readRDS("results/pairwiseDE/human10x_avgExp.RDS")$subclasses
+)
+```
+
+Load pairwise DE results
+
+```{r}
+pwde_list = list(
+  dr = readRDS("results/pairwiseDE/drerio_markers.RDS")$subclasses,
+  ax = readRDS("results/pairwiseDE/axolotl_markers.RDS")$subclasses,
+  tu = readRDS("results/pairwiseDE/turtle_markers.RDS")$subclasses,
+  pv = readRDS("results/pairwiseDE/lizard_markers.RDS")$subclasses,
+  zf = readRDS("results/pairwiseDE/zfinch_markers.RDS")$subclasses,
+  bf = readRDS("results/pairwiseDE/bfinch_markers.RDS")$subclasses,
+  mm = readRDS("results/pairwiseDE/mouse_markers.RDS")$subclasses,
+  hu = readRDS("results/pairwiseDE/human10x_markers.RDS")$subclasses
+)
+names(pwde_list) = names(means_list)
+```
+
+## Prepare orthologs matching
+Load necessary orthology data
+
+```{r}
+ort_alt_ens_list = readRDS(file = "data/eggNOG/ort_alt_ens_list.RDS")
+ort_alt_egg_list = readRDS(file = "data/eggNOG/ort_alt_egg_list.RDS")
+
+ort_list_use = c(ort_alt_ens_list, 
+                 ort_alt_egg_list[which(grepl("axolotl", names(ort_alt_egg_list)) |
+                                          grepl("lizard", names(ort_alt_egg_list)))])
+bfmats = ort_alt_egg_list[which(grepl("zebrafinch", names(ort_alt_egg_list)))]
+names(bfmats) = gsub("zebrafinch", "bengalesefinch", names(bfmats))
+ort_list_use = c(ort_list_use, bfmats)
+```
+
+
+
+# Comparisons
+Function to match cells from 2 species and compare
+
+```{r}
+corrCellTypesPW = function(means_list, pwde_list, ort_l, ort_scope = "ortholog_one2one", 
+                           sp_pair = c("human", "mouse"), 
+                           ct_sets = NULL){
+  # which cells to use
+  if(is.null(ct_sets)){
+    ct_sets = list(colnames(means_list[[sp_pair[1]]]), colnames(means_list[[sp_pair[2]]]))
+    names(ct_sets) = sp_pair
+  }
+  
+  # choose species orthologs and scope
+  ort_tab = ort_l[[paste0(sp_pair, collapse = ".vs.")]]
+  if(!is.null(ort_scope)){
+    ort_tab = ort_tab[ort_tab$homology.type==ort_scope,]
+  }
+  ort_tab = unique(ort_tab[ort_tab[,2] %in% rownames(means_list[[sp_pair[1]]]) &
+                             ort_tab[,4] %in% rownames(means_list[[sp_pair[2]]]),c(2,4)])
+  
+  # get DE genes for all cell types being considered
+  de_genes_pw = list()
+  for(sp in sp_pair){
+    comp = names(pwde_list[[sp]])
+    # select those comparing to each other
+    compuse = rowSums(Reduce(cbind, lapply(ct_sets[[sp]], function(x) grepl(x, comp, fixed = T))))>1
+    de_genes_pw[[sp]] = unique(unlist(lapply(pwde_list[[sp]][compuse], rownames)))
+  }
+  # using marker intersection
+  ort_tab = ort_tab[ort_tab[,1] %in% de_genes_pw[[1]] & ort_tab[,2] %in% de_genes_pw[[2]],]
+  
+  # normalise means
+  m_list_sub = lapply(means_list[which(names(means_list) %in% sp_pair)], 
+                      function(x) t(apply(x, 1, function(y) y/mean(y))))
+  # get correlations, determine max per row and column
+  cort = psych::corr.test(m_list_sub[[sp_pair[1]]][ort_tab[,1],ct_sets[[1]]], 
+                          m_list_sub[[sp_pair[2]]][ort_tab[,2],ct_sets[[2]]], method = "sp", 
+                          adjust = "fdr", alpha = 0.01, ci = F)
+  cort$maxrow = apply(cort$r, 1, which.max)
+  cort$maxcol = apply(cort$r, 2, which.max)
+  cort[[sp_pair[1]]] = m_list_sub[[sp_pair[1]]][ort_tab[,1],ct_sets[[1]]]
+  cort[[sp_pair[2]]] = m_list_sub[[sp_pair[2]]][ort_tab[,2],ct_sets[[2]]]
+  return(cort)
+}
+```
+
+Plot correlations
+
+```{r}
+plotCorr = function(cort, sp1 = "sp1", sp2 = "sp2"){
+  # cluster and order labels
+  hcr = hclust(dist(cort$r), method = "ward.D2")
+  hcc = hclust(dist(t(cort$r)), method = "ward.D2")
+  hcr = hcr$labels[hcr$order]
+  hcc = hcc$labels[hcc$order]
+  
+  # reshaping the correlations
+  plot_df = reshape2::melt(cort$r)
+  plot_df$Var1 = factor(plot_df$Var1, levels = rev(hcr))
+  plot_df$Var2 = factor(plot_df$Var2, levels = hcc)
+  
+  # add pvalue and max cor infor
+  plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+  plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                              function(n) plot_df$Var1==n &
+                                                plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                         1, any)
+  plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                              function(n) plot_df$Var2==n &
+                                                plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                         1, any)
+  plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+  
+  # getting a colourscale where 0 is white in the middle, and intensity leveled by max(abs(value))
+  cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                            RColorBrewer::brewer.pal(9, "Reds")))(101)
+  br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
+  cols = cols[!(br>max(cort$r) | br<min(cort$r))]
+  
+  corplot = ggplot()+
+    geom_point(data = plot_df, mapping = aes(x = Var2, y = Var1, fill = value, size = padj), 
+               shape = 21)+
+    geom_point(data = plot_df[plot_df$rowmax,], mapping = aes(x = Var2, y = Var1, size = padj), 
+               shape = "—", show.legend = F, colour = "grey85")+
+    geom_point(data = plot_df[plot_df$colmax,], mapping = aes(x = Var2, y = Var1, size = padj), 
+               shape = "|", show.legend = F, colour = "grey85")+
+    scale_x_discrete(expand = c(0,0.7))+
+    scale_y_discrete(expand = c(0,0.7))+
+    scale_fill_gradientn(breaks = signif(c(min(cort$r)+0.005, 0, max(cort$r)-0.005),2), 
+                         values = scales::rescale(c(min(br), 0, max(br))),
+                         colours = cols)+
+    labs(x = sp2, y = sp1, fill = "Spearman's\nrho", size = "-log10\nadj. p-value")+
+    theme_classic()+
+    theme(axis.title = element_text(colour = "black", face = "bold"),
+          axis.text = element_text(colour = "black"),
+          axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+          legend.title = element_text(size = 9),
+          legend.text = element_text(size = 8))
+  
+  return(corplot)
+}
+```
+
+Usage examples
+
+```{r}
+# using all cells
+ccc = corrCellTypesPW(means_list = means_list, pwde_list = pwde_list, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "lizard"), ct_sets = NULL)
+plotCorr(ccc, sp1 = "axolotl", sp2 = "lizard")
+
+# using all cells
+ccc = corrCellTypesPW(means_list = means_list, pwde_list = pwde_list, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "paintedturtle"), ct_sets = NULL)
+plotCorr(ccc, sp1 = "axolotl", sp2 = "paintedturtle")
+
+# using all cells
+ccc = corrCellTypesPW(means_list = means_list, pwde_list = pwde_list, ort_l = ort_list_use,
+                      sp_pair = c("lizard", "paintedturtle"), ct_sets = NULL)
+plotCorr(ccc, sp1 = "lizard", sp2 = "paintedturtle")
+
+
+
+# using a cell subset (can be seen by looking at colnames of mean_list elements)
+ccc = corrCellTypesPW(means_list = means_list, pwde_list = pwde_list, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "lizard"), 
+                      ct_sets = list("axolotl" = paste0("Glut_", 0:9),
+                                     "lizard" = c(paste0("pvExc", 1:4), "pvNPC")))
+plotCorr(ccc, sp1 = "axolotl", sp2 = "lizard")
+
+# using a cell subset (can be seen by looking at colnames of mean_list elements)
+ccc = corrCellTypesPW(means_list = means_list, pwde_list = pwde_list, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "paintedturtle"), 
+                      ct_sets = list("axolotl" = paste0("Glut_", 0:9),
+                                     "paintedturtle" = c(paste0("tsExc", 1:5), "tsNPCs")))
+plotCorr(ccc, sp1 = "axolotl", sp2 = "paintedturtle")
+
+# using a cell subset (can be seen by looking at colnames of mean_list elements)
+ccc = corrCellTypesPW(means_list = means_list, pwde_list = pwde_list, ort_l = ort_list_use,
+                      sp_pair = c("lizard", "paintedturtle"), 
+                      ct_sets = list("lizard" = c(paste0("pvExc", 1:4), "pvNPC"),
+                                     "paintedturtle" = c(paste0("tsExc", 1:5), "tsNPCs")))
+plotCorr(ccc, sp1 = "lizard", sp2 = "paintedturtle")
+```
+
+Calculate and plot UMAP of cells
+
+```{r}
+umapCellTypes = function(means_list, pwde_list, ort_l, ort_scope = "ortholog_one2one", 
+                         ct_sets = list("human" = "all", "mouse" = "all"), seed = 1){ 
+  # species are detected from ct_sets names
+  # which cells to use
+  for(sp in names(ct_sets)){
+    if(ct_sets[[sp]][1]=="all"){ 
+      ct_sets[[sp]] = colnames(means_list[[sp]])
+    }
+  }
+  
+  # get orthologs for all species pairs
+  sp_p_mat = combn(names(ct_sets), 2)
+  for(i in 1:ncol(sp_p_mat)){
+    sp_pair = sp_p_mat[,i]
+    ort_tab = ort_l[[paste0(sp_pair, collapse = ".vs.")]]
+    if(!is.null(ort_scope)){
+      ort_tab = ort_tab[ort_tab$homology.type==ort_scope,]
+    }
+    # orthologs in the means matrix
+    ort_tab = unique(ort_tab[ort_tab[,2] %in% rownames(means_list[[sp_pair[1]]]) &
+                               ort_tab[,4] %in% rownames(means_list[[sp_pair[2]]]),c(2,4)])
+    colnames(ort_tab) = gsub("genename", "", colnames(ort_tab))
+    if(i==1){
+      ort_all = ort_tab
+    } else{
+      ort_all = unique(merge(ort_all, ort_tab, by = intersect(colnames(ort_all), colnames(ort_tab))))
+    }
+  }
+  
+  # get DE genes for all cell types being considered
+  de_genes_pw = list()
+  for(sp in names(ct_sets)){
+    comp = names(pwde_list[[sp]])
+    # select those comparing to each other
+    compuse = rowSums(Reduce(cbind, lapply(ct_sets[[sp]], function(x) grepl(x, comp, fixed = T))))>1
+    de_genes_pw[[sp]] = unique(unlist(lapply(pwde_list[[sp]][compuse], rownames)))
+  }
+  keep = apply(data.frame(lapply(colnames(ort_all), function(x) ort_all[,x] %in% de_genes_pw[[x]])), 
+               1, all)
+  ort_all = ort_all[keep,]
+  
+  # normalise means
+  m_list_sub = lapply(means_list[which(names(means_list) %in% names(ct_sets))], 
+                      function(x) t(apply(x, 1, function(y) y/mean(y))))
+  
+  avg_exp_all = t(Reduce(cbind, lapply(names(m_list_sub), 
+                                       function(x) m_list_sub[[x]][ort_all[,x],ct_sets[[x]]])))
+  
+  # define metadata
+  meta = data.frame("cell_types" = unlist(lapply(m_list_sub, colnames)),
+                    "species" = unlist(lapply(names(m_list_sub), 
+                                              function(x) rep(x, ncol(m_list_sub[[x]])))))
+  rownames(meta) = paste0(meta$species, "_", meta$cell_types)
+  meta = meta[match(rownames(avg_exp_all), meta$cell_types),]
+  rownames(avg_exp_all) = rownames(meta)
+  
+  # calculate UMAP
+  set.seed(seed)
+  l = uwot::umap(avg_exp_all, metric = "cosine", ret_nn = T, n_epochs = 1000)
+  l_sp = data.frame(l$embedding)
+  rownames(l_sp) = rownames(avg_exp_all)
+
+  plot_df = cbind(l_sp, meta[rownames(l_sp),])
+  
+  return(plot_df)
+}
+```
+
+
+```{r}
+pltdf = umapCellTypes(means_list = means_list, pwde_list = pwde_list, ort_l = ort_list_use,
+                      ort_scope = NULL, ct_sets = list("lizard" = c(paste0("pvExc", 1:4), "pvNPC"),
+                                                       "paintedturtle" = c(paste0("tsExc", 1:5),
+                                                                           "tsNPCs"),
+                                                       "axolotl" = paste0("Glut_", 0:9)))
+
+ggplot(pltdf, aes(x = X1, y = X2, colour = species))+
+  geom_point()+
+  ggrepel::geom_text_repel(data = pltdf, mapping = aes(x = X1, y = X2, label = cell_types),
+                           max.overlaps = 100)+
+  theme_classic()+
+  theme(aspect.ratio = 1)
+
+pltdf = umapCellTypes(means_list = means_list, pwde_list = pwde_list, ort_l = ort_list_use,
+                      ort_scope = NULL, ct_sets = list("lizard" = "all",
+                                                       "paintedturtle" = "all",
+                                                       "axolotl" = "all"))
+
+ggplot(pltdf, aes(x = X1, y = X2, colour = species))+
+  geom_point()+
+  ggrepel::geom_text_repel(data = pltdf, mapping = aes(x = X1, y = X2, label = cell_types),
+                           max.overlaps = 100)+
+  theme_classic()+
+  theme(aspect.ratio = 1)
+```
+
+
+UMAP from mean expression
+
+```{r}
+for(n in names(avg_exp_sub)){
+  sp = strsplit(n, "_")[[1]][2]
+  colnames(avg_exp_sub[[n]]) = paste0(sp, "..", colnames(avg_exp_sub[[n]]))
+}
+avg_exp_all = t(Reduce(cbind, avg_exp_sub))
+set.seed(2954)
+l = uwot::umap(avg_exp_all, metric = "cosine", ret_nn = T, n_epochs = 1000)
+l_sp = data.frame(l$embedding)
+rownames(l_sp) = rownames(avg_exp_all)
+l_sp$cl = rownames(avg_exp_all)
+l_sp$sp = unlist(lapply(strsplit(l_sp$cl, "..", fixed = T), function(x) x[1]))
+l_sp$cl = unlist(lapply(strsplit(l_sp$cl, "..", fixed = T), function(x) x[2]))
+
+df_names = l_sp[l_sp$sp=="axo" | (l_sp$X2<(-4) & l_sp$sp=="mou") | (l_sp$X2>0.5 & l_sp$sp=="mou"),]
+ggplot(l_sp, aes(x = X1, y = X2, colour = sp))+
+  geom_point()+
+  ggrepel::geom_text_repel(data = df_names, mapping = aes(x = X1, y = X2, label = cl), max.overlaps = 100)+
+  theme_classic()
+```
+
+

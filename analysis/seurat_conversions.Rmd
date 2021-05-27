@@ -31,6 +31,7 @@ Load libraries
 ```{r}
 library(Seurat)
 library(SeuratDisk)
+library(Matrix)
 library(qs)
 ```
 
@@ -115,6 +116,9 @@ saveRDS(drerio_brain_v3, file = paste0(p, "drerio_brain_v3.RDS"))
 pathToFiles = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Colquitt2021/projects/HVC_RA_X/"
 load(paste0(pathToFiles, "HVC_RA_X.RData"))
 saveRDS(HVC_RA_X, file = paste0(pathToFiles, "HVC_RA_X.RDS"))
+finches_list = SplitObject(HVC_RA_X, split.by = "species")
+saveRDS(finches_list$ZF, file = paste0(pathToFiles, "zfinch_seurat.RDS"))
+saveRDS(finches_list$BF, file = paste0(pathToFiles, "bfinch_seurat.RDS"))
 
 pathToFiles = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Colquitt2021/projects/X/"
 load(paste0(pathToFiles, "MCX_COMBINED_C_seurat.RData"))
@@ -142,5 +146,9 @@ human_SS = CreateSeuratObject(counts = t(datSS), meta.data = metaSS)
 saveRDS(human_10x, file = paste0(pathToFiles, "human_10x.RDS"))
 saveRDS(human_SS, file = paste0(pathToFiles, "human_SS.RDS"))
 ```
+
+
+
+
 
 

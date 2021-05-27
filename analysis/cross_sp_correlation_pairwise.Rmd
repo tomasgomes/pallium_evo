@@ -1,0 +1,224 @@
+---
+title: "Cross species correlation - pairwise genes"
+output: html_notebook
+---
+
+Notebook for cell type identity correlations using pairwise genes. Subsetting will be needed since for some of the species we only used the first cell type name (which is what we're more interested in).
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(tidyverse)
+library(igraph)
+library(UpSetR)
+```
+
+
+
+# Load data
+Load average expression data
+
+```{r}
+means_list = list(
+  dr = readRDS("results/pairwiseDE/drerio_avgExp.RDS")$subclasses,
+  ax = readRDS("results/pairwiseDE/axolotl_avgExp.RDS")$subclasses,
+  tu = readRDS("results/pairwiseDE/turtle_avgExp.RDS")$subclasses,
+  pv = readRDS("results/pairwiseDE/lizard_avgExp.RDS")$subclasses,
+  zf = readRDS("results/pairwiseDE/zfinch_avgExp.RDS")$subclasses,
+  bf = readRDS("results/pairwiseDE/bfinch_avgExp.RDS")$subclasses,
+  mm = readRDS("results/pairwiseDE/mouse_avgExp.RDS")$subclasses,
+  hu = readRDS("results/pairwiseDE/human10x_avgExp.RDS")$subclasses
+)
+```
+
+Load pairwise DE results
+
+```{r}
+pwde_list = list(
+  dr = readRDS("results/pairwiseDE/drerio_markers.RDS")$subclasses,
+  ax = readRDS("results/pairwiseDE/axolotl_markers.RDS")$subclasses,
+  tu = readRDS("results/pairwiseDE/turtle_markers.RDS")$subclasses,
+  pv = readRDS("results/pairwiseDE/lizard_markers.RDS")$subclasses,
+  zf = readRDS("results/pairwiseDE/zfinch_markers.RDS")$subclasses,
+  bf = readRDS("results/pairwiseDE/bfinch_markers.RDS")$subclasses,
+  mm = readRDS("results/pairwiseDE/mouse_markers.RDS")$subclasses,
+  hu = readRDS("results/pairwiseDE/human10x_markers.RDS")$subclasses
+)
+```
+
+Load necessary eggNOG data
+
+```{r}
+annot_list = readRDS(file = "data/eggNOG/annotation_list.RDS")[c(1:3,6:8,10)]
+```
+
+Species name matching
+
+```{r}
+namematch = names(pwde_list)
+names(namematch) = names(annot_list)[c(3,7,2,5,6,6,4,1)]
+```
+
+
+
+# Correlation comparison
+Function to match orthologs from two species
+
+```{r}
+reformatWithOrth = function(eggnog_annot, mean_l, eggnog_n_match, sp_list = c("tu", "pv")){
+  # match names for eggnog
+  sp_eggnog = names(eggnog_n_match)[match(sp_list, eggnog_n_match)]
+  
+  # get gene matching tables
+  l_g_sp = list()
+  for(spi in 1:length(sp_list)){
+    sp = sp_list[spi]
+    l_g_sp[[sp]] = eggnog_annot[[sp_eggnog[spi]]][,c(2,5)]
+    l_g_sp[[sp]] = l_g_sp[[sp]][l_g_sp[[sp]]$Preferred_name!="-" & !is.na(l_g_sp[[sp]]$Preferred_name),]
+    l_g_sp[[sp]]$Preferred_name = toupper(l_g_sp[[sp]]$Preferred_name)
+    l_g_sp[[sp]] = unique(l_g_sp[[sp]])
+    l_g_sp[[sp]] = l_g_sp[[sp]][!(l_g_sp[[sp]]$gene %in% l_g_sp[[sp]]$gene[duplicated(l_g_sp[[sp]]$gene)]),]
+    l_g_sp[[sp]] = l_g_sp[[sp]][!(l_g_sp[[sp]]$Preferred_name %in% l_g_sp[[sp]]$Preferred_name[duplicated(l_g_sp[[sp]]$Preferred_name)]),]
+  }
+  
+  # match the tables by the common name
+  all_sp_match = l_g_sp %>% reduce(full_join, by = "Preferred_name")
+  all_sp_match = all_sp_match[,c(2,1,3:ncol(all_sp_match))]
+  colnames(all_sp_match) = c("Preferred_name", sp_list)
+  
+  # only keep genes appearing in mean exp matrix
+  g_in = lapply(colnames(all_sp_match)[-1], 
+                function(x) toupper(all_sp_match[,x]) %in% toupper(rownames(mean_l[[x]])))
+  keep = rep(T, nrow(all_sp_match))
+  for(n in 1:length(g_in)){
+    keep = keep & g_in[[n]]
+  }
+  all_sp_match_filt = all_sp_match[keep,]
+  
+  # remove duplicated - only want one2one
+  g_du = lapply(colnames(all_sp_match_filt)[-1], 
+                function(x) !(all_sp_match_filt[,x] %in% all_sp_match_filt[,x][duplicated(all_sp_match_filt[,x])]))
+  keep = rep(T, nrow(all_sp_match_filt))
+  for(n in 1:length(g_du)){
+    keep = keep & g_du[[n]]
+  }
+  all_sp_match_filt = all_sp_match_filt[keep,]
+  
+  # putting everything into uppercase
+  for(n in colnames(all_sp_match_filt)){all_sp_match_filt[,n] = toupper(all_sp_match_filt[,n])}
+  
+  return(all_sp_match_filt)
+}
+```
+
+Match pairs of species and sets of cell types
+
+```{r}
+corrCellTypesPW = function(means_list, pwde_list, sp_pair, ct_sets){
+  # ct sets is list named after sp_pair
+  
+  # get DE genes for all cell types being considered
+  de_genes_pw = list()
+  for(sp in sp_pair){
+    comp = names(pwde_list[[sp]])
+    # select those comparing to each other
+    compuse = rowSums(Reduce(cbind, lapply(ct_sets[[sp]], function(x) grepl(x, comp, fixed = T))))>1
+    de_genes_pw[[sp]] = unique(unlist(lapply(pwde_list[[sp]][compuse], rownames)))
+  }
+  
+  # match species
+  match_sp = reformatWithOrth(annot_list, means_list, namematch, sp_list = sp_pair)
+  match_sp_comp = match_sp[complete.cases(match_sp),]
+  
+  # filter means for cell types, DE genes and select one2one orthologs
+  lapply(means_list[sp_pair], dim)
+  m_list_sub = list()
+  for(n in sp_pair){
+    m_list_sub[[n]] = means_list[[n]][de_genes_pw[[n]],]
+    m_list_sub[[n]] = m_list_sub[[n]][toupper(rownames(m_list_sub[[n]])) %in% match_sp_comp[,n],]
+    rownames(m_list_sub[[n]]) = match_sp_comp$Preferred_name[match(toupper(rownames(m_list_sub[[n]])),
+                                                                   match_sp_comp[,n])]
+    m_list_sub[[n]] = m_list_sub[[n]][,ct_sets[[n]]]
+  }
+  lapply(m_list_sub, dim)
+  
+  # get common genes and subset
+  commong = Reduce(intersect, lapply(m_list_sub, rownames))
+  m_list_sub = lapply(m_list_sub, function(x) x[commong,])
+  lapply(m_list_sub, dim)
+  
+  # normalise
+  m_list_sub = lapply(m_list_sub, function(x) t(apply(x, 1, function(y) y/mean(y))))
+  
+  # calculate correlation
+  corr = cor(m_list_sub[[1]], m_list_sub[[2]], method = "sp")
+  
+  return(corr)
+}
+```
+
+Plot correlations
+
+```{r}
+sp_pair = c("mm", "ax")
+ct_sets = list(c("Di- and mesencephalon excitatory neurons", "Telencephalon projecting excitatory neurons",
+                 "Glutamatergic neuroblasts", "Non-glutamatergic neuroblasts", 
+                 "Dentate gyrus radial glia-like cells", "Ependymal cells", 
+                 "Subventricular zone radial glia-like cells"), 
+               c(paste0("Glut_", 0:9), "glia"))
+#ct_sets = list(c(paste0("tsExc", 1:5)), c(paste0("pvExc", 1:4)))
+#ct_sets = list(c(paste0("pv", c("Olig", "OPC", "EG", "NPC"))), 
+#               c("oligodendrocyte", "glia", "Glut_9"))
+#ct_sets = list(c("Oligo L2-6_Oligo","Oligo L3-6_Oligo","OPC L1-6_OPC","Oligo L5-6_Oligo",
+#                 "Astro L1-6_Astro","Astro L1_Astro"), 
+#               c("oligodendrocyte", "glia"))
+#ct_sets = list(c("Pre-1", "Epen"), 
+#               c(paste0("Glut_", 0:9)))
+#ct_sets = list(c(unique(human10x_umeta$subclasses)[grepl("Exc ", unique(human10x_umeta$subclasses))]), 
+#               c(paste0("Glut_", 0:9)))
+names(ct_sets) = sp_pair
+
+pltmat = corrCellTypesPW(means_list, pwde_list, sp_pair, ct_sets)
+
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(100)
+br = c(seq(min(pltmat), 0, length.out = 51), seq(0, max(pltmat), length.out = 51)[-1])
+pheatmap::pheatmap(pltmat, breaks = br, color = cols,
+                   clustering_method = "ward.D2")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

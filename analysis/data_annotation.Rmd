@@ -96,7 +96,9 @@ lizard_umeta = data.frame(row.names = rownames(lizard_merge),
                           "subclasses" = lizard_merge$clusters.x, 
                           "cellclusters" = lizard_merge$clusters.y, 
                           "regions" = lizard_merge$areaident.x)
-write.csv(lizard_umeta, file = "../data/annotations/lizard_all_umeta.csv", 
+lizard_umeta$cellclusters[is.na(lizard_umeta$cellclusters)] = lizard_umeta$subclasses[is.na(lizard_umeta$cellclusters)]
+
+write.csv(lizard_umeta, file = "data/annotations/lizard_all_umeta.csv", 
           row.names = T, col.names = T, quote = F)
 ```
 
@@ -129,6 +131,8 @@ turtle_umeta = data.frame(row.names = rownames(turtle_merge),
                           "subclasses" = turtle_merge$cluster, 
                           "cellclusters" = turtle_merge$clusters, 
                           "regions" = turtle_merge$areaident.x)
+turtle_umeta$cellclusters[is.na(turtle_umeta$cellclusters)] = turtle_umeta$subclasses[is.na(turtle_umeta$cellclusters)]
+
 write.csv(turtle_umeta, file = "data/annotations/turtle_all_umeta.csv", 
           row.names = T, col.names = T, quote = F)
 ```
@@ -170,6 +174,8 @@ drerio_umeta = data.frame(row.names = colnames(drerio_brain),
 drerio_umeta$regions = factor(drerio_umeta$regions)
 levels(drerio_umeta$regions) = c("All" = "All", "S1" = "Forebrain", "S1/S2" = "Fore/Midbrain", 
                                  "S2" = "Midbrain", "S2/S3" = "Mid/Hindbrain", "S3" = "Hindbrain")
+drerio_umeta$subclasses = gsub(",", ";", drerio_umeta$subclasses, fixed = T)
+
 write.csv(drerio_umeta, file = "data/annotations/drerio_all_umeta.csv", 
           row.names = T, col.names = T, quote = F)
 ```
@@ -249,8 +255,9 @@ write.csv(bfinch_umeta, file = "data/annotations/bfinch_all_umeta.csv",
 
 ```{r}
 mouse_umeta = data.frame(row.names = colnames(mouse_brain), "classes" = mouse_brain$TaxonomyRank3,
-                         "subclasses" = mouse_brain$Taxonomy_group, "cellclusters" = mouse_brain$ClusterName,
-                         "regions" = mouse_brain$Tissue)
+                         "subclasses" = mouse_brain$Taxonomy_group, 
+                         "cellclusters" = mouse_brain$ClusterName, "regions" = mouse_brain$Tissue)
+mouse_umeta$classes = gsub(",", ";", mouse_umeta$classes, fixed = T)
 
 write.csv(mouse_umeta, file = "data/annotations/mouse_all_umeta.csv", 
           row.names = T, col.names = T, quote = F)
@@ -295,8 +302,12 @@ write.csv(axolotl_umeta, file = "data/annotations/axolotl_all_umeta.csv",
 10x
 
 ```{r}
+genclust = unlist(lapply(strsplit(human_10x$cluster_label, " "), 
+                         function(x) paste0(x[1:2], collapse = " ")))
+genclust = paste0(genclust, "_", human_10x$subclass_label)
+
 human10x_umeta = data.frame(row.names = colnames(human_10x), "classes" = human_10x$class_label,
-                            "subclasses" = human_10x$cluster_label, 
+                            "subclasses" = genclust, 
                             "cellclusters" = human_10x$cluster_label, "regions" = human_10x$region_label)
 
 human10x_umeta$classes = ifelse(grepl("Inh ", human10x_umeta$subclasses), "GABAergic",
@@ -312,6 +323,30 @@ write.csv(human10x_umeta, file = "data/annotations/human10x_all_umeta.csv",
           row.names = T, col.names = T, quote = F)
 ```
 
+Prepare metadata for loading in Python
+
+```{r}
+md = human10x_umeta
+ppp = unlist(lapply(strsplit(md$subclasses, "_"), function(x) strsplit(x[1], " ")[[1]][2]))
+md$layer = ppp
+md$L1 = ifelse(grepl("L1", md$layer), 1, 0)
+md$L2 = ifelse(grepl("L1-", md$layer, fixed = T) | grepl("L2", md$layer, fixed = T), 1, 0)
+md$L3 = ifelse(md$layer %in% c("L3-5","L2-6","L3","L2-3","L1-6","L1-3","L3-6","L2-5","L1-5"), 1, 0)
+md$L4 = ifelse(md$layer %in% c("L3-5","L2-6","L1-6","L3-6","L2-5","L1-5"), 1, 0)
+md$L5 = ifelse(md$layer %in% c("L5-6","L3-5","L2-6","L5","L1-6","L3-6","L2-5","L1-5"), 1, 0)
+md$L6 = ifelse(md$layer %in% c("L5-6","L2-6","L6","L1-6","L3-6"), 1, 0)
+
+write.csv(md, file = "data/expression/indiv_human/human10x_metadata_layers.csv", 
+          row.names = T, col.names = T, quote = F)
+human_10x = suppressWarnings(SCTransform(human_10x, do.correct.umi = T, verbose = F,
+                                         seed.use = 1, vars.to.regress = "nCount_RNA",
+                                         variable.features.rv.th = 1, return.only.var.genes = F,
+                                         variable.features.n = NULL))
+Matrix::writeMM(human_10x@assays$SCT@data, file = "data/expression/indiv_human/human10x_SCTdata.mtx")
+Matrix::writeMM(human_10x@assays$SCT@data[dataset@assays$SCT@var.features,], 
+                file = "data/expression/indiv_human/human10x_SCTdata_hvg.mtx")
+```
+
 SS
 
 ```{r}
@@ -322,6 +357,11 @@ humanSS_umeta = data.frame(row.names = colnames(human_SS), "classes" = human_SS$
                                               human_SS$cortical_layer_label))
 humanSS_umeta$subclasses[humanSS_umeta$subclasses==""] = human_SS$outlier_type[humanSS_umeta$subclasses==""]
 humanSS_umeta$cellclusters[humanSS_umeta$cellclusters==""] = human_SS$outlier_type[humanSS_umeta$cellclusters==""]
+
+genclust = unlist(lapply(strsplit(humanSS_umeta$subclasses, " "), 
+                         function(x) paste0(x[1:2], collapse = " ")))
+genclust = paste0(genclust, "_", human_SS$subclass_label)
+humanSS_umeta$subclasses = genclust
 
 humanSS_umeta$classes = ifelse(grepl("Donor ", humanSS_umeta$subclasses), "doublets",
                         ifelse(grepl("Outlier ", humanSS_umeta$subclasses), "doublets",
@@ -336,4 +376,31 @@ humanSS_umeta$classes = ifelse(grepl("Donor ", humanSS_umeta$subclasses), "doubl
 
 write.csv(humanSS_umeta, file = "data/annotations/humanSS_all_umeta.csv", 
           row.names = T, col.names = T, quote = F)
+```
+
+Prepare metadata for loading in Python
+
+```{r}
+md = humanSS_umeta
+ppp = unlist(lapply(strsplit(md$subclasses, "_"), function(x) strsplit(x[1], " ")[[1]][2]))
+md$layer = ppp
+md$L1 = ifelse(grepl("L1", md$layer), 1, 0)
+md$L2 = ifelse(grepl("L1-", md$layer, fixed = T) | grepl("L2", md$layer, fixed = T), 1, 0)
+md$L3 = ifelse(md$layer %in% c("L3-5","L2-6","L3","L2-3","L1-6","L1-3","L3-6","L2-5",
+                               "L1-5","L3-4","L2-4"), 1, 0)
+md$L4 = ifelse(md$layer %in% c("L3-5","L2-6","L1-6","L3-6","L2-5","L1-5","L1-4","L4-6",
+                               "L4-5","L3-4","L2-4","L4"), 1, 0)
+md$L5 = ifelse(md$layer %in% c("L5-6","L3-5","L2-6","L5","L1-6","L3-6","L2-5","L1-5","L4-6","L4-5"), 1, 0)
+md$L6 = ifelse(md$layer %in% c("L5-6","L2-6","L6","L1-6","L3-6","L4-6"), 1, 0)
+md$layer2 = unlist(lapply(strsplit(md$regions, "_"), function(x) x[2]))
+
+write.csv(md, file = "data/expression/indiv_human/humanSS_metadata_layers.csv", 
+          row.names = T, col.names = T, quote = F)
+human_SS = suppressWarnings(SCTransform(human_SS, do.correct.umi = T, verbose = F,
+                                        seed.use = 1, vars.to.regress = "nCount_RNA",
+                                        variable.features.rv.th = 1, return.only.var.genes = F,
+                                        variable.features.n = NULL))
+Matrix::writeMM(human_SS@assays$SCT@data, file = "data/expression/indiv_human/humanSS_SCTdata.mtx")
+Matrix::writeMM(human_SS@assays$SCT@data[human_SS@assays$SCT@var.features,], 
+                file = "data/expression/indiv_human/humanSS_SCTdata_hvg.mtx")
 ```

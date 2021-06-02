@@ -513,17 +513,17 @@ for(n in names(srat_css_one_l)){
 Save
 
 ```{r}
-#saveRDS(srat_rpca_all_l, file = "./data/integration/srat_rpca_all_l.RDS")
-#saveRDS(srat_rpca_one_l, file = "./data/integration/srat_rpca_one_l.RDS")
+saveRDS(srat_rpca_all_l, file = "./data/integration/srat_rpca_all_l.RDS")
+saveRDS(srat_rpca_one_l, file = "./data/integration/srat_rpca_one_l.RDS")
 
-#saveRDS(srat_harm_all_l, file = "./data/integration/srat_harm_all_l.RDS")
-#saveRDS(srat_harm_one_l, file = "./data/integration/srat_harm_one_l.RDS")
+saveRDS(srat_harm_all_l, file = "./data/integration/srat_harm_all_l.RDS")
+saveRDS(srat_harm_one_l, file = "./data/integration/srat_harm_one_l.RDS")
 
 saveRDS(srat_css_all_l, file = "./data/integration/srat_css_all_l.RDS")
 saveRDS(srat_css_one_l, file = "./data/integration/srat_css_one_l.RDS")
 
-#saveRDS(srat_rpca_harm_all_l, file = "./data/integration/srat_rpca_harm_all_l.RDS")
-#saveRDS(srat_rpca_harm_one_l, file = "./data/integration/srat_rpca_harm_one_l.RDS")
+saveRDS(srat_rpca_harm_all_l, file = "./data/integration/srat_rpca_harm_all_l.RDS")
+saveRDS(srat_rpca_harm_one_l, file = "./data/integration/srat_rpca_harm_one_l.RDS")
 
 saveRDS(srat_css_harm_all_l, file = "./data/integration/srat_css_harm_all_l.RDS")
 saveRDS(srat_css_harm_one_l, file = "./data/integration/srat_css_harm_one_l.RDS")

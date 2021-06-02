@@ -125,6 +125,17 @@ load(paste0(pathToFiles, "MCX_COMBINED_C_seurat.RData"))
 saveRDS(MCX_COMBINED_C_seurat, file = paste0(pathToFiles, "MCX_COMBINED_C_seurat.RDS"))
 ```
 
+Create combined Seurat for each finch with all the data
+
+```{r}
+finches_brain = readRDS("data/expression/HVC_RA_X.RDS")
+finches_list = SplitObject(finches_brain, split.by = "species")
+load("data/expression/MCX_COMBINED_C_seurat.RData")
+
+
+```
+
+
 
 
 # Allen Brain Human

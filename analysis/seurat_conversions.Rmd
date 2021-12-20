@@ -69,23 +69,66 @@ saveRDS(turtle_neurons_v3, file = paste0(pathToFiles, "v3obj/turtle_neurons_v3.R
 
 
 # La Manno et al. 2020
+Load file
+
+```{r}
+mousedev_filt = readRDS("/links/groups/treutlein/USERS/zhisong_he/Work/public_datasets/LaManno_mouse_dev_brain_atlas/dev_all_seurat.rds")
+```
+
+Filter and save
+
+```{r}
+mousedev_filt = mousedev_filt[,!(mousedev_filt$Class %in% c("Bad cells", "Undefined", "Blood", 
+                                                            "Endoderm", "Ectoderm", "Mesoderm", 
+                                                            "Fibroblast", "Gastrulation", 
+                                                            "Mesenchyme", "Neural crest", 
+                                                            "Neural tube", "Schwann cell")) &
+                                !(mousedev_filt$ClusterName %in% c("nan")) &
+                                mousedev_filt$nFeature_RNA>=250]
+
+saveRDS(mousedev_filt, file = "/links/groups/treutlein/USERS/tomasgomes/data/published/LaManno2020_mouse/mousedev_filt.RDS")
+```
+
+
+
+# Zeisel et al., 2018
 Load loom files
 
 ```{r}
 p = "/links/groups/treutlein/USERS/tomasgomes/data/published/mousebrain/"
 l5_all = Connect(filename = paste0(p, "l5_all.loom"), mode = "r")
-dev_all = Connect(filename = paste0(p, "dev_all.loom"), mode = "r")
 
 l5_all_seurat = as.Seurat(l5_all)
-#dev_all_seurat = as.Seurat(dev_all)
 ```
 
 Save objects
 
 ```{r}
 saveRDS(l5_all_seurat, file = paste0(p, "l5_all_seurat.RDS"))
-#saveRDS(dev_all_seurat, file = paste0(p, "dev_all_seurat.RDS"))
-# dev data was ceded by Zhisong
+```
+
+
+## Mouse dev Di Bella
+Load data
+
+```{r}
+pp = "/links/groups/treutlein/USERS/tomasgomes/data/published/DiBella2021_mouse/"
+clustertsne = read.table(paste0(pp, "cluster/cluster_scDevSC.merged.tsne.txt"), header = T)[-1,]
+clusterumap = read.table(paste0(pp, "cluster/cluster_scDevSC.merged.umap.txt"), header = T)[-1,]
+exp = Matrix::readMM(paste0(pp, "expression/601ae2f4771a5b0d72588bfb/gene_sorted-matrix.mtx.gz"))
+bc = read.table(paste0(pp, "expression/601ae2f4771a5b0d72588bfb/barcodes.tsv"), header = F)
+g = read.table(paste0(pp, "expression/601ae2f4771a5b0d72588bfb/genes.tsv"), header = F)
+meta = read.table(paste0(pp, "metadata/metaData_scDevSC.txt"), header = T, sep = "\t", 
+                  comment.char = "", quote = "")[-1,]
+meta$Doublet_intersect[is.na(meta$Doublet_intersect)] = "Other"
+rownames(meta) = meta$NAME
+colnames(exp) = bc$V1
+rownames(exp) = g$V1
+srat = CreateSeuratObject(counts = exp, meta.data = meta)
+
+srat = srat[,srat$scrublet_doublet=="FALSE" & meta$Doublet_intersect!="Doublet" &
+              srat$New_cellType!="Low quality cells",]
+saveRDS(srat, file = paste0(pp, "DiBella2021_mouseDev.RDS"))
 ```
 
 
@@ -105,6 +148,8 @@ Update and save
 
 ```{r}
 drerio_brain_v3 = UpdateSeuratObject(fall_v2)
+# remove doublet clusters
+drerio_brain_v3 = drerio_brain_v3[,!(drerio_brain_v3$Mod2.5 %in% c(24,31))]
 saveRDS(drerio_brain_v3, file = paste0(p, "drerio_brain_v3.RDS"))
 ```
 
@@ -115,6 +160,8 @@ saveRDS(drerio_brain_v3, file = paste0(p, "drerio_brain_v3.RDS"))
 ```{r}
 pathToFiles = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Colquitt2021/projects/HVC_RA_X/"
 load(paste0(pathToFiles, "HVC_RA_X.RData"))
+DefaultAssay(HVC_RA_X) = "RNA"
+HVC_RA_X@assays$RNA@counts
 saveRDS(HVC_RA_X, file = paste0(pathToFiles, "HVC_RA_X.RDS"))
 finches_list = SplitObject(HVC_RA_X, split.by = "species")
 saveRDS(finches_list$ZF, file = paste0(pathToFiles, "zfinch_seurat.RDS"))
@@ -122,19 +169,9 @@ saveRDS(finches_list$BF, file = paste0(pathToFiles, "bfinch_seurat.RDS"))
 
 pathToFiles = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Colquitt2021/projects/X/"
 load(paste0(pathToFiles, "MCX_COMBINED_C_seurat.RData"))
+DefaultAssay(MCX_COMBINED_C_seurat) = "RNA"
 saveRDS(MCX_COMBINED_C_seurat, file = paste0(pathToFiles, "MCX_COMBINED_C_seurat.RDS"))
 ```
-
-Create combined Seurat for each finch with all the data
-
-```{r}
-finches_brain = readRDS("data/expression/HVC_RA_X.RDS")
-finches_list = SplitObject(finches_brain, split.by = "species")
-load("data/expression/MCX_COMBINED_C_seurat.RData")
-
-
-```
-
 
 
 
@@ -157,6 +194,32 @@ human_SS = CreateSeuratObject(counts = t(datSS), meta.data = metaSS)
 saveRDS(human_10x, file = paste0(pathToFiles, "human_10x.RDS"))
 saveRDS(human_SS, file = paste0(pathToFiles, "human_SS.RDS"))
 ```
+
+
+
+# Cebrian-Silla et al., 2021
+Load files
+
+```{r}
+pathToFiles = "/links/groups/treutlein/USERS/tomasgomes/data/published/CebrianSilla2021_mouse/"
+nuc_dat = readRDS(paste0(pathToFiles, "sNucSeq.rds"))
+sc_dat = readRDS(paste0(pathToFiles, "scSeq.rds"))
+nuc_meta = read.csv(paste0(pathToFiles, "meta_nuc.tsv"), header = T, sep = "\t", row.names = 1)
+sc_meta = read.csv(paste0(pathToFiles, "meta_sc.tsv"), header = T, sep = "\t", row.names = 1)
+```
+
+Add metadata, filter, and save
+
+```{r}
+sc_dat@meta.data = sc_meta
+nuc_dat@meta.data = nuc_meta
+
+saveRDS(nuc_dat, file = paste0(pathToFiles, "nuc_dat.RDS"))
+saveRDS(sc_dat, file = paste0(pathToFiles, "sc_dat.RDS"))
+```
+
+
+
 
 
 

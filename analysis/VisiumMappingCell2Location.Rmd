@@ -1,0 +1,214 @@
+---
+title: "Plot mapping to Visium data"
+output: html_notebook
+---
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+```
+
+
+
+# Prepare data for cell2location
+Load spatial data
+
+```{r}
+visD = readRDS("/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113_sub_b_processed.RDS")
+```
+
+Check data
+
+```{r}
+SpatialDimPlot(visD, group.by = "seurat_clusters")
+SpatialFeaturePlot(visD, features = "nCount_Spatial")
+```
+
+Save for reading into python
+
+```{r}
+SeuratDisk::SaveLoom(visD, "data/processed/D1_113_sub_b.loom")
+```
+
+
+
+# Load cell2location results
+Load results
+
+```{r}
+test = read.csv("results/cell2loc/predictions_cell2loc.csv", header = T, row.names = 1)
+visD = AddMetaData(visD, test)
+```
+
+Plot all individual scores
+
+```{r}
+pdf("results/cell2loc/cell2loc_slice113_D1_sub_b.pdf", height = 10, width = 10)
+for(n in colnames(visD@meta.data)[19:112]){
+  print(SpatialFeaturePlot(visD, features = n, pt.size.factor = 2.7))
+}
+dev.off()
+```
+
+Combine scores
+
+```{r}
+plotSpatialScores = function(obj, ct_use, img_name, colours = rainbow(length(ct_use))){
+  names(colours) = ct_use
+  
+  # setup plotting data
+  plot_df = obj@meta.data[,ct_use]
+  plot_df = data.frame(apply(plot_df, 2, scales::rescale, to = c(0,1)))
+  #for(n in ct_use) plot_df[,n][plot_df[,n]<.5] = 0
+  coordinates = Seurat::GetTissueCoordinates(obj@images[[img_name]])
+  data = cbind(coordinates, plot_df[rownames(x = coordinates),])
+  
+  plot = ggplot(data = data, aes_string(x = colnames(x = data)[2], 
+                                        y = colnames(x = data)[1]))+
+    Seurat:::geom_spatial(data = data, mapping = aes_string(alpha = ct_use[1]), point.size.factor = 1.6, 
+                          image = obj@images[[img_name]], image.alpha = 0.5, colour = colours[1], shape = 19,
+                          crop = T, stroke = .25)
+  for(n in ct_use[-1]){
+    plot = plot +
+      Seurat:::geom_spatial(data = data, mapping = aes_string(alpha = n), point.size.factor = 1.6, 
+                            image = obj@images[[img_name]], image.alpha = 0, colour = colours[n], shape = 19,
+                            crop = T, stroke = .25)
+  }
+  
+  plot = plot +
+      labs(alpha = "Normalised score")+
+      theme_classic()+
+      theme(aspect.ratio = 1,
+            axis.title = element_blank(),
+            axis.ticks = element_blank(),
+            axis.line = element_blank(),
+            axis.text = element_blank())
+  return(plot)
+}
+
+plotSpatialScores = function(obj, ct_use, img_name, groups = ct_use, colours = rainbow(length(ct_use))){
+  names(colours) = ct_use
+  
+  # setup plotting data
+  plot_df = obj@meta.data[,ct_use]
+  plot_df = data.frame(apply(plot_df, 2, scales::rescale, to = c(0,1)))
+  # for each group, get the top value
+  if(!all(groups==ct_use)){
+    for(g in names(groups)){
+      plot_df[,g] = apply(plot_df[,groups[[g]]], 1, max)
+    }
+  } else{
+    groups = lapply(ct_use, function(x) x)
+    names(groups) = ct_use
+  }
+  plot_df$max_g = apply(plot_df[,names(groups)], 1, function(x) names(groups)[which.max(x)])
+  rownames(plot_df) = rownames(obj@meta.data)
+  
+  coordinates = Seurat::GetTissueCoordinates(obj@images[[img_name]])
+  data = cbind(coordinates, plot_df[rownames(x = coordinates),])
+  
+  plot = ggplot(data = data, aes_string(x = colnames(x = data)[2], 
+                                        y = colnames(x = data)[1]))
+  for(n in names(groups)){
+    plot = plot +
+      Seurat:::geom_spatial(data = data[data$max_g==n,], mapping = aes_string(alpha = n), point.size.factor = 2, 
+                            image = obj@images[[img_name]], image.alpha = ifelse(n==names(groups)[1], 0.5, 0), 
+                            colour = colours[n], shape = 19, crop = T, stroke = .25)
+  }
+  
+  plot = plot +
+      labs(alpha = "Normalised score")+
+      theme_classic()+
+      theme(aspect.ratio = 1,
+            axis.title = element_blank(),
+            axis.ticks = element_blank(),
+            axis.line = element_blank(),
+            axis.text = element_blank())
+  return(plot)
+}
+
+plotSpatialScores = function(obj, ct_use, img_name, groups = ct_use, colours = rainbow(length(ct_use))){
+  # setup plotting data
+  plot_df = obj@meta.data[,ct_use]
+  plot_df = data.frame(apply(plot_df, 2, scales::rescale, to = c(0,1)))
+  # for each group, get the top value
+  if(!all(groups==ct_use)){
+    for(g in names(groups)){
+      plot_df[,g] = apply(plot_df[,groups[[g]]], 1, max)
+    }
+  } else{
+    groups = lapply(ct_use, function(x) x)
+    names(groups) = ct_use
+  }
+  plot_df$max_g = apply(plot_df[,names(groups)], 1, function(x) names(groups)[which.max(x)])
+  rownames(plot_df) = rownames(obj@meta.data)
+  
+  coordinates = Seurat::GetTissueCoordinates(obj@images[[img_name]])
+  data = cbind(coordinates, plot_df[rownames(x = coordinates),])
+  
+  plot = ggplot(data = data, aes_string(x = colnames(x = data)[2], 
+                                        y = colnames(x = data)[1]))
+  plt_list = list()
+  for(n in names(groups)){
+    plt_list[[n]] = plot +
+      Seurat:::geom_spatial(data = data, mapping = aes_string(alpha = n), point.size.factor = 4, 
+                            image = obj@images[[img_name]], image.alpha = 0.5, 
+                            colour = colours[n], shape = 19, crop = T, stroke = .25)
+    plt_list[[n]] = plt_list[[n]] +
+      labs(alpha = paste0("Max score\n", n))+
+      scale_alpha_continuous(range = c(0,1))+
+      theme_classic()+
+      theme(aspect.ratio = 1,
+            axis.title = element_blank(),
+            axis.ticks = element_blank(),
+            axis.line = element_blank(),
+            axis.text = element_blank())
+  }
+  return(plt_list)
+}
+
+
+
+ct_use = c("glut_SUBSET_0", "glut_SUBSET_7", "glut_SUBSET_11", "glut_SUBSET_13",
+           "glut_SUBSET_1", "glut_SUBSET_3",
+           "glut_SUBSET_2", "glut_SUBSET_10", "glut_SUBSET_22")
+
+reg_cols_simp = c("medial" = "#52168D", "dorsal" = "#C56007", "lateral" = "#118392")
+reg_cols_simp = c(rep(reg_cols_simp[1], 4), rep(reg_cols_simp[2], 2), rep(reg_cols_simp[3], 3))
+
+groups = list("medial" = c("glut_SUBSET_0", "glut_SUBSET_7", "glut_SUBSET_11", "glut_SUBSET_13"),
+              "dorsal" = c("glut_SUBSET_1", "glut_SUBSET_3"),
+              "lateral" = c("glut_SUBSET_2", "glut_SUBSET_10", "glut_SUBSET_22"))
+names(reg_cols_simp) = ct_use
+xxx = plotSpatialScores(obj = visD, ct_use = ct_use, img_name = "slice2", colours = reg_cols_simp)
+cowplot::plot_grid(plotlist = xxx, ncol = 3)
+```
+
+
+
+
+
+
+

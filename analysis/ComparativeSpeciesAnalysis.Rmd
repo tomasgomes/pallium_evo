@@ -1,0 +1,1537 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(harmony)
+library(uwot)
+
+source("scripts/crossSpeciesFunctions.R")
+```
+
+
+
+# Load data
+## General
+Load axolotl expression data
+
+```{r}
+ax_srat = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+ax_srat = AddMetaData(ax_srat, metadata = meta)
+```
+
+List of metadata tables for all species
+
+```{r}
+meta_sp_l = list(
+  zebrafish = read.csv("data/annotations/drerio_all_umeta.csv", 
+                       header = T, row.names = 1),
+  axolotl = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                     header = T, row.names = 1),
+  paintedturtle = read.csv("data/annotations/turtle_all_umeta.csv", 
+                       header = T, row.names = 1),
+  lizard = read.csv("data/annotations/lizard_all_umeta.csv", 
+                       header = T, row.names = 1),
+  zebrafinch = read.csv("data/annotations/zfinch_all_umeta.csv", 
+                       header = T, row.names = 1),
+  bengalesefinch = read.csv("data/annotations/bfinch_all_umeta.csv", 
+                       header = T, row.names = 1),
+  mouse = read.csv("data/annotations/mouse_all_umeta.csv", 
+                       header = T, row.names = 1),
+  human = read.csv("data/annotations/human10x_all_umeta.csv", 
+                       header = T, row.names = 1)
+)
+```
+
+
+## DE and means
+Load average expression data
+
+```{r}
+subcl_m_list = list(
+  zebrafish = readRDS("results/pairwiseDE/drerio_avgExp.RDS")$subclasses,
+  axolotl = readRDS("results/pairwiseDE/axolotl_avgExp.RDS")$subclasses,
+  paintedturtle = readRDS("results/pairwiseDE/turtle_avgExp.RDS")$subclasses,
+  lizard = readRDS("results/pairwiseDE/lizard_avgExp.RDS")$subclasses,
+  zebrafinch = readRDS("results/pairwiseDE/zfinch_avgExp.RDS")$subclasses,
+  bengalesefinch = readRDS("results/pairwiseDE/bfinch_avgExp.RDS")$subclasses,
+  mouse = readRDS("results/pairwiseDE/mouse_avgExp.RDS")$subclasses,
+  human = readRDS("results/pairwiseDE/human10x_avgExp.RDS")$subclasses
+)
+
+celcl_m_list = list(
+  zebrafish = readRDS("results/pairwiseDE/drerio_avgExp.RDS")$cellclusters,
+  axolotl = readRDS("results/pairwiseDE/axolotl_avgExp.RDS")$cellclusters,
+  paintedturtle = readRDS("results/pairwiseDE/turtle_avgExp.RDS")$cellclusters,
+  lizard = readRDS("results/pairwiseDE/lizard_avgExp.RDS")$cellclusters,
+  zebrafinch = readRDS("results/pairwiseDE/zfinch_avgExp.RDS")$cellclusters,
+  bengalesefinch = readRDS("results/pairwiseDE/bfinch_avgExp.RDS")$cellclusters,
+  mouse = readRDS("results/pairwiseDE/mouse_avgExp.RDS")$cellclusters,
+  human = readRDS("results/pairwiseDE/human10x_avgExp.RDS")$cellclusters
+)
+```
+
+Load pairwise DE results
+
+```{r}
+subcl_pwde_list = list(
+  dr = readRDS("results/pairwiseDE/drerio_markers.RDS")$subclasses,
+  ax = readRDS("results/pairwiseDE/axolotl_markers.RDS")$subclasses,
+  tu = readRDS("results/pairwiseDE/turtle_markers.RDS")$subclasses,
+  pv = readRDS("results/pairwiseDE/lizard_markers.RDS")$subclasses,
+  zf = readRDS("results/pairwiseDE/zfinch_markers.RDS")$subclasses,
+  bf = readRDS("results/pairwiseDE/bfinch_markers.RDS")$subclasses,
+  mm = readRDS("results/pairwiseDE/mouse_markers.RDS")$subclasses,
+  hu = readRDS("results/pairwiseDE/human10x_markers.RDS")$subclasses
+)
+
+celcl_pwde_list = list(
+  dr = readRDS("results/pairwiseDE/drerio_markers.RDS")$cellclusters,
+  ax = readRDS("results/pairwiseDE/axolotl_markers.RDS")$cellclusters,
+  tu = readRDS("results/pairwiseDE/turtle_markers.RDS")$cellclusters,
+  pv = readRDS("results/pairwiseDE/lizard_markers.RDS")$cellclusters,
+  zf = readRDS("results/pairwiseDE/zfinch_markers.RDS")$cellclusters,
+  bf = readRDS("results/pairwiseDE/bfinch_markers.RDS")$cellclusters,
+  mm = readRDS("results/pairwiseDE/mouse_markers.RDS")$cellclusters,
+  hu = readRDS("results/pairwiseDE/human10x_markers.RDS")$cellclusters
+)
+names(subcl_pwde_list) = names(celcl_pwde_list) = names(subcl_m_list)
+```
+
+Mouse developmental data
+
+```{r}
+mdev_m_list = list(
+  mouse_all_subcl = readRDS("results/pairwiseDE/mousedevDiBella_avgExp.RDS")$subclasses,
+  mouse_all_clust = readRDS("results/pairwiseDE/mousedevDiBella_avgExp.RDS")$cellclusters,
+  mouse_abc_sc_subcl = readRDS("results/pairwiseDE/mouseabcsc_avgExp.RDS")$subclasses,
+  mouse_abc_sc_clust = readRDS("results/pairwiseDE/mouseabcsc_avgExp.RDS")$cellclusters,
+  mouse_abc_sn_subcl = readRDS("results/pairwiseDE/mouseabcnuc_avgExp.RDS")$subclasses,
+  mouse_abc_sn_clust = readRDS("results/pairwiseDE/mouseabcnuc_avgExp.RDS")$cellclusters
+)
+mdev_pwde_list = list(
+  mouse_all_subcl = readRDS("results/pairwiseDE/mousedevDiBella_markers.RDS")$subclasses,
+  mouse_all_clust = readRDS("results/pairwiseDE/mousedevDiBella_markers.RDS")$cellclusters,
+  mouse_abc_sc_subcl = readRDS("results/pairwiseDE/mouseabcsc_markers.RDS")$subclasses,
+  mouse_abc_sc_clust = readRDS("results/pairwiseDE/mouseabcsc_markers.RDS")$cellclusters,
+  mouse_abc_sn_subcl = readRDS("results/pairwiseDE/mouseabcnuc_markers.RDS")$subclasses,
+  mouse_abc_sn_clust = readRDS("results/pairwiseDE/mouseabcnuc_markers.RDS")$cellclusters
+)
+
+mdev_meta_l = list(
+  mouse_abc_sc = read.csv("data/annotations/mouseabcsc_umeta.csv", 
+                       header = T, row.names = 1),
+  mouse_abc_sn = read.csv("data/annotations/mouseabcnuc_umeta.csv", 
+                     header = T, row.names = 1),
+  mouse_all = read.csv("data/annotations/mousedibella_umeta.csv", 
+                       header = T, row.names = 1)
+)
+```
+
+
+## Prepare orthologs matching
+Load necessary orthology data
+
+```{r}
+ort_alt_ens_list = readRDS(file = "data/eggNOG/ort_alt_ens_list.RDS")
+ort_alt_egg_list = readRDS(file = "data/eggNOG/ort_alt_egg_list.RDS")
+
+# join ensemble and eggnog tables
+ort_list_use = c(ort_alt_ens_list, 
+                 ort_alt_egg_list[which(grepl("axolotl", names(ort_alt_egg_list)) |
+                                          grepl("lizard", names(ort_alt_egg_list)))])
+# add bengalese finch tables (same as zebrafinch)
+bfmats = ort_alt_egg_list[which(grepl("zebrafinch", names(ort_alt_egg_list)))]
+names(bfmats) = gsub("zebrafinch", "bengalesefinch", names(bfmats))
+for(n in names(bfmats)){
+  colnames(bfmats[[n]]) = gsub("zebrafinch", "bengalesefinch", colnames(bfmats[[n]]))
+}
+
+# make a table for zebrafinch and bengalese finch (and vice-versa)
+## all will be one2one
+bf_cols = unique(Reduce(rbind, lapply(bfmats, function(x) x[,grepl("bengalesefinch", colnames(x))])))
+zf_cols = unique(Reduce(rbind, lapply(ort_alt_egg_list, function(x) x[,grepl("zebrafinch", colnames(x))])))
+finches_l = list("zebrafinch.vs.bengalesefinch" = cbind(zf_cols, bf_cols, rep("ortholog_one2one", nrow(bf_cols))),
+                 "bengalesefinch.vs.zebrafinch" = cbind(bf_cols, zf_cols, rep("ortholog_one2one", nrow(bf_cols))))
+colnames(finches_l[[1]])[5] = colnames(finches_l[[2]])[5] = "homology.type"
+
+# put all together
+ort_list_use = c(ort_list_use, bfmats, finches_l)
+
+# add same species (will allow for simple correlation)
+for(sp in names(subcl_m_list)){
+  sp_cols = unique(Reduce(rbind, lapply(ort_list_use, function(x) x[,grepl(sp, colnames(x))])))
+  samesp = cbind(sp_cols, sp_cols, rep("ortholog_one2one", nrow(sp_cols)))
+  colnames(samesp)[5] = "homology.type"
+  ort_list_use[[paste0(sp, ".vs.", sp)]] = samesp
+}
+```
+
+
+## Data for predictions and integration
+### Adult
+Load data
+
+```{r}
+zebrafish = readRDS("data/expression/drerio_brain_v3.RDS")
+meta = read.csv("data/annotations/drerio_all_umeta.csv", header = T, row.names = 1)
+zebrafish = AddMetaData(zebrafish, metadata = meta)
+
+bengalesefinch = readRDS("data/expression/bfinch_seurat.RDS")
+meta = read.csv("data/annotations/bfinch_all_umeta.csv", header = T, row.names = 1)
+bengalesefinch = AddMetaData(bengalesefinch, metadata = meta)
+
+zebrafinch = readRDS("data/expression/zfinch_seurat.RDS")
+meta = read.csv("data/annotations/zfinch_all_umeta.csv", header = T, row.names = 1)
+zebrafinch = AddMetaData(zebrafinch, metadata = meta)
+
+axolotl = readRDS("data/expression/axolotl_redone/all_nuclei.RDS")
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", header = T, row.names = 1)
+axolotl = AddMetaData(axolotl, metadata = meta)
+
+turtle = readRDS("data/expression/turtle_all_v3.RDS")
+meta = read.csv("data/annotations/turtle_all_umeta.csv", header = T, row.names = 1)
+turtle = AddMetaData(turtle, metadata = meta)
+
+lizard = readRDS("data/expression/lizard_all_v3.RDS")
+meta = read.csv("data/annotations/lizard_all_umeta.csv", header = T, row.names = 1)
+lizard = AddMetaData(lizard, metadata = meta)
+
+mouse = readRDS("data/expression/l5_all_seurat.RDS")
+meta = read.csv("data/annotations/mouse_all_umeta.csv", header = T, row.names = 1)
+mouse = AddMetaData(mouse, metadata = meta)
+
+human = readRDS("data/expression/human_10x.RDS")
+meta = read.csv("data/annotations/human10x_all_umeta.csv", header = T, row.names = 1)
+human = AddMetaData(human, metadata = meta)
+```
+
+List these species
+
+```{r}
+allsp_list = list(zebrafish = zebrafish, axolotl = axolotl, paintedturtle = turtle,
+                  lizard = lizard, bengalesefinch = bengalesefinch, zebrafinch = zebrafinch,
+                  mouse = mouse, human = human)
+```
+
+Get ortholog-matched Seurats
+
+```{r}
+allsp_allort = seuratOrthologs(allsp_list, ortMatch(ort_list_use, names(allsp_list), ort_scope = NULL))
+lapply(allsp_allort, dim)
+
+allsp_1ort = seuratOrthologs(allsp_list, ortMatch(ort_list_use, names(allsp_list), 
+                                                   ort_scope = "ortholog_one2one"))
+lapply(allsp_1ort, dim)
+```
+
+Normalise data and save
+
+```{r}
+for(sp in names(allsp_allort)){
+  print(sp)
+  allsp_allort[[sp]] = suppressWarnings(SCTransform(allsp_allort[[sp]], do.correct.umi = T, verbose = F,
+                                                seed.use = 1, vars.to.regress = "nCount_RNA",
+                                                variable.features.rv.th = 1, return.only.var.genes = F,
+                                                variable.features.n = NULL))
+  allsp_1ort[[sp]] = suppressWarnings(SCTransform(allsp_1ort[[sp]], do.correct.umi = T, verbose = F,
+                                                 seed.use = 1, vars.to.regress = "nCount_RNA",
+                                                 variable.features.rv.th = 1, return.only.var.genes = F,
+                                                 variable.features.n = NULL))
+}
+
+#outdir = "data/processed/crossspecies/"
+outdir = "/local1/USERS/tomasgomes/tmp/tmptables/"
+for(sp in names(allsp_allort)){
+  dat = allsp_allort[[sp]]
+  outname = paste0(outdir, sp, ".mtx")
+  if(!file.exists(outname)){
+    cells = dat@meta.data$cellclusters!="doublets"
+    
+    metadata = dat@meta.data[cells,c("classes", "subclasses", "cellclusters", "regions")]
+    write.csv(metadata, file = paste0(outdir, sp, "_meta.csv"), 
+              col.names = T, row.names = T, quote = F)
+    
+    Matrix::writeMM(t(dat@assays$SCT@data[,cells]), outname)
+  }
+}
+```
+
+
+### All adult mouse
+Load data
+
+```{r}
+axolotl = readRDS("data/expression/axolotl_redone/all_nuclei.RDS")
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", header = T, row.names = 1)
+axolotl = AddMetaData(axolotl, metadata = meta)
+
+mouse = readRDS("data/expression/l5_all_seurat.RDS")
+meta = read.csv("data/annotations/mouse_all_umeta.csv", header = T, row.names = 1)
+mouse = AddMetaData(mouse, metadata = meta)
+
+mousesc = readRDS("data/expression/sc_dat.RDS")
+meta = read.csv("data/annotations/mouseabcsc_umeta.csv", header = T, row.names = 1)
+mousesc = AddMetaData(mousesc, metadata = meta)
+
+mousesn = readRDS("data/expression/nuc_dat.RDS")
+meta = read.csv("data/annotations/mouseabcnuc_umeta.csv", header = T, row.names = 1)
+mousesn = AddMetaData(mousesn, metadata = meta)
+```
+
+List these species
+
+```{r}
+mousecomp_list = list(axolotl = axolotl, mouse = mouse, mousesc = mousesc, mousesn = mousesn)
+```
+
+Get ortholog-matched Seurats
+
+```{r}
+sp_samples = c("axolotl", "mouse", "mouse", "mouse")
+names(sp_samples) = names(mousecomp_list)
+mousecomp_allort = seuratOrthologs(mousecomp_list, sp_samples, 
+                                   ortMatch(ort_list_use, c("mouse", "axolotl"), ort_scope = NULL))
+lapply(mousecomp_allort, dim)
+
+mousecomp_1ort = seuratOrthologs(mousecomp_list, sp_samples,
+                                 ortMatch(ort_list_use, names(allsp_list), ort_scope = "ortholog_one2one"))
+lapply(mousecomp_1ort, dim)
+```
+
+Normalise data and save
+
+```{r}
+for(sp in names(mousecomp_allort)){
+  print(sp)
+  mousecomp_allort[[sp]] = suppressWarnings(SCTransform(mousecomp_allort[[sp]], do.correct.umi = T, verbose = F,
+                                                seed.use = 1, vars.to.regress = "nCount_RNA",
+                                                variable.features.rv.th = 1, return.only.var.genes = F,
+                                                variable.features.n = NULL))
+  mousecomp_1ort[[sp]] = suppressWarnings(SCTransform(mousecomp_1ort[[sp]], do.correct.umi = T, verbose = F,
+                                                 seed.use = 1, vars.to.regress = "nCount_RNA",
+                                                 variable.features.rv.th = 1, return.only.var.genes = F,
+                                                 variable.features.n = NULL))
+}
+
+#outdir = "data/processed/crossspecies/"
+outdir = "/local1/USERS/tomasgomes/tmp/tmptables/tabmouse/"
+for(sp in names(mousecomp_allort)){
+  dat = mousecomp_allort[[sp]]
+  outname = paste0(outdir, sp, ".mtx")
+  if(!file.exists(outname)){
+    cells = dat@meta.data$cellclusters!="doublets"
+    
+    metadata = dat@meta.data[cells,c("classes", "subclasses", "cellclusters")]
+    write.csv(metadata, file = paste0(outdir, sp, "_meta.csv"), 
+              col.names = T, row.names = T, quote = F)
+    
+    Matrix::writeMM(t(dat@assays$SCT@data[,cells]), outname)
+  }
+}
+```
+
+
+
+# Evolutionary pairwise matching
+## Adult
+Pairwise matching of all cell types
+
+```{r}
+for(gg in c("subclasses", "cellclusters")){
+  outfile = ifelse(gg=="subclasses", "corr_subcl_dat_l.RDS", "corr_cellcl_dat_l.RDS")
+  pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+  m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+  
+  if(!file.exists(paste0("results/ComparativeSpeciesAnalysis/", outfile))){
+    corr_dat_l = list()
+    for(sp1 in names(m)){
+      for(sp2 in names(m)){
+        n = paste0(sp1, "_", sp2)
+        print(n)
+        ccc = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                            sp_pair = c(sp1, sp2), ct_sets = NULL)
+        corr_dat_l[[n]] = ccc
+      }
+    }
+    saveRDS(corr_dat_l, file = paste0("results/ComparativeSpeciesAnalysis/", outfile))
+  }
+}
+corr_cellcl_dat_l = readRDS("results/ComparativeSpeciesAnalysis/corr_cellcl_dat_l.RDS")
+corr_subcl_dat_l = readRDS("results/ComparativeSpeciesAnalysis/corr_subcl_dat_l.RDS")
+```
+
+### Bespoke combinations
+GABAergic
+
+```{r}
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="GABAergic"]),
+               "paintedturtle" = unique(meta_sp_l$paintedturtle$cellclusters[meta_sp_l$paintedturtle$classes=="GABAergic"]),
+               "lizard" = unique(meta_sp_l$lizard$cellclusters[meta_sp_l$lizard$classes=="GABAergic"]),
+               "mouse" = unique(meta_sp_l$mouse$cellclusters[meta_sp_l$mouse$classes=="GABAergic"]),
+               "zebrafish" = unique(meta_sp_l$zebrafish$cellclusters[meta_sp_l$zebrafish$classes=="GABAergic"]),
+               "human" = unique(meta_sp_l$human$cellclusters[meta_sp_l$human$classes=="GABAergic"]),
+               "zebrafinch" = unique(meta_sp_l$zebrafinch$cellclusters[meta_sp_l$zebrafinch$classes=="GABAergic"]),
+               "bengalesefinch" = unique(meta_sp_l$bengalesefinch$cellclusters[meta_sp_l$bengalesefinch$classes=="GABAergic"]))
+ct_sets$paintedturtle = ct_sets$paintedturtle[startsWith(ct_sets$paintedturtle, "i")]
+ct_sets$lizard = ct_sets$lizard[startsWith(ct_sets$lizard, "i")]
+spcomb = combn(names(ct_sets), 2)
+
+f = "results/ComparativeSpeciesAnalysis/corr_cellcl_GABAergic_bespoke.RDS"
+if(!file.exists(f)){
+  corr_dat_atl_gaba = list()
+  for(i in 1:ncol(spcomb)){
+    sp1 = spcomb[1,i]
+    sp2 = spcomb[2,i]
+    n = paste0(sp1, "_", sp2)
+    cat(paste0("\n", n, sep = ": "))
+    
+    sub_ct_sets = ct_sets[c(sp1, sp2)]
+    
+    ccc = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                          sp_pair = c(sp1, sp2), ct_sets = sub_ct_sets, norm_all = F)
+    corr_dat_atl_gaba[[paste0(sp1, "_", sp2)]] = ccc
+  }
+  saveRDS(corr_dat_atl_gaba, file = f)
+} else{
+  corr_dat_atl_gaba = readRDS(f)
+}
+pdf("results/ComparativeSpeciesAnalysis/turtle_vs_lizard_GABAergic_i.pdf", height = 3.8, width = 4)
+plotCorr(corr_dat_atl_gaba$paintedturtle_lizard, "paintedturtle", "lizard")+
+  theme(axis.text = element_text(size = 6.8))
+dev.off()
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_GABAergic_i.pdf", height = 5, width = 5.5)
+plotCorr(corr_dat_atl_gaba$axolotl_paintedturtle, "axolotl", "paintedturtle")+
+  theme(axis.text = element_text(size = 6.8))
+dev.off()
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_lizard_GABAergic_i.pdf", height = 5, width = 4)
+plotCorr(corr_dat_atl_gaba$axolotl_lizard, "axolotl", "lizard")+
+  theme(axis.text = element_text(size = 6.8))
+dev.off()
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GABAergic.pdf", height = 5, width = 12)
+plotCorr(corr_dat_atl_gaba$axolotl_mouse, "axolotl", "mouse")+
+  theme(axis.text = element_text(size = 6.8))
+dev.off()
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_zebrafinch_GABAergic.pdf", height = 5, width = 5)
+plotCorr(corr_dat_atl_gaba$axolotl_zebrafinch, "axolotl", "zebrafinch")+
+  theme(axis.text = element_text(size = 6.8))
+dev.off()
+```
+
+GABAergic turtle reordered
+
+```{r}
+sp1 = "axolotl"
+sp2 = "turtle"
+cort = corr_dat_atl_gaba$axolotl_paintedturtle
+
+# reshaping the correlations
+plot_df = reshape2::melt(cort$r)
+
+# add turtle regions
+plot_df$reg = ifelse(plot_df$Var2 %in% c("i01", "i04", "i05", "i06"), "LGE",
+              ifelse(plot_df$Var2 %in% paste0("i", 14:18), "CGE",
+              ifelse(plot_df$Var2 %in% c("i07", "i08", "i09", paste0("i", 10:13)), 
+                     "MGE", "Striatum")))
+plot_df$reg = factor(plot_df$reg, levels = c("LGE", "CGE", "MGE", "Striatum"))
+plot_df$Var2 = factor(plot_df$Var2, 
+                      levels = c("i01", "i04", "i05", "i06", paste0("i", 14:18), 
+                                 "i07", "i08", "i09", paste0("i", 10:13), "i02", "i03"))
+
+# cluster and order labels
+hcr = hclust(dist(cort$r), method = "ward.D2")
+hcr = hcr$labels[hcr$order]
+plot_df$Var1 = factor(plot_df$Var1, levels = rev(hcr))
+
+# add pvalue and max cor infor
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+# getting a colourscale where 0 is white in the middle, and intensity leveled by max(abs(value))
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
+cols = cols[!(br>max(cort$r) | br<min(cort$r))]
+
+corplot = ggplot()+
+  #facet_grid(~reg, scales = "free", space = "free_x")+
+  geom_point(data = plot_df, mapping = aes(x = Var2, y = Var1, fill = value, size = padj), 
+             shape = 21)+
+  geom_point(data = plot_df[plot_df$rowmax,], mapping = aes(x = Var2, y = Var1, size = padj), 
+             shape = "—", show.legend = F, colour = "grey10")+
+  geom_point(data = plot_df[plot_df$colmax,], mapping = aes(x = Var2, y = Var1, size = padj), 
+             shape = "|", show.legend = F, colour = "grey10")+
+  scale_x_discrete(expand = c(0,0.7))+
+  scale_y_discrete(expand = c(0,0.7))+
+  scale_fill_gradientn(breaks = signif(c(min(cort$r)+0.005, 0, max(cort$r)-0.005),2), 
+                       values = scales::rescale(c(min(br), 0, max(br))),
+                       colours = cols)+
+  labs(x = sp2, y = sp1, fill = "Spearman's\nrho", size = "-log10\nadj. p-value")+
+  theme_classic()+
+  theme(axis.title = element_text(colour = "black", face = "bold"),
+        axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.title = element_text(size = 7.5),
+        legend.text = element_text(size = 6.5),
+        strip.text = element_text(size = 7.5))
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_GABAergic_i_ord.pdf", 
+    height = 5, width = 5.5)
+print(corplot)
+dev.off()
+```
+
+GABAergic turtle reordered, TF only
+
+```{r}
+tfs = read.csv("../../gene_refs/human/Homo_sapiens_TF_AnimalTFDB3.txt", 
+               header = T, sep = "\t")$Symbol
+
+sp1 = "axolotl"
+sp2 = "paintedturtle"
+
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="GABAergic"]),
+               "paintedturtle" = unique(meta_sp_l$paintedturtle$cellclusters[meta_sp_l$paintedturtle$classes=="GABAergic"]))
+ct_sets$paintedturtle = ct_sets$paintedturtle[startsWith(ct_sets$paintedturtle, "i")]
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, 
+                       gene_filter = tfs,
+                       sp_pair = c(sp1, sp2), ct_sets = ct_sets, norm_all = F)
+
+cort = ccc1
+
+# reshaping the correlations
+plot_df = reshape2::melt(cort$r)
+
+# add turtle regions
+plot_df$reg = ifelse(plot_df$Var2 %in% c("i01", "i04", "i05", "i06"), "LGE",
+              ifelse(plot_df$Var2 %in% paste0("i", 14:18), "CGE",
+              ifelse(plot_df$Var2 %in% c("i07", "i08", "i09", paste0("i", 10:13)), 
+                     "MGE", "Striatum")))
+plot_df$reg = factor(plot_df$reg, levels = c("LGE", "CGE", "MGE", "Striatum"))
+plot_df$Var2 = factor(plot_df$Var2, 
+                      levels = c("i01", "i04", "i05", "i06", paste0("i", 14:18), 
+                                 "i07", "i08", "i09", paste0("i", 10:13), "i02", "i03"))
+
+# cluster and order labels
+hcr = hclust(dist(cort$r), method = "ward.D2")
+hcr = hcr$labels[hcr$order]
+plot_df$Var1 = factor(plot_df$Var1, levels = rev(hcr))
+
+# add pvalue and max cor infor
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+# getting a colourscale where 0 is white in the middle, and intensity leveled by max(abs(value))
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
+cols = cols[!(br>max(cort$r) | br<min(cort$r))]
+
+corplot = ggplot()+
+  #facet_grid(~reg, scales = "free", space = "free_x")+
+  geom_point(data = plot_df, mapping = aes(x = Var2, y = Var1, fill = value, size = padj), 
+             shape = 21)+
+  geom_point(data = plot_df[plot_df$rowmax,], mapping = aes(x = Var2, y = Var1, size = padj), 
+             shape = "—", show.legend = F, colour = "grey10")+
+  geom_point(data = plot_df[plot_df$colmax,], mapping = aes(x = Var2, y = Var1, size = padj), 
+             shape = "|", show.legend = F, colour = "grey10")+
+  scale_x_discrete(expand = c(0,0.7))+
+  scale_y_discrete(expand = c(0,0.7))+
+  scale_fill_gradientn(breaks = signif(c(min(cort$r)+0.005, 0, max(cort$r)-0.005),2), 
+                       values = scales::rescale(c(min(br), 0, max(br))),
+                       colours = cols)+
+  labs(x = sp2, y = sp1, fill = "Spearman's\nrho", size = "-log10\nadj. p-value")+
+  theme_classic()+
+  theme(axis.title = element_text(colour = "black", face = "bold"),
+        axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.title = element_text(size = 7.5),
+        legend.text = element_text(size = 6.5),
+        strip.text = element_text(size = 7.5))
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_GABAergic_i_TF.pdf", 
+    height = 5, width = 5.5)
+print(corplot)
+dev.off()
+```
+
+Glutamatergic
+
+```{r}
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="Glutamatergic" &
+                                                                   meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23"]),
+               "paintedturtle" = unique(meta_sp_l$paintedturtle$cellclusters[meta_sp_l$paintedturtle$classes=="Glutamatergic"]),
+               "lizard" = unique(meta_sp_l$lizard$cellclusters[meta_sp_l$lizard$classes=="Glutamatergic"]),
+               "mouse" = unique(meta_sp_l$mouse$cellclusters[meta_sp_l$mouse$classes=="Glutamatergic"]),
+               "zebrafish" = unique(meta_sp_l$zebrafish$cellclusters[meta_sp_l$zebrafish$classes=="Glutamatergic"]),
+               "human" = unique(meta_sp_l$human$cellclusters[meta_sp_l$human$classes=="Glutamatergic"]),
+               "zebrafinch" = unique(meta_sp_l$zebrafinch$cellclusters[meta_sp_l$zebrafinch$classes=="Glutamatergic"]),
+               "bengalesefinch" = unique(meta_sp_l$bengalesefinch$cellclusters[meta_sp_l$bengalesefinch$classes=="Glutamatergic"]))
+ct_sets$paintedturtle = ct_sets$paintedturtle[startsWith(ct_sets$paintedturtle, "e")]
+ct_sets$lizard = ct_sets$lizard[startsWith(ct_sets$lizard, "e")]
+spcomb = combn(names(ct_sets), 2)
+
+f = "results/ComparativeSpeciesAnalysis/corr_cellcl_Glutamatergic_bespoke.RDS"
+if(!file.exists(f)){
+  corr_dat_atl_gaba = list()
+  for(i in 1:ncol(spcomb)){
+    sp1 = spcomb[1,i]
+    sp2 = spcomb[2,i]
+    n = paste0(sp1, "_", sp2)
+    cat(paste0("\n", n, sep = ": "))
+    
+    sub_ct_sets = ct_sets[c(sp1, sp2)]
+    
+    ccc = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                          sp_pair = c(sp1, sp2), ct_sets = sub_ct_sets, norm_all = F)
+    corr_dat_atl_gaba[[paste0(sp1, "_", sp2)]] = ccc
+  }
+  saveRDS(corr_dat_atl_gaba, file = f)
+} else{
+  corr_dat_atl_gaba = readRDS(f)
+}
+pdf("results/ComparativeSpeciesAnalysis/turtle_vs_lizard_Glutamatergic.pdf", height = 8, width = 6)
+plotCorr(corr_dat_atl_gaba$paintedturtle_lizard, "paintedturtle", "lizard")+
+  theme(axis.text = element_text(size = 6.8))
+dev.off()
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_Glutamatergic.pdf", height = 5, width = 8)
+plotCorr(corr_dat_atl_gaba$axolotl_paintedturtle, "axolotl", "paintedturtle")+
+  theme(axis.text = element_text(size = 6.8))
+dev.off()
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_lizard_Glutamatergic.pdf", height = 5, width = 6)
+plotCorr(corr_dat_atl_gaba$axolotl_lizard, "axolotl", "lizard")+
+  theme(axis.text = element_text(size = 6.8))
+dev.off()
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_Glutamatergic.pdf", height = 5, width = 12)
+plotCorr(corr_dat_atl_gaba$axolotl_mouse, "axolotl", "mouse")+
+  theme(axis.text = element_text(size = 6.8))
+dev.off()
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_zebrafinch_Glutamatergic.pdf", height = 5, width = 5)
+plotCorr(corr_dat_atl_gaba$axolotl_zebrafinch, "axolotl", "zebrafinch")+
+  theme(axis.text = element_text(size = 6.8))
+dev.off()
+```
+
+Glutamatergic turtle reordered
+
+```{r}
+sp1 = "axolotl"
+sp2 = "turtle"
+cort = corr_dat_atl_gaba$axolotl_paintedturtle
+
+# reshaping the correlations
+plot_df = reshape2::melt(cort$r)
+plot_df$Var2 = as.character(plot_df$Var2)
+
+# cluster and order labels
+hcr = hclust(dist(cort$r), method = "ward.D2")
+hcr = hcr$labels[hcr$order]
+plot_df$Var1 = factor(plot_df$Var1, levels = rev(hcr))
+
+# add pvalue and max cor infor
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+# getting a colourscale where 0 is white in the middle, and intensity leveled by max(abs(value))
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
+cols = cols[!(br>max(cort$r) | br<min(cort$r))]
+
+# add turtle regions
+clreg = "e29_DG e27_pDC e31_DG e23_pDVR e21_pDVR e24_pDC e25_pDVR e30_DG e36_CA1 e35_CA1 e37_CA1 e38_CA1 e34_CA3 e33_CA3 e28_pDC e32_DG e10_aLC e11_aLC e12_aLC e17_pLC e19_aDVR e18_aDVR e20_pDVR e22_pDVR e26_pDC e16_aDC e13_aDC e14_aDC e15_aDC e01_aDVR e02_aDVR e09_aLC e05_PT e03_PT e07_aDC e06_PT e04_PT e08_aDC"
+clreg = t(data.frame(strsplit(strsplit(clreg, " ")[[1]], "_")))
+plot_df = merge(plot_df, clreg, by.x = 2, by.y = 1, all.x = T)
+plot_df$V2 = factor(plot_df$V2, 
+                    levels = c("aLC", "pLC", "PT", "aDVR", "pDVR", "aDC", 
+                               "pDC", "DG", "CA1", "CA3"))
+
+plot_df$Var2 = factor(paste0(plot_df$Var2, "_", plot_df$V2), 
+                      levels = rev(unique(paste0(plot_df$Var2, "_", 
+                                             plot_df$V2)[order(plot_df$V2, decreasing = F)])))
+
+# axolotl order
+plot_df$Var1 = factor(plot_df$Var1, 
+                      levels = paste0("glut_SUBSET_",
+                                      c(22, 25, 9, 20, 10, 24, 19, 11, 1, 2, 21, 
+                                        8, 6, 13, 28, 27, 26, 16, 3, 0, 5, 12, 
+                                        17, 18, 4, 7, 14, 15)))
+
+corplot = ggplot()+
+  geom_point(data = plot_df, mapping = aes(x = Var1, y = Var2, fill = value, size = padj), 
+             shape = 21)+
+  geom_point(data = plot_df[plot_df$rowmax,], mapping = aes(x = Var1, y = Var2, size = padj), 
+             shape = "|", show.legend = F, colour = "grey10")+
+  geom_point(data = plot_df[plot_df$colmax,], mapping = aes(x = Var1, y = Var2, size = padj), 
+             shape = "—", show.legend = F, colour = "grey10")+
+  scale_x_discrete(expand = c(0,0.7))+
+  scale_y_discrete(expand = c(0,0.7))+
+  scale_fill_gradientn(breaks = signif(c(min(cort$r)+0.005, 0, max(cort$r)-0.005),2), 
+                       values = scales::rescale(c(min(br), 0, max(br))),
+                       colours = cols)+
+  labs(x = sp1, y = sp2, fill = "Spearman's\nrho", size = "-log10\nadj. p-value")+
+  theme_classic()+
+  theme(axis.title = element_text(colour = "black", face = "bold"),
+        axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.title = element_text(size = 7.5),
+        legend.text = element_text(size = 6.5),
+        strip.text = element_text(size = 7.5))
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_Glutamatergic_ord.pdf", 
+    height = 6.25, width = 6.7)
+print(corplot)
+dev.off()
+```
+
+Glutamatergic turtle reordered, TFs only
+
+```{r}
+tfs = read.csv("../../gene_refs/human/Homo_sapiens_TF_AnimalTFDB3.txt", 
+               header = T, sep = "\t")$Symbol
+
+sp1 = "axolotl"
+sp2 = "paintedturtle"
+
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+
+cond_axo = (meta_sp_l$axolotl$subclasses=="Glutamatergic" & 
+            meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23")
+
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[cond_axo]),
+               "paintedturtle" = unique(meta_sp_l$paintedturtle$cellclusters[meta_sp_l$paintedturtle$classes=="Glutamatergic"]))
+ct_sets$paintedturtle = ct_sets$paintedturtle[startsWith(ct_sets$paintedturtle, "e")]
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, 
+                       gene_filter = tfs,
+                       sp_pair = c(sp1, sp2), ct_sets = ct_sets, norm_all = F)
+
+cort = ccc1
+
+# reshaping the correlations
+plot_df = reshape2::melt(cort$r)
+plot_df$Var2 = as.character(plot_df$Var2)
+
+# cluster and order labels
+hcr = hclust(dist(cort$r), method = "ward.D2")
+hcr = hcr$labels[hcr$order]
+plot_df$Var1 = factor(plot_df$Var1, levels = rev(hcr))
+
+# add pvalue and max cor infor
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+# getting a colourscale where 0 is white in the middle, and intensity leveled by max(abs(value))
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
+cols = cols[!(br>max(cort$r) | br<min(cort$r))]
+
+# add turtle regions
+clreg = "e29_DG e27_pDC e31_DG e23_pDVR e21_pDVR e24_pDC e25_pDVR e30_DG e36_CA1 e35_CA1 e37_CA1 e38_CA1 e34_CA3 e33_CA3 e28_pDC e32_DG e10_aLC e11_aLC e12_aLC e17_pLC e19_aDVR e18_aDVR e20_pDVR e22_pDVR e26_pDC e16_aDC e13_aDC e14_aDC e15_aDC e01_aDVR e02_aDVR e09_aLC e05_PT e03_PT e07_aDC e06_PT e04_PT e08_aDC"
+clreg = t(data.frame(strsplit(strsplit(clreg, " ")[[1]], "_")))
+plot_df = merge(plot_df, clreg, by.x = 2, by.y = 1, all.x = T)
+plot_df$V2 = factor(plot_df$V2, 
+                    levels = c("aLC", "pLC", "PT", "aDVR", "pDVR", "aDC", 
+                               "pDC", "DG", "CA1", "CA3"))
+
+plot_df$Var2 = factor(paste0(plot_df$Var2, "_", plot_df$V2), 
+                      levels = rev(unique(paste0(plot_df$Var2, "_", 
+                                             plot_df$V2)[order(plot_df$V2, decreasing = F)])))
+
+corplot = ggplot()+
+  geom_point(data = plot_df, mapping = aes(x = Var1, y = Var2, fill = value, size = padj), 
+             shape = 21)+
+  geom_point(data = plot_df[plot_df$rowmax,], mapping = aes(x = Var1, y = Var2, size = padj), 
+             shape = "|", show.legend = F, colour = "grey10")+
+  geom_point(data = plot_df[plot_df$colmax,], mapping = aes(x = Var1, y = Var2, size = padj), 
+             shape = "—", show.legend = F, colour = "grey10")+
+  scale_x_discrete(expand = c(0,0.7))+
+  scale_y_discrete(expand = c(0,0.7))+
+  scale_fill_gradientn(breaks = signif(c(min(cort$r)+0.005, 0, max(cort$r)-0.005),2), 
+                       values = scales::rescale(c(min(br), 0, max(br))),
+                       colours = cols)+
+  labs(x = sp1, y = sp2, fill = "Spearman's\nrho", size = "-log10\nadj. p-value")+
+  theme_classic()+
+  theme(axis.title = element_text(colour = "black", face = "bold"),
+        axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.title = element_text(size = 7.5),
+        legend.text = element_text(size = 6.5),
+        strip.text = element_text(size = 7.5))
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_Glutamatergic_TF.pdf", 
+    height = 6.25, width = 6.7)
+print(corplot)
+dev.off()
+```
+
+Glutamatergic turtle reordered, with NPCs
+
+```{r}
+sp1 = "axolotl"
+sp2 = "paintedturtle"
+
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+
+cond_axo = (meta_sp_l$axolotl$subclasses=="Glutamatergic" & 
+            meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23") |
+  meta_sp_l$axolotl$cellclusters %in% c("npc_SUBSET_0", "npc_SUBSET_1", "npc_SUBSET_2",
+                                        "npc_SUBSET_3", "npc_SUBSET_4", "npc_SUBSET_7",
+                                        "npc_SUBSET_9", "npc_SUBSET_11", "npc_SUBSET_13",
+                                        "npc_SUBSET_14")
+
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[cond_axo]),
+               "paintedturtle" = unique(meta_sp_l$paintedturtle$cellclusters[meta_sp_l$paintedturtle$classes=="Glutamatergic"]))
+ct_sets$paintedturtle = ct_sets$paintedturtle[startsWith(ct_sets$paintedturtle, "e")]
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c(sp1, sp2), ct_sets = ct_sets, norm_all = F)
+
+cort = ccc1
+
+# reshaping the correlations
+plot_df = reshape2::melt(cort$r)
+plot_df$Var2 = as.character(plot_df$Var2)
+
+# cluster and order labels
+hcr = hclust(dist(cort$r), method = "ward.D2")
+hcr = hcr$labels[hcr$order]
+plot_df$Var1 = factor(plot_df$Var1, levels = rev(hcr))
+
+# add pvalue and max cor infor
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+# getting a colourscale where 0 is white in the middle, and intensity leveled by max(abs(value))
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
+cols = cols[!(br>max(cort$r) | br<min(cort$r))]
+
+# add turtle regions
+clreg = "e29_DG e27_pDC e31_DG e23_pDVR e21_pDVR e24_pDC e25_pDVR e30_DG e36_CA1 e35_CA1 e37_CA1 e38_CA1 e34_CA3 e33_CA3 e28_pDC e32_DG e10_aLC e11_aLC e12_aLC e17_pLC e19_aDVR e18_aDVR e20_pDVR e22_pDVR e26_pDC e16_aDC e13_aDC e14_aDC e15_aDC e01_aDVR e02_aDVR e09_aLC e05_PT e03_PT e07_aDC e06_PT e04_PT e08_aDC"
+clreg = t(data.frame(strsplit(strsplit(clreg, " ")[[1]], "_")))
+plot_df = merge(plot_df, clreg, by.x = 2, by.y = 1, all.x = T)
+plot_df$V2 = factor(plot_df$V2, 
+                    levels = c("aLC", "pLC", "PT", "aDVR", "pDVR", "aDC", 
+                               "pDC", "DG", "CA1", "CA3"))
+
+plot_df$Var2 = factor(paste0(plot_df$Var2, "_", plot_df$V2), 
+                      levels = rev(unique(paste0(plot_df$Var2, "_", 
+                                             plot_df$V2)[order(plot_df$V2, decreasing = F)])))
+
+corplot = ggplot()+
+  geom_point(data = plot_df, mapping = aes(x = Var1, y = Var2, fill = value, size = padj), 
+             shape = 21)+
+  geom_point(data = plot_df[plot_df$rowmax,], mapping = aes(x = Var1, y = Var2, size = padj), 
+             shape = "|", show.legend = F, colour = "grey10")+
+  geom_point(data = plot_df[plot_df$colmax,], mapping = aes(x = Var1, y = Var2, size = padj), 
+             shape = "—", show.legend = F, colour = "grey10")+
+  scale_x_discrete(expand = c(0,0.7))+
+  scale_y_discrete(expand = c(0,0.7))+
+  scale_fill_gradientn(breaks = signif(c(min(cort$r)+0.005, 0, max(cort$r)-0.005),2), 
+                       values = scales::rescale(c(min(br), 0, max(br))),
+                       colours = cols)+
+  labs(x = sp1, y = sp2, fill = "Spearman's\nrho", size = "-log10\nadj. p-value")+
+  theme_classic()+
+  theme(axis.title = element_text(colour = "black", face = "bold"),
+        axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.title = element_text(size = 7.5),
+        legend.text = element_text(size = 6.5),
+        strip.text = element_text(size = 7.5))
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_Glutamatergic_npc.pdf", 
+    height = 6.25, width = 6.7)
+print(corplot)
+dev.off()
+```
+
+Glutamatergic more specific with mouse
+
+```{r}
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="Glutamatergic" &
+                                                                   meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23"]),
+               "mouse" = unique(meta_sp_l$mouse$cellclusters[grepl("TEGLU", meta_sp_l$mouse$cellclusters)]))
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GlutamatergicTE.pdf", height = 4.75, width = 6.1)
+plotCorr(ccc1, "axolotl", "mouse")
+dev.off()
+```
+
+Glutamatergic mouse reordered
+
+```{r}
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="Glutamatergic" &
+                                                                   meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23"]),
+               "mouse" = unique(meta_sp_l$mouse$cellclusters[grepl("TEGLU", meta_sp_l$mouse$cellclusters)]))
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+
+
+sp1 = "axolotl"
+sp2 = "mouse"
+cort = ccc1
+
+# reshaping the correlations
+plot_df = reshape2::melt(cort$r)
+plot_df$Var2 = as.character(plot_df$Var2)
+
+# cluster and order labels
+hcr = hclust(dist(cort$r), method = "ward.D2")
+hcr = hcr$labels[hcr$order]
+plot_df$Var1 = factor(plot_df$Var1, levels = rev(hcr))
+
+# add pvalue and max cor infor
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+# getting a colourscale where 0 is white in the middle, and intensity leveled by max(abs(value))
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
+cols = cols[!(br>max(cort$r) | br<min(cort$r))]
+
+# add order to mouse cells
+mouse_ord = paste0("TEGLU", c(18,19,5,13,14,21,24,23, 15,17,16, 20,3,2, 7,8,10,11,
+                              4,9,1,6, 12,22))
+plot_df$Var2 = factor(plot_df$Var2, levels = mouse_ord)
+
+# order the axolotl clusters
+cc = cort$r[,mouse_ord]
+max_m = apply(cc, 1, sum)
+man_m = apply(cc, 1, which.max)
+sc_dat = order(max_m, man_m, decreasing = c(F, F))
+plot_df$Var1 = factor(plot_df$Var1, levels = rownames(cc)[sc_dat])
+
+# axolotl order
+plot_df$Var1 = factor(plot_df$Var1, 
+                      levels = rev(paste0("glut_SUBSET_",
+                                      c(22, 25, 9, 20, 10, 24, 19, 11, 1, 2, 21, 
+                                        8, 6, 13, 28, 27, 26, 16, 3, 0, 5, 12, 
+                                        17, 18, 4, 7, 14, 15))))
+
+corplot = ggplot()+
+  geom_point(data = plot_df, mapping = aes(x = Var2, y = Var1, fill = value, size = padj), 
+             shape = 21)+
+  geom_point(data = plot_df[plot_df$rowmax,], mapping = aes(x = Var2, y = Var1, size = padj), 
+             shape = "—", show.legend = F, colour = "grey10")+
+  geom_point(data = plot_df[plot_df$colmax,], mapping = aes(x = Var2, y = Var1, size = padj), 
+             shape = "|", show.legend = F, colour = "grey10")+
+  scale_x_discrete(expand = c(0,0.7))+
+  scale_y_discrete(expand = c(0,0.7))+
+  scale_fill_gradientn(breaks = signif(c(min(cort$r)+0.005, 0, max(cort$r)-0.005),2), 
+                       values = scales::rescale(c(min(br), 0, max(br))),
+                       colours = cols)+
+  labs(x = sp1, y = sp2, fill = "Spearman's\nrho", size = "-log10\nadj. p-value")+
+  theme_classic()+
+  theme(axis.title = element_text(colour = "black", face = "bold"),
+        axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.title = element_text(size = 7.5),
+        legend.text = element_text(size = 6.5),
+        strip.text = element_text(size = 7.5),
+        aspect.ratio = 28/24)
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_Glutamatergic_ord2.pdf", 
+    height = 5.5, width = 6)
+print(corplot)
+dev.off()
+```
+
+Glutamatergic mouse reordered, TFs only
+
+```{r}
+tfs = read.csv("../../gene_refs/human/Homo_sapiens_TF_AnimalTFDB3.txt", 
+               header = T, sep = "\t")$Symbol
+
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="Glutamatergic" &
+                                                                   meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23"]),
+               "mouse" = unique(meta_sp_l$mouse$cellclusters[grepl("TEGLU", meta_sp_l$mouse$cellclusters)]))
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                       gene_filter = tfs,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+
+
+sp1 = "axolotl"
+sp2 = "mouse"
+cort = ccc1
+
+# reshaping the correlations
+plot_df = reshape2::melt(cort$r)
+plot_df$Var2 = as.character(plot_df$Var2)
+
+# cluster and order labels
+hcr = hclust(dist(cort$r), method = "ward.D2")
+hcr = hcr$labels[hcr$order]
+plot_df$Var1 = factor(plot_df$Var1, levels = rev(hcr))
+
+# add pvalue and max cor infor
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+# getting a colourscale where 0 is white in the middle, and intensity leveled by max(abs(value))
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
+cols = cols[!(br>max(cort$r) | br<min(cort$r))]
+
+# add order to mouse cells
+mouse_ord = paste0("TEGLU", c(18,19,5,13,14,21,24,23, 15,17,16, 20,3,2, 7,8,10,11,
+                              4,9,1,6, 12,22))
+plot_df$Var2 = factor(plot_df$Var2, levels = mouse_ord)
+
+corplot = ggplot()+
+  geom_point(data = plot_df, mapping = aes(x = Var2, y = Var1, fill = value, size = padj), 
+             shape = 21)+
+  geom_point(data = plot_df[plot_df$rowmax,], mapping = aes(x = Var2, y = Var1, size = padj), 
+             shape = "—", show.legend = F, colour = "grey10")+
+  geom_point(data = plot_df[plot_df$colmax,], mapping = aes(x = Var2, y = Var1, size = padj), 
+             shape = "|", show.legend = F, colour = "grey10")+
+  scale_x_discrete(expand = c(0,0.7))+
+  scale_y_discrete(expand = c(0,0.7))+
+  scale_fill_gradientn(breaks = signif(c(min(cort$r)+0.005, 0, max(cort$r)-0.005),2), 
+                       values = scales::rescale(c(min(br), 0, max(br))),
+                       colours = cols)+
+  labs(x = sp2, y = sp1, fill = "Spearman's\nrho", size = "-log10\nadj. p-value")+
+  theme_classic()+
+  theme(axis.title = element_text(colour = "black", face = "bold"),
+        axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.title = element_text(size = 7.5),
+        legend.text = element_text(size = 6.5),
+        strip.text = element_text(size = 7.5),
+        aspect.ratio = 28/24)
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_Glutamatergic_TF.pdf", 
+    height = 5.5, width = 6)
+print(corplot)
+dev.off()
+```
+
+GABAergic more specific with mouse
+
+```{r}
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="GABAergic"]),
+               "mouse" = unique(meta_sp_l$mouse$cellclusters[grepl("TEINH", meta_sp_l$mouse$cellclusters)]))
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, 
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GABAergicTE.pdf", height = 4.75, width = 6.1)
+plotCorr(ccc1, "axolotl", "mouse")
+dev.off()
+```
+
+GABAergic more specific with mouse, TFs only
+
+```{r}
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="GABAergic"]),
+               "mouse" = unique(meta_sp_l$mouse$cellclusters[grepl("TEINH", meta_sp_l$mouse$cellclusters)]))
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, gene_filter = tfs,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GABAergicTE_TF.pdf", height = 5, width = 6.5)
+plotCorr(ccc1, "axolotl", "mouse")
+dev.off()
+```
+
+Axolotl glutamatergic and npc correlation
+
+```{r}
+sp1 = "axolotl"
+
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+
+cond_axo = meta_sp_l$axolotl$cellclusters %in% c("npc_SUBSET_0", "npc_SUBSET_1", "npc_SUBSET_2",
+                                         "npc_SUBSET_3", "npc_SUBSET_4", "npc_SUBSET_7",
+                                         "npc_SUBSET_9", "npc_SUBSET_11", "npc_SUBSET_13",
+                                         #"epen_clus_1","epen_clus_7","epen_clus_14",
+                                         "npc_SUBSET_14")
+cond_axo2 = (meta_sp_l$axolotl$subclasses=="Glutamatergic" & 
+               meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23")
+
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[cond_axo]),
+               "axolotl" = unique(meta_sp_l$axolotl$cellclusters[cond_axo2]))
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c(sp1, sp1), ct_sets = ct_sets, norm_all = F)
+
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(ccc1$r)), max(abs(ccc1$r)), length.out = 101)
+cols = cols[!(br>max(ccc1$r) | br<min(ccc1$r))]
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_glut_npc.pdf", height = 4, width = 2.8)
+pheatmap::pheatmap(t(ccc1$r), clustering_method = "ward.D", 
+                   treeheight_row = 30, treeheight_col = 20, fontsize = 6,
+                   fontsize_row = 7, fontsize_col = 7, color = cols)
+dev.off()
+```
+
+Axolotl glutamatergic and npc correlation - Div-seq
+
+```{r}
+axolotl_div_avg = readRDS("results/pairwiseDE/div_avgExp.RDS")$pred_ctall
+axolotl_div_mk = readRDS("results/pairwiseDE/div_markers.RDS")$pred_ctall
+
+sp1 = "axolotl"
+
+gg = "cellclusters"
+pwde = list("axolotl" = axolotl_div_mk)
+m = list("axolotl" = axolotl_div_avg)
+
+cond_axo = meta_sp_l$axolotl$cellclusters %in% c("npc_SUBSET_0", "npc_SUBSET_1", "npc_SUBSET_2",
+                                         "npc_SUBSET_3", "npc_SUBSET_4", "npc_SUBSET_7",
+                                         "npc_SUBSET_9", "npc_SUBSET_11", "npc_SUBSET_13",
+                                         #"epen_clus_1","epen_clus_7","epen_clus_14",
+                                         "npc_SUBSET_14")
+cond_axo2 = (meta_sp_l$axolotl$subclasses=="Glutamatergic" & 
+               meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23")
+
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[cond_axo]),
+               "axolotl" = unique(meta_sp_l$axolotl$cellclusters[cond_axo2]))
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c(sp1, sp1), ct_sets = ct_sets, norm_all = F)
+
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(ccc1$r)), max(abs(ccc1$r)), length.out = 101)
+cols = cols[!(br>max(ccc1$r) | br<min(ccc1$r))]
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_div_glut_npc.pdf", height = 4, width = 2.8)
+pheatmap::pheatmap(t(ccc1$r), clustering_method = "ward.D", 
+                   treeheight_row = 30, treeheight_col = 20, fontsize = 6,
+                   fontsize_row = 7, fontsize_col = 7, color = cols)
+dev.off()
+```
+
+
+
+
+## Development
+Subclasses matching
+
+```{r}
+dev_m_list = c(mdev_m_list[c(1,3,5)], subcl_m_list[2])
+dev_pwde_list = c(mdev_pwde_list[c(1,3,5)], subcl_pwde_list[2])
+dev_meta_l = c(mdev_meta_l, meta_sp_l[2])
+names(dev_m_list) = names(dev_pwde_list) = names(dev_meta_l)[c(3,1,2, 4)]
+
+if(!file.exists(paste0("results/ComparativeSpeciesAnalysis/corr_subcl_dat_dev_l.RDS"))){
+  ds1 = "axolotl"
+  corr_dat_dev_l = list()
+  for(ds2 in names(dev_meta_l)[1:3]){
+    n = paste0(ds1, "_", ds2)
+    cat(paste0("\n", n, sep = ": "))
+    
+    m = dev_m_list[c(ds1, ds2)]
+    pwde = dev_pwde_list[c(ds1, ds2)]
+    names(m) = names(pwde) = c("axolotl", "mouse")
+        
+    allgroups = as.list(intersect(unique(dev_meta_l[[ds1]]$subclasses), unique(dev_meta_l[[ds2]]$classes)))
+    allgroups[[length(allgroups)+1]] = c("Glia", "NPC", "Ependymal")
+    for(cgi in 1:length(allgroups)){
+      cg = allgroups[[cgi]]
+      cat(cg, sep = " ")
+      ct_sets = list(
+        ct1 = unique(dev_meta_l[[ds1]]$subclasses[dev_meta_l[[ds1]]$subclasses %in% cg]),
+        ct2 = unique(dev_meta_l[[ds2]]$subclasses[dev_meta_l[[ds2]]$classes %in% cg])
+      )
+      names(ct_sets) = c("axolotl", "mouse")
+          
+      ccc = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                            sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+      corr_dat_dev_l[[paste0(n, "_", paste0(cg, collapse = ".."))]] = ccc
+    }
+  }
+  saveRDS(corr_dat_dev_l, file = paste0("results/ComparativeSpeciesAnalysis/corr_subcl_dat_dev_l.RDS"))
+} else{
+  corr_dat_dev_l = readRDS("results/ComparativeSpeciesAnalysis/corr_subcl_dat_dev_l.RDS")
+}
+```
+
+Cell clusters matching
+
+```{r}
+dev_m_list = c(mdev_m_list[c(2,4,6)], celcl_m_list[2])
+dev_pwde_list = c(mdev_pwde_list[c(2,4,6)], celcl_pwde_list[2])
+dev_meta_l = c(mdev_meta_l, meta_sp_l[2])
+names(dev_m_list) = names(dev_pwde_list) = names(dev_meta_l)[c(3,1,2, 4)]
+
+if(!file.exists(paste0("results/ComparativeSpeciesAnalysis/corr_cellcl_dat_dev_l.RDS"))){
+  ds1 = "axolotl"
+  corr_dat_dev_l = list()
+  for(ds2 in names(dev_meta_l)[1:3]){
+    n = paste0(ds1, "_", ds2)
+    cat(paste0("\n", n, sep = ": "))
+    
+    m = dev_m_list[c(ds1, ds2)]
+    pwde = dev_pwde_list[c(ds1, ds2)]
+    names(m) = names(pwde) = c("axolotl", "mouse")
+        
+    allgroups = as.list(intersect(unique(dev_meta_l[[ds1]]$subclasses), unique(dev_meta_l[[ds2]]$classes)))
+    allgroups[[length(allgroups)+1]] = c("Glia", "NPC", "Ependymal")
+    for(cgi in 1:length(allgroups)){
+      cg = allgroups[[cgi]]
+      cat(cg, sep = " ")
+      ct_sets = list(
+        ct1 = unique(dev_meta_l[[ds1]]$cellclusters[dev_meta_l[[ds1]]$subclasses %in% cg]),
+        ct2 = unique(dev_meta_l[[ds2]]$cellclusters[dev_meta_l[[ds2]]$classes %in% cg])
+      )
+      names(ct_sets) = c("axolotl", "mouse")
+          
+      ccc = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                            sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+      corr_dat_dev_l[[paste0(n, "_", paste0(cg, collapse = ".."))]] = ccc
+    }
+  }
+  saveRDS(corr_dat_dev_l, file = paste0("results/ComparativeSpeciesAnalysis/corr_cellcl_dat_dev_l.RDS"))
+} else{
+  corr_dat_dev_l = readRDS("results/ComparativeSpeciesAnalysis/corr_cellcl_dat_dev_l.RDS")
+}
+```
+
+NPC and ependymal only, adult neurogenesis
+
+```{r}
+dev_m_list = c(mdev_m_list[c(2,4,6)], celcl_m_list[2])
+dev_pwde_list = c(mdev_pwde_list[c(2,4,6)], celcl_pwde_list[2])
+dev_meta_l = c(mdev_meta_l, meta_sp_l[2])
+names(dev_m_list) = names(dev_pwde_list) = names(dev_meta_l)[c(3,1,2, 4)]
+
+ds1 = "axolotl"
+ds2 = "mouse_abc_sc"
+m = dev_m_list[c(ds1, ds2)]
+pwde = dev_pwde_list[c(ds1, ds2)]
+names(m) = names(pwde) = c("axolotl", "mouse")
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_abc_sc$cellclusters[startsWith(dev_meta_l$mouse_abc_sc$cellclusters,"Ependy") | 
+                                                     grepl("A cells", dev_meta_l$mouse_abc_sc$cellclusters) |
+                                                     grepl("B cells", dev_meta_l$mouse_abc_sc$cellclusters) |
+                                                     grepl("C cells", dev_meta_l$mouse_abc_sc$cellclusters) |
+                                                       startsWith(dev_meta_l$mouse_abc_sc$cellclusters,"Mitosis")])
+)
+    
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseVSVZsc.pdf", height = 4.75, width = 6.1)
+plotCorr(ccc1, "axolotl", "mouse")
+dev.off()
+
+
+ds1 = "axolotl"
+ds2 = "mouse_abc_sn"
+m = dev_m_list[c(ds1, ds2)]
+pwde = dev_pwde_list[c(ds1, ds2)]
+names(m) = names(pwde) = c("axolotl", "mouse")
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_abc_sn$cellclusters[startsWith(dev_meta_l$mouse_abc_sn$cellclusters,"Ependy") | 
+                                                     grepl(" cells", dev_meta_l$mouse_abc_sn$cellclusters) |
+                                                       startsWith(dev_meta_l$mouse_abc_sn$cellclusters,"Mitosis")])
+)
+
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseVSVZsn.pdf", height = 4.75, width = 6.1)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+```
+
+NPC and ependymal only, adult neurogenesis, TFs
+
+```{r}
+tfs = read.csv("../../gene_refs/human/Homo_sapiens_TF_AnimalTFDB3.txt", 
+               header = T, sep = "\t")$Symbol
+
+dev_m_list = c(mdev_m_list[c(2,4,6)], celcl_m_list[2])
+dev_pwde_list = c(mdev_pwde_list[c(2,4,6)], celcl_pwde_list[2])
+dev_meta_l = c(mdev_meta_l, meta_sp_l[2])
+names(dev_m_list) = names(dev_pwde_list) = names(dev_meta_l)[c(3,1,2, 4)]
+
+ds1 = "axolotl"
+ds2 = "mouse_abc_sc"
+m = dev_m_list[c(ds1, ds2)]
+pwde = dev_pwde_list[c(ds1, ds2)]
+names(m) = names(pwde) = c("axolotl", "mouse")
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_abc_sc$cellclusters[startsWith(dev_meta_l$mouse_abc_sc$cellclusters,"Ependy") | 
+                                                     grepl("A cells", dev_meta_l$mouse_abc_sc$cellclusters) |
+                                                     grepl("B cells", dev_meta_l$mouse_abc_sc$cellclusters) |
+                                                     grepl("C cells", dev_meta_l$mouse_abc_sc$cellclusters) |
+                                                       startsWith(dev_meta_l$mouse_abc_sc$cellclusters,"Mitosis")])
+)
+    
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, gene_filter = tfs,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseVSVZsc_TF.pdf", height = 4.75, width = 6.1)
+plotCorr(ccc1, "axolotl", "mouse")
+dev.off()
+
+
+ds1 = "axolotl"
+ds2 = "mouse_abc_sn"
+m = dev_m_list[c(ds1, ds2)]
+pwde = dev_pwde_list[c(ds1, ds2)]
+names(m) = names(pwde) = c("axolotl", "mouse")
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_abc_sn$cellclusters[startsWith(dev_meta_l$mouse_abc_sn$cellclusters,"Ependy") | 
+                                                     grepl(" cells", dev_meta_l$mouse_abc_sn$cellclusters) |
+                                                       startsWith(dev_meta_l$mouse_abc_sn$cellclusters,"Mitosis")])
+)
+
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, gene_filter = tfs,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseVSVZsn_TF.pdf", height = 4.75, width = 6.1)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+```
+
+NPC and ependymal only, dev neurogenesis
+
+```{r}
+dev_m_list = c(mdev_m_list[1:2], subcl_m_list[2], celcl_m_list[2])
+dev_pwde_list = c(mdev_pwde_list[1:2], subcl_pwde_list[2], celcl_pwde_list[2])
+dev_meta_l = c(mdev_meta_l[3], meta_sp_l[2])
+names(dev_m_list) = names(dev_pwde_list) = unlist(lapply(names(dev_meta_l), function(x) paste0(x, c("_subcl", "_celcl"))))
+
+ds1 = "axolotl_celcl"
+ds2 = "mouse_all_subcl"
+m = dev_m_list[c(ds1, ds2)]
+pwde = dev_pwde_list[c(ds1, ds2)]
+names(m) = names(pwde) = c("axolotl", "mouse")
+
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_all.pdf", height = 14, width = 6.5)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_all$subclasses[!(grepl("Microglia", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Vasculature", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Interneurons", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Excitatory neurons", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Oligodendrocytes", dev_meta_l$mouse_all$subclasses) |
+                                                   grepl("Astroc", dev_meta_l$mouse_all$subclasses)) | 
+                                                     grepl("Migrating", dev_meta_l$mouse_all$subclasses)])
+)
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_NPCEp.pdf", height = 8, width = 4.3)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_all$subclasses[!(grepl("Microglia", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Vasculature", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Oligodendrocytes", dev_meta_l$mouse_all$subclasses) |
+                                                   grepl("Astroc", dev_meta_l$mouse_all$subclasses))])
+)
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_NPCEpvAll.pdf", height = 8, width = 6.5)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+```
+
+NPC and ependymal only, dev neurogenesis, TFs
+
+```{r}
+tfs = read.csv("../../gene_refs/human/Homo_sapiens_TF_AnimalTFDB3.txt", 
+               header = T, sep = "\t")$Symbol
+
+dev_m_list = c(mdev_m_list[1:2], subcl_m_list[2], celcl_m_list[2])
+dev_pwde_list = c(mdev_pwde_list[1:2], subcl_pwde_list[2], celcl_pwde_list[2])
+dev_meta_l = c(mdev_meta_l[3], meta_sp_l[2])
+names(dev_m_list) = names(dev_pwde_list) = unlist(lapply(names(dev_meta_l), function(x) paste0(x, c("_subcl", "_celcl"))))
+
+ds1 = "axolotl_celcl"
+ds2 = "mouse_all_subcl"
+m = dev_m_list[c(ds1, ds2)]
+pwde = dev_pwde_list[c(ds1, ds2)]
+names(m) = names(pwde) = c("axolotl", "mouse")
+
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                       gene_filter = tfs, sp_pair = c("axolotl", "mouse"), norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_all_TF.pdf", height = 14, width = 6.5)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_all$subclasses[!(grepl("Microglia", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Vasculature", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Interneurons", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Excitatory neurons", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Oligodendrocytes", dev_meta_l$mouse_all$subclasses) |
+                                                   grepl("Astroc", dev_meta_l$mouse_all$subclasses)) | 
+                                                     grepl("Migrating", dev_meta_l$mouse_all$subclasses)])
+)
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                       gene_filter = tfs, sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_NPCEp_TF.pdf", height = 8, width = 4.3)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_all$subclasses[!(grepl("Microglia", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Vasculature", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Oligodendrocytes", dev_meta_l$mouse_all$subclasses) |
+                                                   grepl("Astroc", dev_meta_l$mouse_all$subclasses))])
+)
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                       gene_filter = tfs, sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_NPCEpvAll_TF.pdf", height = 8, width = 6.5)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+```
+
+

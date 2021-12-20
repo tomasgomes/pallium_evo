@@ -1,0 +1,420 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Load libraries
+
+```{r}
+library(Signac)
+library(Seurat)
+library(GenomeInfoDb)
+# remotes::install_github("alyssafrazee/ballgown")
+library(ballgown)
+library(ggplot2)
+library(patchwork)
+set.seed(1234)
+```
+
+Mitochondrial genes
+
+```{r}
+mtgenes = c("COX1", "COX2", "COX3", "ATP6", "ND1", "ND5", "CYTB", "ND2", "ND4",
+            "ATP8", "MT-CO1", "COI", "LOC9829747")
+mtgenes = c(mtgenes, paste0("MT", mtgenes), paste0("MT-", mtgenes))
+```
+
+Read in axolotl features
+
+```{r}
+gtf_axolotl = "/local1/USERS/tomasgomes/axolotl/axolotl_genome/AmexT_v47.FULL_corr_chr_cut.gtf"
+granges_axolotl = ballgown::gffReadGR(gtf_axolotl)
+# adding a gene biotype, as that's necessary for TSS metaprofile
+granges_axolotl$gene_biotype = "protein_coding"
+
+# with need to add the "proper" gene name
+basedir = "/links/groups/treutlein/USERS/tomasgomes/gene_refs/axolotl/Amex_T_v47/"
+gene_name_match = read.table(paste0(basedir, "AmexT_v47.FULL_t2g_note.txt"), sep = "\t")[,2:3]
+gene_name_match = gene_name_match[!duplicated(gene_name_match$V2), ]
+rownames(gene_name_match) = gene_name_match$V2
+
+newgenenames = gene_name_match[granges_axolotl$gene_id,2]
+granges_axolotl$gene_name = newgenenames
+```
+
+
+
+# Load data
+Read in data
+
+```{r}
+counts = Read10X_h5(filename = "/local1/USERS/tomasgomes/axolotl/a1_1/outs/filtered_feature_bc_matrix.h5")
+frags_file = '/local1/USERS/tomasgomes/axolotl/a1_1/outs/atac_fragments.tsv.gz'
+
+chrom_assay = CreateChromatinAssay(counts = counts$Peaks, sep = c(":", "-"), min.cells = 1,
+                                   min.features = 200, genome = NULL, # axolotl genome not available
+                                   fragments = frags_file, annotation = granges_axolotl)
+
+a1_1 = CreateSeuratObject(counts = chrom_assay, assay = "peaks")
+```
+
+
+
+# CellRanger peaks
+Getting MT peaks and calculating MT%
+
+```{r}
+# all these tricks are necessary because some regions make "ClosestFeature" crash
+# get MT gene_id
+gene_name_match = read.table(paste0(basedir, "AmexT_v47.FULL_t2g_note.txt"), sep = "\t")[,2:3]
+mtid = unique(gene_name_match[gene_name_match$V3 %in% mtgenes,1])
+l_gtf = lapply(mtid, function(x) grepl(x, granges_axolotl$gene_id))
+l_gtf = Reduce(cbind, l_gtf)
+mtcoord = rowSums(l_gtf)>0
+chrmt = unique(seqnames(granges_axolotl[mtcoord,]))
+
+# match regions with MT genes
+ischrmt = lapply(chrmt, function(x) grepl(x, rownames(a1_1)))
+ischrmt = Reduce(cbind, ischrmt)
+ischrmt = rowSums(ischrmt)>0
+all_cl = ClosestFeature(a1_1, regions = rownames(a1_1)[ischrmt])
+
+# get MT regions
+mt_peaks = all_cl[all_cl$gene_id %in% mtid,"query_region"]
+
+a1_1 = PercentageFeatureSet(a1_1, features = mt_peaks, col.name = "mt_perc")
+```
+
+Nucleosome and TSS signal (serve as QC metrics)
+
+```{r}
+# compute nucleosome signal score per cell
+a1_1 = NucleosomeSignal(object = a1_1)
+
+# compute TSS enrichment score per cell
+a1_1 = TSSEnrichment(object = a1_1, fast = FALSE)
+
+# fraction of reads in peaks
+## not run - this depends on QC metrics that cellranger-arc doesn't output
+## for QC, we'll use metrics from the multi-omics tutorial instead
+# a1_1$pct_reads_in_peaks = a1_1$peak_region_fragments/a1_1$passed_filters*100
+```
+
+Plotting
+
+```{r}
+a1_1$high.tss = ifelse(a1_1$TSS.enrichment > 2, 'High', 'Low')
+TSSPlot(a1_1, group.by = 'high.tss') + NoLegend()
+
+a1_1$nucleosome_group = ifelse(a1_1$nucleosome_signal > 4, 'NS > 2', 'NS < 4')
+FragmentHistogram(object = a1_1, group.by = 'nucleosome_group') # this is veeery slow (~30-40min)
+```
+
+Plotting QC metrics
+
+```{r}
+VlnPlot(object = a1_1, features = c('nCount_peaks', 'nFeature_peaks', "mt_perc",
+                                    'TSS.enrichment', 'nucleosome_signal'),
+        pt.size = 0.1, ncol = 5, log = T)
+```
+
+Removing cells based on QC metrics
+
+```{r}
+a1_1 = subset(x = a1_1, subset = nCount_peaks<30000 & nCount_peaks>1000 &
+                nFeature_peaks<10000 & nCount_peaks>500 &
+                nucleosome_signal<2 &
+                TSS.enrichment>3 &
+                mt_perc<2)
+a1_1
+```
+
+Normalisation and linear dimensionality reduction
+
+```{r}
+a1_1 = RunTFIDF(a1_1) # term frequency/inverse document frequency (from text processing)
+a1_1 = FindTopFeatures(a1_1, min.cutoff = 'q0') # selecting top % features (should test other thresh)
+a1_1 = RunSVD(a1_1) # singular value decomposition of the TF/IDF values
+```
+
+Check correlation of LSI with sequencing depth (since often times the first component is technical var)
+
+```{r}
+DepthCor(a1_1, n = 30)
+```
+
+UMAP, find clusters
+
+```{r}
+dims_use = c(2:30) # change according to previous plot (no dims corr with counts)
+a1_1 = RunUMAP(object = a1_1, reduction = 'lsi', dims = dims_use)
+a1_1 = FindNeighbors(object = a1_1, reduction = 'lsi', dims = dims_use, force.recalc = T, 
+                     graph.name = "graph18")
+a1_1 = FindClusters(object = a1_1, verbose = FALSE, algorithm = 3, graph.name = "graph18")
+DimPlot(object = a1_1, label = TRUE) + NoLegend()
+FeaturePlot(object = a1_1, features = c('nCount_peaks', "nFeature_peaks", "mt_perc"),
+            pt.size = 0.1, ncol = 2)
+```
+
+Obtaining gene activities - essentially give meaning to the detected peaks
+
+```{r}
+gene_act = GeneActivity(a1_1)
+# collapse identical gene names
+gn = rownames(gene_act)
+gn = unlist(lapply(strsplit(gn, ".", fixed = T), function(x) x[1]))
+gene_act_coll = rowsum(gene_act, group = gn)
+
+# add the gene activity matrix to the Seurat object as a new assay and normalize it
+a1_1[['RNA']] = CreateAssayObject(counts = gene_act_coll)
+a1_1 = NormalizeData(object = a1_1, assay = 'RNA', normalization.method = 'LogNormalize',
+                      scale.factor = median(a1_1$nCount_RNA))
+```
+
+Plotting gene activities
+
+```{r}
+DefaultAssay(a1_1) = 'RNA'
+
+FeaturePlot(object = a1_1, features = c('GAD2', 'MEX3A', 'MEIS1', 'PDGFRA', 'SLC17A6', 'EPOR'),
+            pt.size = 0.1, max.cutoff = 'q95', ncol = 3, order = T)
+```
+
+Differentially accessible peaks
+
+```{r}
+# change back to working with peaks instead of gene activities
+DefaultAssay(a1_1) = 'peaks'
+
+da_peaks = FindMarkers(object = a1_1, ident.1 = 8, ident.2 = 4,
+                       min.pct = 0.2, test.use = 'LR', latent.vars = 'nCount_peaks')
+head(da_peaks)
+```
+
+Plotting
+
+```{r}
+plot1 <- VlnPlot(object = a1_1, features = rownames(da_peaks)[1], pt.size = 0.1,
+                 idents = c(8, 4))
+plot2 <- FeaturePlot(object = a1_1, features = rownames(da_peaks)[1], pt.size = 0.1, order = T)
+
+plot1 | plot2
+```
+
+Find all markers
+
+```{r}
+allmk = FindAllMarkers(object = a1_1, min.pct = 0.2, test.use = 'LR', latent.vars = 'nCount_peaks')
+allmk = allmk[allmk$p_val_adj<=0.05 & allmk$avg_log2FC>0,]
+```
+
+Looking for closest feature
+
+```{r}
+reg = allmk$gene
+closest_allmk = ClosestFeature(a1_1, regions = unique(reg))
+```
+
+Plotting genomic regions
+
+```{r}
+# set plotting order
+levels(a1_1) = 0:9
+
+CoveragePlot(object = a1_1, #region = rownames(allmk)[order(allmk$avg_log2FC, decreasing = T)][4], 
+             region = "chr1ps1-86694767-86697164", extend.upstream = 5000, extend.downstream = 50000)
+```
+
+
+
+# MACS2 peaks
+Peak calling with MACS2
+
+```{r}
+peaks = CallPeaks(object = a1_1, #group.by = "predicted.id",
+                  macs2.path = "~/bin/miniconda3/envs/macs2env/bin/macs2")
+```
+
+Generate new counts
+
+```{r}
+# not run
+# peak_ranges should be a set of genomic ranges spanning the set of peaks to be quantified per cell
+peak_matrix = FeatureMatrix(fragments = Fragments(a1_1), features = peaks)
+```
+
+Make new object
+
+```{r}
+chrom_assay = CreateChromatinAssay(counts = peak_matrix, sep = c(":", "-"), min.cells = 1,
+                                   min.features = 200, genome = NULL, # axolotl genome not available
+                                   fragments = frags_file, annotation = granges_axolotl)
+
+a1_1_macs = CreateSeuratObject(counts = chrom_assay, assay = "peaks")
+```
+
+Getting MT peaks and calculating MT%
+
+```{r}
+# all these tricks are necessary because some regions make "ClosestFeature" crash
+# get MT gene_id
+gene_name_match = read.table(paste0(basedir, "AmexT_v47.FULL_t2g_note.txt"), sep = "\t")[,2:3]
+mtid = unique(gene_name_match[gene_name_match$V3 %in% mtgenes,1])
+l_gtf = lapply(mtid, function(x) grepl(x, granges_axolotl$gene_id))
+l_gtf = Reduce(cbind, l_gtf)
+mtcoord = rowSums(l_gtf)>0
+chrmt = unique(seqnames(granges_axolotl[mtcoord,]))
+
+# match regions with MT genes
+ischrmt = lapply(chrmt, function(x) grepl(x, rownames(a1_1_macs)))
+ischrmt = Reduce(cbind, ischrmt)
+ischrmt = rowSums(ischrmt)>0
+all_cl = ClosestFeature(a1_1_macs, regions = rownames(a1_1_macs)[ischrmt])
+
+# get MT regions
+mt_peaks = all_cl[all_cl$gene_id %in% mtid,"query_region"]
+
+a1_1_macs = PercentageFeatureSet(a1_1_macs, features = mt_peaks, col.name = "mt_perc")
+```
+
+Nucleosome and TSS signal (serve as QC metrics)
+
+```{r}
+# compute nucleosome signal score per cell
+a1_1_macs = NucleosomeSignal(object = a1_1_macs)
+
+# compute TSS enrichment score per cell
+a1_1_macs = TSSEnrichment(object = a1_1_macs, fast = FALSE)
+
+# fraction of reads in peaks
+## not run - this depends on QC metrics that cellranger-arc doesn't output
+## for QC, we'll use metrics from the multi-omics tutorial instead
+# a1_1$pct_reads_in_peaks = a1_1$peak_region_fragments/a1_1$passed_filters*100
+```
+
+Plotting
+
+```{r}
+a1_1_macs$high.tss = ifelse(a1_1_macs$TSS.enrichment > 2, 'High', 'Low')
+TSSPlot(a1_1_macs, group.by = 'high.tss') + NoLegend()
+
+a1_1_macs$nucleosome_group = ifelse(a1_1_macs$nucleosome_signal > 4, 'NS > 2', 'NS < 4')
+#FragmentHistogram(object = a1_1_macs, group.by = 'nucleosome_group') # this is veeery slow (~30-40min)
+```
+
+Plotting QC metrics
+
+```{r}
+VlnPlot(object = a1_1_macs, features = c('nCount_peaks', 'nFeature_peaks', "mt_perc",
+                                    'TSS.enrichment', 'nucleosome_signal'),
+        pt.size = 0.1, ncol = 5, log = T)
+```
+
+Removing cells based on QC metrics
+
+```{r}
+a1_1_macs = subset(x = a1_1_macs, subset = nCount_peaks<5000 & nCount_peaks>500 &
+                nFeature_peaks<5000 & nCount_peaks>300 &
+                nucleosome_signal<2 & TSS.enrichment>3 &
+                mt_perc<2.5)
+a1_1_macs
+```
+
+Normalisation and linear dimensionality reduction
+
+```{r}
+a1_1_macs = RunTFIDF(a1_1_macs) # term frequency/inverse document frequency (from text processing)
+a1_1_macs = FindTopFeatures(a1_1_macs, min.cutoff = 'q0') # selecting top % features (should test other thresh)
+a1_1_macs = RunSVD(a1_1_macs) # singular value decomposition of the TF/IDF values
+```
+
+Check correlation of LSI with sequencing depth (since often times the first component is technical var)
+
+```{r}
+DepthCor(a1_1_macs, n = 30)
+```
+
+UMAP, find clusters
+
+```{r}
+dims_use = c(2:30) # change according to previous plot
+a1_1_macs = RunUMAP(object = a1_1_macs, reduction = 'lsi', dims = dims_use)
+a1_1_macs = FindNeighbors(object = a1_1_macs, reduction = 'lsi', dims = dims_use, force.recalc = T, 
+                     graph.name = "graph18")
+a1_1_macs = FindClusters(object = a1_1_macs, verbose = FALSE, algorithm = 3, graph.name = "graph18")
+DimPlot(object = a1_1_macs, label = TRUE) + NoLegend()
+FeaturePlot(object = a1_1_macs, features = c('nCount_peaks', "nFeature_peaks"),
+            pt.size = 0.1, ncol = 2)
+```
+
+Obtaining gene activities - essentially give meaning to the detected peaks
+
+```{r}
+gene_act = GeneActivity(a1_1_macs)
+# collapse identical gene names
+gn = rownames(gene_act)
+gn = unlist(lapply(strsplit(gn, ".", fixed = T), function(x) x[1]))
+gene_act_coll = rowsum(gene_act, group = gn)
+
+# add the gene activity matrix to the Seurat object as a new assay and normalize it
+a1_1_macs[['RNA']] = CreateAssayObject(counts = gene_act_coll)
+a1_1_macs = NormalizeData(object = a1_1_macs, assay = 'RNA', normalization.method = 'LogNormalize',
+                      scale.factor = median(a1_1_macs$nCount_RNA))
+```
+
+Plotting gene activities
+
+```{r}
+DefaultAssay(a1_1_macs) = 'RNA'
+
+FeaturePlot(object = a1_1_macs, features = c('GAD2', 'MEX3A', 'MEIS1', 'PDGFRA', 'SLC17A6', 'EPOR'),
+            pt.size = 0.1, max.cutoff = 'q95', ncol = 3, order = T)
+```
+
+Find all markers
+
+```{r}
+allmk_macs = FindAllMarkers(object = a1_1_macs, min.pct = 0.2, test.use = 'LR', 
+                            latent.vars = 'nCount_peaks')
+allmk_macs = allmk_macs[allmk_macs$p_val_adj<=0.05 & allmk_macs$avg_log2FC>0,]
+
+DefaultAssay(a1_1_macs) = 'peaks'
+
+allmk_p_macs = FindAllMarkers(object = a1_1_macs, min.pct = 0.2, test.use = 'LR', 
+                            latent.vars = 'nCount_peaks')
+allmk_p_macs = allmk_p_macs[allmk_p_macs$p_val_adj<=0.05 & allmk_p_macs$avg_log2FC>0,]
+```
+
+Closest features to peaks from cluster
+
+```{r}
+reg = allmk_p_macs$gene[allmk_p_macs$cluster==6]
+closest_allmk = ClosestFeature(a1_1_macs, regions = unique(reg))
+```
+
+
+Plotting genomic regions
+
+```{r}
+# set plotting order
+levels(a1_1_macs) = 0:9
+
+CoveragePlot(object = a1_1_macs, #region = rownames(allmk)[order(allmk$avg_log2FC, decreasing = T)][4], 
+             region = "chr3qs3-466863945-466864271", extend.upstream = 20000, extend.downstream = 5000)
+```
+
+
+
+
+

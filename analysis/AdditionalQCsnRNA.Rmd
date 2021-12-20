@@ -1,0 +1,473 @@
+---
+title: "Additional QCs on Pallium snRNA-seq"
+output: html_notebook
+---
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Matrix)
+library(ggplot2)
+library(data.table)
+library(rjson)
+library(Seurat)
+library(DropletUtils)
+library(parallel)
+library(doParallel)
+library(foreach)
+```
+
+
+
+# Load data
+## Data
+UMI and read counts - takes a long time!
+
+```{r}
+# files were transferred to fast-access storage on account of their size
+# file format: cell barcode, UMI, equivalence class, number of reads
+buslist = list(
+  M2nuc = data.table::fread(file = "/local1/USERS/tomasgomes/tmp/M2_nuc_umicount.txt", sep = "\t"),
+  M2res = data.table::fread(file = "/local1/USERS/tomasgomes/tmp/M2_reseq_umicount.txt", sep = "\t"),
+  M1nuc = data.table::fread(file = "/local1/USERS/tomasgomes/tmp/M1_nuc_umicount.txt", sep = "\t"),
+  M1res = data.table::fread(file = "/local1/USERS/tomasgomes/tmp/M1_reseq_umicount.txt", sep = "\t"),
+  L1res = data.table::fread(file = "/local1/USERS/tomasgomes/tmp/L1_reseq_umicount.txt", sep = "\t"),
+  L2res = data.table::fread(file = "/local1/USERS/tomasgomes/tmp/L2_reseq_umicount.txt", sep = "\t"),
+  D1res = data.table::fread(file = "/local1/USERS/tomasgomes/tmp/D1_reseq_umicount.txt", sep = "\t"),
+  D2res = data.table::fread(file = "/local1/USERS/tomasgomes/tmp/D2_reseq_umicount.txt", sep = "\t")
+)
+```
+
+Resulting Seurat objects
+
+```{r}
+# L1 original not present for some reason
+data_reseq = list("L2_original" = readRDS("../../data/axolotl/L_2_nuc/L_2_nuc_srat.RDS"),
+                  "L2_reseq" = readRDS("../../data/axolotl/L_2_reseq/L_2_reseq_srat.RDS"),
+                  "M1_original" = readRDS("../../data/axolotl/M_1_nuc/M_1_nuc_srat.RDS"),
+                  "M1_reseq" = readRDS("../../data/axolotl/M_1_reseq/M_1_reseq_srat.RDS"),
+                  "M2_original" = readRDS("../../data/axolotl/M_2_nuc/M_2_nuc_srat.RDS"),
+                  "M2_reseq" = readRDS("../../data/axolotl/M_2_reseq/M_2_reseq_srat.RDS"),
+                  "D1_original" = readRDS("../../data/axolotl/D_1_nuc/D_1_nuc_srat.RDS"),
+                  "D1_reseq" = readRDS("../../data/axolotl/D_1_reseq/D_1_reseq_srat.RDS"),
+                  "D2_original" = readRDS("../../data/axolotl/D_2_nuc/D_2_nuc_srat.RDS"),
+                  "D2_reseq" = readRDS("../../data/axolotl/D_2_reseq/D_2_reseq_srat.RDS"))
+
+data_reseq = lapply(data_reseq, function(x) x[,x$iscell_dd & x$iscell_ed])
+```
+
+
+## Functions
+Downsampling function for reads
+
+```{r}
+dsReads = function(readtab, cells = NULL, fracs = seq(0.1, 1, 0.1), seed = 1){
+  set.seed(seed)
+  res_list = list()
+  for(f in fracs){
+    dsreads = DropletUtils:::downsample_run(readtab$V4, f)
+    
+    if(is.null(cells)){ #running without cells may not work since data is too big
+      cells = unique(readtab$V4)
+    }
+    reads_per_cell = tapply(dsreads[readtab$V1 %in% cells], readtab$V1[readtab$V1 %in% cells], sum)
+    subreadtab = readtab[dsreads>0 & readtab$V1 %in% cells,]
+    umis_per_cell = tapply(subreadtab$V2, subreadtab$V1, function(x) length(unique(x)))
+    
+    # merge all
+    res_list[[as.character(f)]] = data.frame(ids = cells,
+                                             frac = f)
+    res_list[[as.character(f)]] = merge(res_list[[as.character(f)]], reads_per_cell, by.x = 1, by.y = 0, all = T)
+    res_list[[as.character(f)]] = merge(res_list[[as.character(f)]], umis_per_cell, by.x = 1, by.y = 0, all = T)
+    res_list[[as.character(f)]][,1] = paste0(res_list[[as.character(f)]][,1], "-1")
+    res_list[[as.character(f)]][is.na(res_list[[as.character(f)]][,3]),3] = 0
+    res_list[[as.character(f)]][is.na(res_list[[as.character(f)]][,4]),4] = 0
+    colnames(res_list[[as.character(f)]]) = c("cells", "frac", "nReads", "nUMIs")
+  }
+  
+  return(Reduce(rbind, res_list))
+}
+```
+
+Downsampling function for UMI counts
+
+```{r}
+dsSat = function(srat, fracs = seq(0.1, 1, 0.1), seed = 1){
+  set.seed(seed)
+  res_list = list()
+  for(f in fracs){
+    dsmat = downsampleMatrix(srat@assays$RNA@counts, f, bycol = F)
+    res_list[[as.character(f)]] = data.frame(frac = f,
+                                             nCount = colSums(dsmat),
+                                             nGene = colSums(dsmat>0))
+  }
+  return(Reduce(rbind, res_list))
+}
+```
+
+
+
+# Sequencing saturation
+## UMIs vs reads
+Count reads and UMIs per cell
+
+```{r, fig.width=14, fig.height=5}
+umiread_plt_l = list()
+umi_r_l = list()
+for(n in names(buslist)){
+  tit = if(grepl("nuc", n)) paste0("Original ", substr(n, 1, 2)) else paste0("Reseq ", substr(n, 1, 2))
+  
+  counts_dat = data.frame(table(buslist[[n]]$V1))
+  rownames(counts_dat) = counts_dat$Var1
+  counts_dat$nreads = tapply(buslist[[n]]$V4, buslist[[n]]$V1, sum)[rownames(counts_dat)]
+  colnames(counts_dat) = c("cell", "n_umis", "n_reads")
+  umi_r_l[[n]] = counts_dat
+  
+  umiread_plt_l[[paste0(n, "_all")]] = ggplot()+
+    geom_bin2d(data = counts_dat, mapping = aes(x = n_reads, y = n_umis))+
+    geom_abline(intercept = 0, slope = 1)+
+    scale_x_continuous(limits = c(-100, max(c(counts_dat$n_umis, counts_dat$n_reads)))+10)+
+    scale_y_continuous(limits = c(-100, max(c(counts_dat$n_umis, counts_dat$n_reads)))+10)+
+    ggtitle(paste0(tit, ", all"))+
+    theme(aspect.ratio = 1)
+  umiread_plt_l[[paste0(n, "_100")]] = ggplot()+
+    geom_bin2d(data = counts_dat[counts_dat$n_umis>100,], mapping = aes(x = n_reads, y = n_umis))+
+    geom_abline(intercept = 0, slope = 1)+
+    scale_x_continuous(limits = c(-100, max(c(counts_dat$n_umis, counts_dat$n_reads)))+10)+
+    scale_y_continuous(limits = c(-100, max(c(counts_dat$n_umis, counts_dat$n_reads)))+10)+
+    ggtitle(paste0(tit, ", UMI>100"))+
+    theme(aspect.ratio = 1)
+}
+
+cowplot::plot_grid(plotlist = umiread_plt_l[seq(1, 15, 2)], ncol = 4)
+```
+
+Count reads and UMIs per cell - log scale
+
+```{r, fig.width=15, fig.height=6}
+umiread_log_l = list()
+for(n in names(buslist)){
+  tit = if(grepl("nuc", n)) paste0("Original ", substr(n, 1, 2)) else paste0("Reseq ", substr(n, 1, 2))
+  
+  counts_dat = data.frame(table(buslist[[n]]$V1))
+  rownames(counts_dat) = counts_dat$Var1
+  counts_dat$nreads = tapply(buslist[[n]]$V4, buslist[[n]]$V1, sum)[rownames(counts_dat)]
+  colnames(counts_dat) = c("cell", "n_umis", "n_reads")
+  
+  umiread_log_l[[paste0(n, "_all")]] = ggplot()+
+    geom_bin2d(data = counts_dat, mapping = aes(x = n_reads, y = n_umis))+
+    scale_x_log10()+scale_y_log10()+
+    ggtitle(paste0(tit, ", all"))+
+    theme(aspect.ratio = 1)
+  umiread_log_l[[paste0(n, "_100")]] = ggplot()+
+    geom_bin2d(data = counts_dat[counts_dat$n_umis>100,], mapping = aes(x = n_reads, y = n_umis))+
+    scale_x_log10()+scale_y_log10()+
+    ggtitle(paste0(tit, ", UMI>100"))+
+    theme(aspect.ratio = 1)
+}
+```
+
+
+## Downsample to evaluate UMI saturation
+Get downsample count totals
+
+```{r}
+# cell ID list
+cells_l = list(substr(colnames(data_reseq$M2_original), 1, 16),
+               substr(colnames(data_reseq$M2_reseq), 1, 16),
+               substr(colnames(data_reseq$M1_original), 1, 16),
+               substr(colnames(data_reseq$M1_reseq), 1, 16),
+               NULL,
+               substr(colnames(data_reseq$L2_reseq), 1, 16),
+               substr(colnames(data_reseq$D1_reseq), 1, 16),
+               substr(colnames(data_reseq$D2_reseq), 1, 16))
+names(cells_l) = names(buslist)
+
+registerDoParallel(20)
+ds_reads_res = foreach(n=names(buslist[-5])) %dopar% {
+
+  dsReads(buslist[[n]], cells = cells_l[[n]])
+
+}
+names(ds_reads_res) = names(buslist)[-5]
+```
+
+Plot reads vs UMIs per downsample proportion
+
+```{r, fig.height=7, fig.width=9}
+plot_df = unique(reshape2::melt(ds_reads_res, id.vars = c("frac", "nReads", "nUMIs"))[,c(6,1:3)])
+
+ggplot(plot_df, aes(x = nReads, y = nUMIs))+
+  facet_grid(L1~frac)+
+  geom_point(size = 0.33, colour = "yellow1")+
+  geom_abline(intercept = 0, slope = 1, colour = "grey85")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        strip.text.y = element_text(size = 8),
+        panel.background = element_rect(fill = "grey20"),
+        panel.grid = element_line(colour = "grey40"),
+        aspect.ratio = 1)
+```
+
+Mean reads vs UMIs genes per sample and downsample
+
+```{r, fig.height=5.5, fig.width=5.5}
+mean_ds_r_l = list()
+for(n in unique(plot_df$L1)){
+  mean_reads = tapply(plot_df$nReads[plot_df$L1==n], plot_df$frac[plot_df$L1==n], mean)
+  mean_umis = tapply(plot_df$nUMIs[plot_df$L1==n], plot_df$frac[plot_df$L1==n], mean)
+  
+  mean_ds_r_l[[n]] = data.frame(mean_reads = mean_reads,
+                                mean_umis = mean_umis)
+  mean_ds_r_l[[n]]$frac = as.double(rownames(mean_ds_r_l[[n]]))
+}
+
+means_df = reshape2::melt(mean_ds_r_l, id.vars = c("frac", "mean_reads", "mean_umis"))[,c(4,1:3)]
+
+ggplot(means_df, aes(x = mean_reads, y = mean_umis, size = frac))+
+  facet_wrap(~L1)+
+  geom_point(colour = "yellow1")+
+  geom_abline(intercept = 0, slope = 1, colour = "grey85")+
+  guides(size = guide_legend(override.aes = list(shape = 21, fill = "yellow1", colour = "black"), 
+                             reverse = T))+
+  scale_size_continuous(range = c(0.4, 4))+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        strip.text.y = element_text(size = 8),
+        panel.background = element_rect(fill = "grey20"),
+        panel.grid = element_line(colour = "grey40"),
+        aspect.ratio = 1)
+```
+
+
+
+## Cell UMI counts before and after re-sequencing
+Get sample correspondences
+
+```{r, fig.width=6, fig.height=4}
+counts_genes_df = lapply(data_reseq, function(x) x@meta.data[, c("nCount_RNA", "nFeature_RNA")])
+orig_reseq_l = list()
+par(mfrow = c(2,3))
+for(s in c("D1", "D2", "L2", "M1", "M2")){
+  df_orig = counts_genes_df[[paste0(s, "_original")]]
+  df_reseq = counts_genes_df[[paste0(s, "_reseq")]]
+  cellnames = list(rownames(df_orig), rownames(df_reseq))
+  names(cellnames) = c(paste0(s, "_original"), paste0(s, "_reseq"))
+  gplots::venn(cellnames)
+  
+  orig_reseq_l[[s]] = merge(df_orig, df_reseq, by = 0)
+  orig_reseq_l[[s]]$sample = s
+  colnames(orig_reseq_l[[s]]) = c("cells", "counts_original", "genes_original", 
+                                  "counts_reseq", "genes_reseq", "sample")
+}
+
+all_counts = Reduce(rbind, orig_reseq_l)
+```
+
+Plot counts vs counts
+
+```{r}
+ggplot(all_counts, aes(x = counts_original, y = counts_reseq))+
+  facet_wrap(~sample)+
+  geom_point()+
+  geom_abline(slope = 1, intercept = 0)+
+  scale_x_continuous(limits = c(1000, 200000))+
+  scale_y_continuous(limits = c(1000, 200000))+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black"))
+
+ggplot(all_counts, aes(x = genes_original, y = genes_reseq))+
+  facet_wrap(~sample)+
+  geom_point()+
+  geom_abline(slope = 1, intercept = 0)+
+  scale_x_continuous(limits = c(750, 15000))+
+  scale_y_continuous(limits = c(750, 15000))+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black"))
+```
+
+Difference and gains
+
+```{r}
+diff_df = all_counts
+diff_df$diff_counts = diff_df$counts_reseq-diff_df$counts_original
+diff_df$diff_genes = diff_df$genes_reseq-diff_df$genes_original
+ggplot(diff_df, aes(x = diff_counts, y = diff_genes))+
+  facet_wrap(~sample)+
+  geom_point()+
+  geom_smooth()+
+  labs(x = "increase in UMIs per cell after resequencing", 
+       y = "increase in genes per cell after resequencing")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black"))
+
+tapply(diff_df$diff_counts, diff_df$sample, mean)/tapply(diff_df$diff_genes, diff_df$sample, mean)
+```
+
+How many reads present in the saturated samples?
+
+```{r}
+diff_df$isSat = diff_df$diff_counts>10000
+# M1 is removed since it looks like an outlier
+ggplot(diff_df[diff_df$sample!="M1",], aes(x = isSat, y = counts_reseq, colour = isSat))+
+  facet_wrap(~sample)+
+  stat_summary()+
+  labs(x = "is Saturated (UMI difference>10.000)", y = "# UMIs (mean±s.e.)")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black"))
+ggplot(diff_df[diff_df$sample!="M1",], aes(x = isSat, y = genes_reseq, colour = isSat))+
+  facet_wrap(~sample)+
+  stat_summary()+
+  labs(x = "is Saturated (UMI difference>10.000)", y = "# Genes (mean±s.e.)")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black"))
+```
+
+
+## Downsampling to evaluate gene saturation
+Get downsample count totals
+
+```{r}
+registerDoParallel(20)
+ds_res = foreach(n=names(data_reseq)) %dopar% {
+
+  dsSat(data_reseq[[n]])
+
+}
+names(ds_res) = names(data_reseq)
+```
+
+Plot counts vs genes per downsample proportion
+
+```{r, fig.height=8.5, fig.width=8.5}
+plot_df = reshape2::melt(ds_res, id.vars = c("frac", "nCount", "nGene"))[,c(4,1:3)]
+
+ggplot(plot_df, aes(x = nCount, y = nGene))+
+  facet_grid(L1~frac)+
+  geom_point(size = 0.33, colour = "yellow1")+
+  geom_abline(intercept = 0, slope = 1, colour = "grey85")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        strip.text.y = element_text(size = 8),
+        panel.background = element_rect(fill = "grey20"),
+        panel.grid = element_line(colour = "grey40"),
+        aspect.ratio = 1)
+```
+
+Mean counts vs mean genes per sample and downsample
+
+```{r, fig.height=5, fig.width=6}
+mean_ds_l = list()
+for(n in unique(plot_df$L1)){
+  mean_counts = tapply(plot_df$nCount[plot_df$L1==n], plot_df$frac[plot_df$L1==n], mean)
+  mean_genes = tapply(plot_df$nGene[plot_df$L1==n], plot_df$frac[plot_df$L1==n], mean)
+  
+  mean_ds_l[[n]] = data.frame(mean_counts = mean_counts,
+                              mean_genes = mean_genes)
+  mean_ds_l[[n]]$frac = as.double(rownames(mean_ds_l[[n]]))
+}
+
+means_df = reshape2::melt(mean_ds_l, id.vars = c("frac", "mean_counts", "mean_genes"))[,c(4,1:3)]
+
+ggplot(means_df, aes(x = mean_counts, y = mean_genes, size = frac))+
+  facet_wrap(~L1)+
+  geom_point(colour = "yellow1")+
+  geom_abline(intercept = 0, slope = 1, colour = "grey85")+
+  guides(size = guide_legend(override.aes = list(shape = 21, fill = "yellow1", colour = "black"), 
+                             reverse = T))+
+  scale_size_continuous(range = c(0.4, 4))+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        strip.text.y = element_text(size = 8),
+        panel.background = element_rect(fill = "grey20"),
+        panel.grid = element_line(colour = "grey40"),
+        aspect.ratio = 1)
+```
+
+
+
+# Pseudoalignment stats
+Load kallisto reports
+
+```{r}
+datadir = "/links/groups/treutlein/USERS/tomasgomes/data/axolotl/"
+sample_dirs = c("M_1_reseq", "M_2_reseq", "D_1_reseq", "D_2_reseq", 
+                "L_1_reseq", "L_2_reseq", "div_2_wpi", "div_4_wpi", 
+                "div_6_wpi", "div_8_wpi", "12_wpi", "a1_1_GEX", "a1_2_GEX", 
+                "a3_1_GEX", "a3_2_GEX")
+
+runinfo_l = list()
+for(s in sample_dirs[-length(sample_dirs)]){ runinfo_l[[s]] = data.frame(fromJSON(file = paste0(datadir, s, "/run_info.json"))) }
+runinfo = Reduce(rbind, runinfo_l)[,c(3:7)]
+runinfo$sample = factor(sample_dirs[-length(sample_dirs)], levels = sample_dirs[-length(sample_dirs)])
+rownames(runinfo) = sample_dirs[-length(sample_dirs)]
+runinfo$region = c("medial", "medial", "lateral", "lateral", "dorsal", "dorsal", "WP", "WP", "WP", "WP", "WP", "WP", "WP", "WP")
+runinfo$exp = c("microdiss", "microdiss", "microdiss", "microdiss", "microdiss", "microdiss", "div", "div", "div", "div", "div", "multiome", "multiome", "multiome")
+```
+
+Plot
+
+```{r, fig.width=4.8, fig.height=2.5}
+ggplot(runinfo, aes(x = sample, y = p_pseudoaligned, fill = region))+
+  facet_grid(~exp, scales = "free_x")+
+  geom_col()+
+  scale_y_continuous(limits = c(0,100), expand = c(0,0))+
+  labs(x = "sample", y = "% pseudoaligned")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8),
+        axis.text = element_text(colour = "black"))
+
+ggplot(runinfo, aes(x = sample, y = p_unique, fill = region))+
+  facet_grid(~exp, scales = "free_x")+
+  geom_col()+
+  scale_y_continuous(limits = c(0,100), expand = c(0,0))+
+  labs(x = "sample", y = "% uniquely mapping")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8),
+        axis.text = element_text(colour = "black"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

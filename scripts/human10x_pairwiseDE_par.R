@@ -1,6 +1,6 @@
 library(Seurat)
 library(parallel)
-numCores = 20
+numCores = 32
 
 pairwiseDESeurat = function(i, mat, ds){
   nn = paste0(mat[1,i],"..",mat[2,i])
@@ -26,7 +26,7 @@ dataset = suppressWarnings(SCTransform(dataset, do.correct.umi = T, verbose = F,
 # pairwise DE
 avg_exp = list()
 mk_list = list()
-for(g in c("subclasses", "cellclusters")[1]){
+for(g in c("subclasses", "cellclusters")){
   dataset = SetIdent(dataset, value = g)
   avg_exp[[g]] = AverageExpression(dataset, assays = "SCT")$SCT
   

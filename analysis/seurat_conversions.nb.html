@@ -1812,26 +1812,12 @@ NOTE: Python version was forced by RETICULATE_PYTHON</code></pre>
 <p>Load Tosches V2 data</p>
 <!-- rnb-text-end -->
 <!-- rnb-chunk-begin -->
-<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxubGlicmFyeShTZXVyYXQpXG5gYGAifQ== -->
-<pre class="r"><code>library(Seurat)</code></pre>
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxubGlicmFyeShTZXVyYXQpXG5saWJyYXJ5KFNldXJhdERpc2spXG5gYGAifQ== -->
+<pre class="r"><code>library(Seurat)
+library(SeuratDisk)</code></pre>
 <!-- rnb-source-end -->
-<!-- rnb-output-begin eyJkYXRhIjoiUmVnaXN0ZXJlZCBTMyBtZXRob2Qgb3ZlcndyaXR0ZW4gYnkgJ2RhdGEudGFibGUnOlxuICBtZXRob2QgICAgICAgICAgIGZyb21cbiAgcHJpbnQuZGF0YS50YWJsZSAgICAgXG5SZWdpc3RlcmVkIFMzIG1ldGhvZCBvdmVyd3JpdHRlbiBieSAnaHRtbHdpZGdldHMnOlxuICBtZXRob2QgICAgICAgICAgIGZyb20gICAgICAgICBcbiAgcHJpbnQuaHRtbHdpZGdldCB0b29sczpyc3R1ZGlvXG5BdHRhY2hpbmcgU2V1cmF0T2JqZWN0XG4ifQ== -->
-<pre><code>Registered S3 method overwritten by &#39;data.table&#39;:
-  method           from
-  print.data.table     
-Registered S3 method overwritten by &#39;htmlwidgets&#39;:
-  method           from         
-  print.htmlwidget tools:rstudio
-Attaching SeuratObject</code></pre>
-<!-- rnb-output-end -->
-<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxubGlicmFyeShTZXVyYXREaXNrKVxuYGBgIn0= -->
-<pre class="r"><code>library(SeuratDisk)</code></pre>
-<!-- rnb-source-end -->
-<!-- rnb-output-begin eyJkYXRhIjoiUmVnaXN0ZXJlZCBTMyBtZXRob2Qgb3ZlcndyaXR0ZW4gYnkgJ2NsaSc6XG4gIG1ldGhvZCAgICAgZnJvbSAgICAgICAgIFxuICBwcmludC5ib3h4IHNwYXRzdGF0Lmdlb21cblJlZ2lzdGVyZWQgUzMgbWV0aG9kIG92ZXJ3cml0dGVuIGJ5ICdTZXVyYXREaXNrJzpcbiAgbWV0aG9kICAgICAgICAgICAgZnJvbSAgXG4gIGFzLnNwYXJzZS5INUdyb3VwIFNldXJhdFxuIn0= -->
-<pre><code>Registered S3 method overwritten by &#39;cli&#39;:
-  method     from         
-  print.boxx spatstat.geom
-Registered S3 method overwritten by &#39;SeuratDisk&#39;:
+<!-- rnb-output-begin eyJkYXRhIjoiUmVnaXN0ZXJlZCBTMyBtZXRob2Qgb3ZlcndyaXR0ZW4gYnkgJ1NldXJhdERpc2snOlxuICBtZXRob2QgICAgICAgICAgICBmcm9tICBcbiAgYXMuc3BhcnNlLkg1R3JvdXAgU2V1cmF0XG4ifQ== -->
+<pre><code>Registered S3 method overwritten by &#39;SeuratDisk&#39;:
   method            from  
   as.sparse.H5Group Seurat</code></pre>
 <!-- rnb-output-end -->
@@ -1906,7 +1892,7 @@ library(qs)</code></pre>
 
 
 # La Manno et al. 2020
-Load loom files
+Load file
 
 
 &lt;!-- rnb-text-end --&gt;
@@ -1950,7 +1936,7 @@ turtle_neurons = readRDS(paste0(pathToFiles, \v2obj/turtle.neurons.cells_v2.RDS\
 &lt;!-- rnb-text-begin --&gt;
 
 
-Save objects
+Filter and save
 
 
 &lt;!-- rnb-text-end --&gt;
@@ -1959,131 +1945,102 @@ Save objects
 &lt;!-- rnb-chunk-begin --&gt;
 
 
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxubGl6YXJkX2FsbF92MyA9IFVwZGF0ZVNldXJhdE9iamVjdChsaXphcmRfYWxsKVxuYGBgXG5gYGAifQ== --&gt;
+&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxubW91c2VkZXZfZmlsdCA9IG1vdXNlZGV2X2ZpbHRbLCEobW91c2VkZXZfZmlsdCRDbGFzcyAlaW4lIGMoXCJCYWQgY2VsbHNcIiwgXCJVbmRlZmluZWRcIiwgXCJCbG9vZFwiLCBcbiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIFwiRW5kb2Rlcm1cIiwgXCJFY3RvZGVybVwiLCBcIk1lc29kZXJtXCIsIFxuICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXCJGaWJyb2JsYXN0XCIsIFwiR2FzdHJ1bGF0aW9uXCIsIFxuICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXCJNZXNlbmNoeW1lXCIsIFwiTmV1cmFsIGNyZXN0XCIsIFxuICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXCJOZXVyYWwgdHViZVwiLCBcIlNjaHdhbm4gY2VsbFwiKSkgJlxuICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAhKG1vdXNlZGV2X2ZpbHQkQ2x1c3Rlck5hbWUgJWluJSBjKFwibmFuXCIpKSAmXG4gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIG1vdXNlZGV2X2ZpbHQkbkZlYXR1cmVfUk5BPj0yNTBdXG5cbnNhdmVSRFMobW91c2VkZXZfZmlsdCwgZmlsZSA9IFwiL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvdG9tYXNnb21lcy9kYXRhL3B1Ymxpc2hlZC9MYU1hbm5vMjAyMF9tb3VzZS9tb3VzZWRldl9maWx0LlJEU1wiKVxuYGBgIn0= --&gt;
 
 ```r
-```r
-lizard_all_v3 = UpdateSeuratObject(lizard_all)</code></pre>
-<pre><code>
-&lt;!-- rnb-source-end --&gt;
+mousedev_filt = mousedev_filt[,!(mousedev_filt$Class %in% c(&quot;Bad cells&quot;, &quot;Undefined&quot;, &quot;Blood&quot;, 
+                                                            &quot;Endoderm&quot;, &quot;Ectoderm&quot;, &quot;Mesoderm&quot;, 
+                                                            &quot;Fibroblast&quot;, &quot;Gastrulation&quot;, 
+                                                            &quot;Mesenchyme&quot;, &quot;Neural crest&quot;, 
+                                                            &quot;Neural tube&quot;, &quot;Schwann cell&quot;)) &amp;
+                                !(mousedev_filt$ClusterName %in% c(&quot;nan&quot;)) &amp;
+                                mousedev_filt$nFeature_RNA&gt;=250]
 
-&lt;!-- rnb-output-begin eyJkYXRhIjoiVXBkYXRpbmcgZnJvbSB2Mi5YIHRvIHYzLlhcblZhbGlkYXRpbmcgb2JqZWN0IHN0cnVjdHVyZVxuVXBkYXRpbmcgb2JqZWN0IHNsb3RzXG5FbnN1cmluZyBrZXlzIGFyZSBpbiB0aGUgcHJvcGVyIHN0cnVjdXRyZVxuRW5zdXJpbmcgZmVhdHVyZSBuYW1lcyBkb24ndCBoYXZlIHVuZGVyc2NvcmVzIG9yIHBpcGVzXG5PYmplY3QgcmVwcmVzZW50YXRpb24gaXMgY29uc2lzdGVudCB3aXRoIHRoZSBtb3N0IGN1cnJlbnQgU2V1cmF0IHZlcnNpb25cbiJ9 --&gt;
+saveRDS(mousedev_filt, file = &quot;/links/groups/treutlein/USERS/tomasgomes/data/published/LaManno2020_mouse/mousedev_filt.RDS&quot;)</code></pre>
+<!-- rnb-source-end -->
+<!-- rnb-chunk-end -->
+<!-- rnb-text-begin -->
+</div>
+<div id="zeisel-et-al.-2018" class="section level1">
+<h1>Zeisel et al., 2018</h1>
+<p>Load loom files</p>
+<!-- rnb-text-end -->
+<!-- rnb-chunk-begin -->
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxubW91c2VkZXZfZmlsdCA9IG1vdXNlZGV2X2ZpbHRbLCEobW91c2VkZXZfZmlsdCRDbGFzcyAlaW4lIGMoXCJCYWQgY2VsbHNcIiwgXCJVbmRlZmluZWRcIiwgXCJCbG9vZFwiLCBcbiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIFwiRW5kb2Rlcm1cIiwgXCJFY3RvZGVybVwiLCBcIk1lc29kZXJtXCIsIFxuICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXCJGaWJyb2JsYXN0XCIsIFwiR2FzdHJ1bGF0aW9uXCIsIFxuICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXCJNZXNlbmNoeW1lXCIsIFwiTmV1cmFsIGNyZXN0XCIsIFxuICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXCJOZXVyYWwgdHViZVwiLCBcIlNjaHdhbm4gY2VsbFwiKSkgJlxuICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAhKG1vdXNlZGV2X2ZpbHQkQ2x1c3Rlck5hbWUgJWluJSBjKFwibmFuXCIpKSAmXG4gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIG1vdXNlZGV2X2ZpbHQkbkZlYXR1cmVfUk5BPj0yNTBdXG5cbnNhdmVSRFMobW91c2VkZXZfZmlsdCwgZmlsZSA9IFwiL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvdG9tYXNnb21lcy9kYXRhL3B1Ymxpc2hlZC9MYU1hbm5vMjAyMF9tb3VzZS9tb3VzZWRldl9maWx0LlJEU1wiKVxuYGBgIn0= -->
+<pre class="r"><code>mousedev_filt = mousedev_filt[,!(mousedev_filt$Class %in% c(&quot;Bad cells&quot;, &quot;Undefined&quot;, &quot;Blood&quot;, 
+                                                            &quot;Endoderm&quot;, &quot;Ectoderm&quot;, &quot;Mesoderm&quot;, 
+                                                            &quot;Fibroblast&quot;, &quot;Gastrulation&quot;, 
+                                                            &quot;Mesenchyme&quot;, &quot;Neural crest&quot;, 
+                                                            &quot;Neural tube&quot;, &quot;Schwann cell&quot;)) &amp;
+                                !(mousedev_filt$ClusterName %in% c(&quot;nan&quot;)) &amp;
+                                mousedev_filt$nFeature_RNA&gt;=250]
+
+saveRDS(mousedev_filt, file = &quot;/links/groups/treutlein/USERS/tomasgomes/data/published/LaManno2020_mouse/mousedev_filt.RDS&quot;)</code></pre>
+<!-- rnb-source-end -->
+<!-- rnb-chunk-end -->
+<!-- rnb-text-begin -->
+<p>Save objects</p>
+<!-- rnb-text-end -->
+<!-- rnb-chunk-begin -->
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuc2F2ZVJEUyhsNV9hbGxfc2V1cmF0LCBmaWxlID0gcGFzdGUwKHAsIFwibDVfYWxsX3NldXJhdC5SRFNcIikpXG5gYGAifQ== -->
+<pre class="r"><code>saveRDS(l5_all_seurat, file = paste0(p, &quot;l5_all_seurat.RDS&quot;))</code></pre>
+<!-- rnb-source-end -->
+<!-- rnb-chunk-end -->
+<!-- rnb-text-begin -->
+<div id="mouse-dev-di-bella" class="section level2">
+<h2>Mouse dev Di Bella</h2>
+<p>Load data</p>
+<!-- rnb-text-end -->
+<!-- rnb-chunk-begin -->
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxucHAgPSBcIi9saW5rcy9ncm91cHMvdHJldXRsZWluL1VTRVJTL3RvbWFzZ29tZXMvZGF0YS9wdWJsaXNoZWQvRGlCZWxsYTIwMjFfbW91c2UvXCJcbmNsdXN0ZXJ0c25lID0gcmVhZC50YWJsZShwYXN0ZTAocHAsIFwiY2x1c3Rlci9jbHVzdGVyX3NjRGV2U0MubWVyZ2VkLnRzbmUudHh0XCIpLCBoZWFkZXIgPSBUKVstMSxdXG5jbHVzdGVydW1hcCA9IHJlYWQudGFibGUocGFzdGUwKHBwLCBcImNsdXN0ZXIvY2x1c3Rlcl9zY0RldlNDLm1lcmdlZC51bWFwLnR4dFwiKSwgaGVhZGVyID0gVClbLTEsXVxuZXhwID0gTWF0cml4OjpyZWFkTU0ocGFzdGUwKHBwLCBcImV4cHJlc3Npb24vNjAxYWUyZjQ3NzFhNWIwZDcyNTg4YmZiL2dlbmVfc29ydGVkLW1hdHJpeC5tdHguZ3pcIikpXG5iYyA9IHJlYWQudGFibGUocGFzdGUwKHBwLCBcImV4cHJlc3Npb24vNjAxYWUyZjQ3NzFhNWIwZDcyNTg4YmZiL2JhcmNvZGVzLnRzdlwiKSwgaGVhZGVyID0gRilcbmcgPSByZWFkLnRhYmxlKHBhc3RlMChwcCwgXCJleHByZXNzaW9uLzYwMWFlMmY0NzcxYTViMGQ3MjU4OGJmYi9nZW5lcy50c3ZcIiksIGhlYWRlciA9IEYpXG5tZXRhID0gcmVhZC50YWJsZShwYXN0ZTAocHAsIFwibWV0YWRhdGEvbWV0YURhdGFfc2NEZXZTQy50eHRcIiksIGhlYWRlciA9IFQsIHNlcCA9IFwiXFx0XCIsIFxuICAgICAgICAgICAgICAgICAgY29tbWVudC5jaGFyID0gXCJcIiwgcXVvdGUgPSBcIlwiKVstMSxdXG5tZXRhJERvdWJsZXRfaW50ZXJzZWN0W2lzLm5hKG1ldGEkRG91YmxldF9pbnRlcnNlY3QpXSA9IFwiT3RoZXJcIlxucm93bmFtZXMobWV0YSkgPSBtZXRhJE5BTUVcbmNvbG5hbWVzKGV4cCkgPSBiYyRWMVxucm93bmFtZXMoZXhwKSA9IGckVjFcbnNyYXQgPSBDcmVhdGVTZXVyYXRPYmplY3QoY291bnRzID0gZXhwLCBtZXRhLmRhdGEgPSBtZXRhKVxuXG5zcmF0ID0gc3JhdFssc3JhdCRzY3J1YmxldF9kb3VibGV0PT1cIkZBTFNFXCIgJiBtZXRhJERvdWJsZXRfaW50ZXJzZWN0IT1cIkRvdWJsZXRcIiAmXG4gICAgICAgICAgICAgIHNyYXQkTmV3X2NlbGxUeXBlIT1cIkxvdyBxdWFsaXR5IGNlbGxzXCIsXVxuc2F2ZVJEUyhzcmF0LCBmaWxlID0gcGFzdGUwKHBwLCBcIkRpQmVsbGEyMDIxX21vdXNlRGV2LlJEU1wiKSlcbmBgYCJ9 -->
+<pre class="r"><code>pp = &quot;/links/groups/treutlein/USERS/tomasgomes/data/published/DiBella2021_mouse/&quot;
+clustertsne = read.table(paste0(pp, &quot;cluster/cluster_scDevSC.merged.tsne.txt&quot;), header = T)[-1,]
+clusterumap = read.table(paste0(pp, &quot;cluster/cluster_scDevSC.merged.umap.txt&quot;), header = T)[-1,]
+exp = Matrix::readMM(paste0(pp, &quot;expression/601ae2f4771a5b0d72588bfb/gene_sorted-matrix.mtx.gz&quot;))
+bc = read.table(paste0(pp, &quot;expression/601ae2f4771a5b0d72588bfb/barcodes.tsv&quot;), header = F)
+g = read.table(paste0(pp, &quot;expression/601ae2f4771a5b0d72588bfb/genes.tsv&quot;), header = F)
+meta = read.table(paste0(pp, &quot;metadata/metaData_scDevSC.txt&quot;), header = T, sep = &quot;\t&quot;, 
+                  comment.char = &quot;&quot;, quote = &quot;&quot;)[-1,]
+meta$Doublet_intersect[is.na(meta$Doublet_intersect)] = &quot;Other&quot;
+rownames(meta) = meta$NAME
+colnames(exp) = bc$V1
+rownames(exp) = g$V1
+srat = CreateSeuratObject(counts = exp, meta.data = meta)
+
+srat = srat[,srat$scrublet_doublet==&quot;FALSE&quot; &amp; meta$Doublet_intersect!=&quot;Doublet&quot; &amp;
+              srat$New_cellType!=&quot;Low quality cells&quot;,]
+saveRDS(srat, file = paste0(pp, &quot;DiBella2021_mouseDev.RDS&quot;))</code></pre>
+<!-- rnb-source-end -->
+<!-- rnb-chunk-end -->
+<!-- rnb-text-begin -->
+</div>
+</div>
+<div id="raj-et-al.-2018" class="section level1">
+<h1>Raj et al. 2018</h1>
+<p>Similarly to Tosches data, this also has first to be converted from Seurat v1 to v2. I’m doing it in a different system with Seurat 2.3.4 installed.</p>
+<p>Load Seurat v2 object</p>
+<!-- rnb-text-end -->
+<!-- rnb-chunk-begin -->
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuc3JhdCA9IENyZWF0ZVNldXJhdE9iamVjdChjb3VudHMgPSBleHAsIG1ldGEuZGF0YSA9IG1ldGEpXG5cbmBgYCJ9 -->
+<pre class="r"><code>srat = CreateSeuratObject(counts = exp, meta.data = meta)
 </code></pre>
-<p>Updating from v2.X to v3.X Validating object structure Updating object slots Ensuring keys are in the proper strucutre Ensuring feature names don’t have underscores or pipes Object representation is consistent with the most current Seurat version</p>
-<pre><code>
-
-
-&lt;!-- rnb-output-end --&gt;
-
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxuc2F2ZVJEUyhsaXphcmRfYWxsX3YzLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCBcXHYzb2JqL2xpemFyZF9hbGxfdjMuUkRTXFwpKVxubGl6YXJkX25ldXJvbnNfdjMgPSBVcGRhdGVTZXVyYXRPYmplY3QobGl6YXJkX25ldXJvbnMpXG5gYGBcbmBgYCJ9 --&gt;
-
-```r
-```r
-saveRDS(lizard_all_v3, file = paste0(pathToFiles, \v3obj/lizard_all_v3.RDS\))
-lizard_neurons_v3 = UpdateSeuratObject(lizard_neurons)</code></pre>
-<pre><code>
-&lt;!-- rnb-source-end --&gt;
-
-&lt;!-- rnb-output-begin eyJkYXRhIjoiVXBkYXRpbmcgZnJvbSB2Mi5YIHRvIHYzLlhcblZhbGlkYXRpbmcgb2JqZWN0IHN0cnVjdHVyZVxuVXBkYXRpbmcgb2JqZWN0IHNsb3RzXG5FbnN1cmluZyBrZXlzIGFyZSBpbiB0aGUgcHJvcGVyIHN0cnVjdXRyZVxuRW5zdXJpbmcgZmVhdHVyZSBuYW1lcyBkb24ndCBoYXZlIHVuZGVyc2NvcmVzIG9yIHBpcGVzXG5PYmplY3QgcmVwcmVzZW50YXRpb24gaXMgY29uc2lzdGVudCB3aXRoIHRoZSBtb3N0IGN1cnJlbnQgU2V1cmF0IHZlcnNpb25cbiJ9 --&gt;
-</code></pre>
-<p>Updating from v2.X to v3.X Validating object structure Updating object slots Ensuring keys are in the proper strucutre Ensuring feature names don’t have underscores or pipes Object representation is consistent with the most current Seurat version</p>
-<pre><code>
-
-
-&lt;!-- rnb-output-end --&gt;
-
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxuc2F2ZVJEUyhsaXphcmRfbmV1cm9uc192MywgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgXFx2M29iai9saXphcmRfbmV1cm9uc192My5SRFNcXCkpXG5cbnR1cnRsZV9hbGxfdjMgPSBVcGRhdGVTZXVyYXRPYmplY3QodHVydGxlX2FsbClcbmBgYFxuYGBgIn0= --&gt;
-
-```r
-```r
-saveRDS(lizard_neurons_v3, file = paste0(pathToFiles, \v3obj/lizard_neurons_v3.RDS\))
-
-turtle_all_v3 = UpdateSeuratObject(turtle_all)</code></pre>
-<pre><code>
-&lt;!-- rnb-source-end --&gt;
-
-&lt;!-- rnb-output-begin eyJkYXRhIjoiVXBkYXRpbmcgZnJvbSB2Mi5YIHRvIHYzLlhcblZhbGlkYXRpbmcgb2JqZWN0IHN0cnVjdHVyZVxuVXBkYXRpbmcgb2JqZWN0IHNsb3RzXG5FbnN1cmluZyBrZXlzIGFyZSBpbiB0aGUgcHJvcGVyIHN0cnVjdXRyZVxuRW5zdXJpbmcgZmVhdHVyZSBuYW1lcyBkb24ndCBoYXZlIHVuZGVyc2NvcmVzIG9yIHBpcGVzXG5PYmplY3QgcmVwcmVzZW50YXRpb24gaXMgY29uc2lzdGVudCB3aXRoIHRoZSBtb3N0IGN1cnJlbnQgU2V1cmF0IHZlcnNpb25cbiJ9 --&gt;
-</code></pre>
-<p>Updating from v2.X to v3.X Validating object structure Updating object slots Ensuring keys are in the proper strucutre Ensuring feature names don’t have underscores or pipes Object representation is consistent with the most current Seurat version</p>
-<pre><code>
-
-
-&lt;!-- rnb-output-end --&gt;
-
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxuc2F2ZVJEUyh0dXJ0bGVfYWxsX3YzLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCBcXHYzb2JqL3R1cnRsZV9hbGxfdjMuUkRTXFwpKVxudHVydGxlX25ldXJvbnNfdjMgPSBVcGRhdGVTZXVyYXRPYmplY3QodHVydGxlX25ldXJvbnMpXG5gYGBcbmBgYCJ9 --&gt;
-
-```r
-```r
-saveRDS(turtle_all_v3, file = paste0(pathToFiles, \v3obj/turtle_all_v3.RDS\))
-turtle_neurons_v3 = UpdateSeuratObject(turtle_neurons)</code></pre>
-<pre><code>
-&lt;!-- rnb-source-end --&gt;
-
-&lt;!-- rnb-output-begin eyJkYXRhIjoiVXBkYXRpbmcgZnJvbSB2Mi5YIHRvIHYzLlhcblZhbGlkYXRpbmcgb2JqZWN0IHN0cnVjdHVyZVxuVXBkYXRpbmcgb2JqZWN0IHNsb3RzXG5FbnN1cmluZyBrZXlzIGFyZSBpbiB0aGUgcHJvcGVyIHN0cnVjdXRyZVxuRW5zdXJpbmcgZmVhdHVyZSBuYW1lcyBkb24ndCBoYXZlIHVuZGVyc2NvcmVzIG9yIHBpcGVzXG5PYmplY3QgcmVwcmVzZW50YXRpb24gaXMgY29uc2lzdGVudCB3aXRoIHRoZSBtb3N0IGN1cnJlbnQgU2V1cmF0IHZlcnNpb25cbiJ9 --&gt;
-</code></pre>
-<p>Updating from v2.X to v3.X Validating object structure Updating object slots Ensuring keys are in the proper strucutre Ensuring feature names don’t have underscores or pipes Object representation is consistent with the most current Seurat version</p>
-<pre><code>
-
-
-&lt;!-- rnb-output-end --&gt;
-
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxuc2F2ZVJEUyh0dXJ0bGVfbmV1cm9uc192MywgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgXFx2M29iai90dXJ0bGVfbmV1cm9uc192My5SRFNcXCkpXG5gYGBcbmBgYCJ9 --&gt;
-
-```r
-```r
-saveRDS(turtle_neurons_v3, file = paste0(pathToFiles, \v3obj/turtle_neurons_v3.RDS\))</code></pre>
-<pre><code>
-&lt;!-- rnb-source-end --&gt;
-
-&lt;!-- rnb-chunk-end --&gt;
-
-
-&lt;!-- rnb-text-begin --&gt;
-
-
-
-
-# Raj et al. 2018
-
-Similarly to Tosches data, this also has first to be converted from Seurat v1 to v2. I&#39;m doing it in a different system with Seurat 2.3.4 installed.
-
-Load Seurat v2 object
-
-
-&lt;!-- rnb-text-end --&gt;
-
-
-&lt;!-- rnb-chunk-begin --&gt;
-
-
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxuc2F2ZVJEUyhsNV9hbGxfc2V1cmF0LCBmaWxlID0gcGFzdGUwKHAsIFxcbDVfYWxsX3NldXJhdC5SRFNcXCkpXG4jc2F2ZVJEUyhkZXZfYWxsX3NldXJhdCwgZmlsZSA9IHBhc3RlMChwLCBcXGRldl9hbGxfc2V1cmF0LlJEU1xcKSlcbmBgYFxuYGBgIn0= --&gt;
-
-```r
-```r
-saveRDS(l5_all_seurat, file = paste0(p, \l5_all_seurat.RDS\))
-#saveRDS(dev_all_seurat, file = paste0(p, \dev_all_seurat.RDS\))</code></pre>
-<pre><code>
-&lt;!-- rnb-source-end --&gt;
-
-&lt;!-- rnb-chunk-end --&gt;
-
-
-&lt;!-- rnb-text-begin --&gt;
-
-
-Update and save
-
-
-&lt;!-- rnb-text-end --&gt;
-
-
-&lt;!-- rnb-chunk-begin --&gt;
-
-
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxucCA9IFxcL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvdG9tYXNnb21lcy9kYXRhL3B1Ymxpc2hlZC9SYWoyMDE4X2JyYWluL1xcXG5mYWxsX3YyID0gcmVhZFJEUyhwYXN0ZTAocCwgXFxHU0UxMDUwMTBfZmFsbF92Mi5pbkRyb3BzLlJEYXRhXFwpKVxuYGBgXG5gYGAifQ== --&gt;
-
-```r
-```r
+<!-- rnb-source-end -->
+<!-- rnb-output-begin eyJkYXRhIjoiVGhlIGZvbGxvd2luZyBhcmd1bWVudHMgYXJlIG5vdCB1c2VkOiByb3cubmFtZXNcbiJ9 -->
+<pre><code>The following arguments are not used: row.names</code></pre>
+<!-- rnb-output-end -->
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuXG5zcmF0ID0gc3JhdFssc3JhdCRzY3J1YmxldF9kb3VibGV0PT1cIkZBTFNFXCIgJiBtZXRhJERvdWJsZXRfaW50ZXJzZWN0IT1cIkRvdWJsZXRcIiAmXG4gICAgICAgICAgICAgIHNyYXQkTmV3X2NlbGxUeXBlIT1cIkxvdyBxdWFsaXR5IGNlbGxzXCIsXVxuc2F2ZVJEUyhzcmF0LCBmaWxlID0gcGFzdGUwKHBwLCBcIkRpQmVsbGEyMDIxX21vdXNlRGV2LlJEU1wiKSlcbmBgYCJ9 -->
+<pre class="r"><code>
+srat = srat[,srat$scrublet_doublet==&quot;FALSE&quot; &amp; meta$Doublet_intersect!=&quot;Doublet&quot; &amp;
+              srat$New_cellType!=&quot;Low quality cells&quot;,]
+saveRDS(srat, file = paste0(pp, &quot;DiBella2021_mouseDev.RDS&quot;))</code></pre>
+<!-- rnb-source-end -->
+<!-- rnb-chunk-end -->
+<!-- rnb-text-begin -->
+<p>Update and save</p>
+<!-- rnb-text-end -->
+<!-- rnb-chunk-begin -->
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxucCA9IFxcL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvdG9tYXNnb21lcy9kYXRhL3B1Ymxpc2hlZC9SYWoyMDE4X2JyYWluL1xcXG5mYWxsX3YyID0gcmVhZFJEUyhwYXN0ZTAocCwgXFxHU0UxMDUwMTBfZmFsbF92Mi5pbkRyb3BzLlJEYXRhXFwpKVxuYGBgXG5gYGAifQ== -->
+<pre class="r"><code>```r
 p = \/links/groups/treutlein/USERS/tomasgomes/data/published/Raj2018_brain/\
 fall_v2 = readRDS(paste0(p, \GSE105010_fall_v2.inDrops.RData\))</code></pre>
 <pre><code>
@@ -2106,11 +2063,13 @@ fall_v2 = readRDS(paste0(p, \GSE105010_fall_v2.inDrops.RData\))</code></pre>
 &lt;!-- rnb-chunk-begin --&gt;
 
 
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxucGF0aFRvRmlsZXMgPSBcIi9saW5rcy9ncm91cHMvdHJldXRsZWluL1VTRVJTL0FzaGxleS9wcm9qZWN0cy9heG9sb3RsL3B1Ymxpc2hlZC9Db2xxdWl0dDIwMjEvcHJvamVjdHMvSFZDX1JBX1gvXCJcbmxvYWQocGFzdGUwKHBhdGhUb0ZpbGVzLCBcIkhWQ19SQV9YLlJEYXRhXCIpKVxuc2F2ZVJEUyhIVkNfUkFfWCwgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgXCJIVkNfUkFfWC5SRFNcIikpXG5maW5jaGVzX2xpc3QgPSBTcGxpdE9iamVjdChIVkNfUkFfWCwgc3BsaXQuYnkgPSBcInNwZWNpZXNcIilcbnNhdmVSRFMoZmluY2hlc19saXN0JFpGLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCBcInpmaW5jaF9zZXVyYXQuUkRTXCIpKVxuc2F2ZVJEUyhmaW5jaGVzX2xpc3QkQkYsIGZpbGUgPSBwYXN0ZTAocGF0aFRvRmlsZXMsIFwiYmZpbmNoX3NldXJhdC5SRFNcIikpXG5cbnBhdGhUb0ZpbGVzID0gXCIvbGlua3MvZ3JvdXBzL3RyZXV0bGVpbi9VU0VSUy9Bc2hsZXkvcHJvamVjdHMvYXhvbG90bC9wdWJsaXNoZWQvQ29scXVpdHQyMDIxL3Byb2plY3RzL1gvXCJcbmxvYWQocGFzdGUwKHBhdGhUb0ZpbGVzLCBcIk1DWF9DT01CSU5FRF9DX3NldXJhdC5SRGF0YVwiKSlcbnNhdmVSRFMoTUNYX0NPTUJJTkVEX0Nfc2V1cmF0LCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCBcIk1DWF9DT01CSU5FRF9DX3NldXJhdC5SRFNcIikpXG5gYGAifQ== --&gt;
+&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxucGF0aFRvRmlsZXMgPSBcIi9saW5rcy9ncm91cHMvdHJldXRsZWluL1VTRVJTL0FzaGxleS9wcm9qZWN0cy9heG9sb3RsL3B1Ymxpc2hlZC9Db2xxdWl0dDIwMjEvcHJvamVjdHMvSFZDX1JBX1gvXCJcbmxvYWQocGFzdGUwKHBhdGhUb0ZpbGVzLCBcIkhWQ19SQV9YLlJEYXRhXCIpKVxuRGVmYXVsdEFzc2F5KEhWQ19SQV9YKSA9IFwiUk5BXCJcbkhWQ19SQV9YQGFzc2F5cyRSTkFAY291bnRzXG5zYXZlUkRTKEhWQ19SQV9YLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCBcIkhWQ19SQV9YLlJEU1wiKSlcbmZpbmNoZXNfbGlzdCA9IFNwbGl0T2JqZWN0KEhWQ19SQV9YLCBzcGxpdC5ieSA9IFwic3BlY2llc1wiKVxuc2F2ZVJEUyhmaW5jaGVzX2xpc3QkWkYsIGZpbGUgPSBwYXN0ZTAocGF0aFRvRmlsZXMsIFwiemZpbmNoX3NldXJhdC5SRFNcIikpXG5zYXZlUkRTKGZpbmNoZXNfbGlzdCRCRiwgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgXCJiZmluY2hfc2V1cmF0LlJEU1wiKSlcblxucGF0aFRvRmlsZXMgPSBcIi9saW5rcy9ncm91cHMvdHJldXRsZWluL1VTRVJTL0FzaGxleS9wcm9qZWN0cy9heG9sb3RsL3B1Ymxpc2hlZC9Db2xxdWl0dDIwMjEvcHJvamVjdHMvWC9cIlxubG9hZChwYXN0ZTAocGF0aFRvRmlsZXMsIFwiTUNYX0NPTUJJTkVEX0Nfc2V1cmF0LlJEYXRhXCIpKVxuRGVmYXVsdEFzc2F5KE1DWF9DT01CSU5FRF9DX3NldXJhdCkgPSBcIlJOQVwiXG5zYXZlUkRTKE1DWF9DT01CSU5FRF9DX3NldXJhdCwgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgXCJNQ1hfQ09NQklORURfQ19zZXVyYXQuUkRTXCIpKVxuYGBgIn0= --&gt;
 
 ```r
 pathToFiles = &quot;/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Colquitt2021/projects/HVC_RA_X/&quot;
 load(paste0(pathToFiles, &quot;HVC_RA_X.RData&quot;))
+DefaultAssay(HVC_RA_X) = &quot;RNA&quot;
+HVC_RA_X@assays$RNA@counts
 saveRDS(HVC_RA_X, file = paste0(pathToFiles, &quot;HVC_RA_X.RDS&quot;))
 finches_list = SplitObject(HVC_RA_X, split.by = &quot;species&quot;)
 saveRDS(finches_list$ZF, file = paste0(pathToFiles, &quot;zfinch_seurat.RDS&quot;))
@@ -2118,18 +2077,8 @@ saveRDS(finches_list$BF, file = paste0(pathToFiles, &quot;bfinch_seurat.RDS&quot
 
 pathToFiles = &quot;/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Colquitt2021/projects/X/&quot;
 load(paste0(pathToFiles, &quot;MCX_COMBINED_C_seurat.RData&quot;))
+DefaultAssay(MCX_COMBINED_C_seurat) = &quot;RNA&quot;
 saveRDS(MCX_COMBINED_C_seurat, file = paste0(pathToFiles, &quot;MCX_COMBINED_C_seurat.RDS&quot;))</code></pre>
-<!-- rnb-source-end -->
-<!-- rnb-chunk-end -->
-<!-- rnb-text-begin -->
-<p>Create combined Seurat for each finch with all the data</p>
-<!-- rnb-text-end -->
-<!-- rnb-chunk-begin -->
-<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuZmluY2hlc19icmFpbiA9IHJlYWRSRFMoXCJkYXRhL2V4cHJlc3Npb24vSFZDX1JBX1guUkRTXCIpXG5maW5jaGVzX2xpc3QgPSBTcGxpdE9iamVjdChmaW5jaGVzX2JyYWluLCBzcGxpdC5ieSA9IFwic3BlY2llc1wiKVxubG9hZChcImRhdGEvZXhwcmVzc2lvbi9NQ1hfQ09NQklORURfQ19zZXVyYXQuUkRhdGFcIilcblxuXG5gYGAifQ== -->
-<pre class="r"><code>finches_brain = readRDS(&quot;data/expression/HVC_RA_X.RDS&quot;)
-finches_list = SplitObject(finches_brain, split.by = &quot;species&quot;)
-load(&quot;data/expression/MCX_COMBINED_C_seurat.RData&quot;)
-</code></pre>
 <!-- rnb-source-end -->
 <!-- rnb-chunk-end -->
 <!-- rnb-text-begin -->
@@ -2138,13 +2087,20 @@ load(&quot;data/expression/MCX_COMBINED_C_seurat.RData&quot;)
 <h1>Allen Brain Human</h1>
 <!-- rnb-text-end -->
 <!-- rnb-chunk-begin -->
-<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxubG9hZChcIi4uL2RhdGEvZXhwcmVzc2lvbi9NQ1hfQ09NQklORURfQ19zZXVyYXQuUkRhdGFcIilcblxuYGBgIn0= -->
-<pre class="r"><code>load(&quot;../data/expression/MCX_COMBINED_C_seurat.RData&quot;)
-</code></pre>
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxucGF0aFRvRmlsZXMgPSBcIi9saW5rcy9ncm91cHMvdHJldXRsZWluL1VTRVJTL0FzaGxleS9wcm9qZWN0cy9heG9sb3RsL3B1Ymxpc2hlZC9Db2xxdWl0dDIwMjEvcHJvamVjdHMvSFZDX1JBX1gvXCJcbmxvYWQocGFzdGUwKHBhdGhUb0ZpbGVzLCBcIkhWQ19SQV9YLlJEYXRhXCIpKVxuRGVmYXVsdEFzc2F5KEhWQ19SQV9YKSA9IFwiUk5BXCJcbnNhdmVSRFMoSFZDX1JBX1gsIGZpbGUgPSBwYXN0ZTAocGF0aFRvRmlsZXMsIFwiSFZDX1JBX1guUkRTXCIpKVxuZmluY2hlc19saXN0ID0gU3BsaXRPYmplY3QoSFZDX1JBX1gsIHNwbGl0LmJ5ID0gXCJzcGVjaWVzXCIpXG5zYXZlUkRTKGZpbmNoZXNfbGlzdCRaRiwgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgXCJ6ZmluY2hfc2V1cmF0LlJEU1wiKSlcbnNhdmVSRFMoZmluY2hlc19saXN0JEJGLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCBcImJmaW5jaF9zZXVyYXQuUkRTXCIpKVxuXG5wYXRoVG9GaWxlcyA9IFwiL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvQXNobGV5L3Byb2plY3RzL2F4b2xvdGwvcHVibGlzaGVkL0NvbHF1aXR0MjAyMS9wcm9qZWN0cy9YL1wiXG5sb2FkKHBhc3RlMChwYXRoVG9GaWxlcywgXCJNQ1hfQ09NQklORURfQ19zZXVyYXQuUkRhdGFcIikpXG5EZWZhdWx0QXNzYXkoTUNYX0NPTUJJTkVEX0Nfc2V1cmF0KSA9IFwiUk5BXCJcbnNhdmVSRFMoTUNYX0NPTUJJTkVEX0Nfc2V1cmF0LCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCBcIk1DWF9DT01CSU5FRF9DX3NldXJhdC5SRFNcIikpXG5gYGAifQ== -->
+<pre class="r"><code>pathToFiles = &quot;/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Colquitt2021/projects/HVC_RA_X/&quot;
+load(paste0(pathToFiles, &quot;HVC_RA_X.RData&quot;))
+DefaultAssay(HVC_RA_X) = &quot;RNA&quot;
+saveRDS(HVC_RA_X, file = paste0(pathToFiles, &quot;HVC_RA_X.RDS&quot;))
+finches_list = SplitObject(HVC_RA_X, split.by = &quot;species&quot;)
+saveRDS(finches_list$ZF, file = paste0(pathToFiles, &quot;zfinch_seurat.RDS&quot;))
+saveRDS(finches_list$BF, file = paste0(pathToFiles, &quot;bfinch_seurat.RDS&quot;))
+
+pathToFiles = &quot;/links/groups/treutlein/USERS/Ashley/projects/axolotl/published/Colquitt2021/projects/X/&quot;
+load(paste0(pathToFiles, &quot;MCX_COMBINED_C_seurat.RData&quot;))
+DefaultAssay(MCX_COMBINED_C_seurat) = &quot;RNA&quot;
+saveRDS(MCX_COMBINED_C_seurat, file = paste0(pathToFiles, &quot;MCX_COMBINED_C_seurat.RDS&quot;))</code></pre>
 <!-- rnb-source-end -->
-<!-- rnb-output-begin eyJkYXRhIjoiY2Fubm90IG9wZW4gY29tcHJlc3NlZCBmaWxlICcuLi9kYXRhL2V4cHJlc3Npb24vTUNYX0NPTUJJTkVEX0Nfc2V1cmF0LlJEYXRhJywgcHJvYmFibGUgcmVhc29uICdObyBzdWNoIGZpbGUgb3IgZGlyZWN0b3J5J0Vycm9yIGluIHJlYWRDaGFyKGNvbiwgNUwsIHVzZUJ5dGVzID0gVFJVRSkgOiBjYW5ub3Qgb3BlbiB0aGUgY29ubmVjdGlvblxuIn0= -->
-<pre><code>cannot open compressed file &#39;../data/expression/MCX_COMBINED_C_seurat.RData&#39;, probable reason &#39;No such file or directory&#39;Error in readChar(con, 5L, useBytes = TRUE) : cannot open the connection</code></pre>
-<!-- rnb-output-end -->
 <!-- rnb-chunk-end -->
 <!-- rnb-text-begin -->
 <p>Make Seurat objects and save</p>
@@ -2160,10 +2116,37 @@ metaSS = read.csv(paste0(pathToFiles, &quot;metadata_SS.csv&quot;), header = T)<
 <!-- rnb-source-end -->
 <!-- rnb-chunk-end -->
 <!-- rnb-text-begin -->
+</div>
+<div id="cebrian-silla-et-al.-2021" class="section level1">
+<h1>Cebrian-Silla et al., 2021</h1>
+<p>Load files</p>
+<!-- rnb-text-end -->
+<!-- rnb-chunk-begin -->
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxucGF0aFRvRmlsZXMgPSBcIi9saW5rcy9ncm91cHMvdHJldXRsZWluL1VTRVJTL3RvbWFzZ29tZXMvZGF0YS9wdWJsaXNoZWQvQ2VicmlhblNpbGxhMjAyMV9tb3VzZS9cIlxubnVjX2RhdCA9IHJlYWRSRFMocGFzdGUwKHBhdGhUb0ZpbGVzLCBcInNOdWNTZXEucmRzXCIpKVxuc2NfZGF0ID0gcmVhZFJEUyhwYXN0ZTAocGF0aFRvRmlsZXMsIFwic2NTZXEucmRzXCIpKVxubnVjX21ldGEgPSByZWFkLmNzdihwYXN0ZTAocGF0aFRvRmlsZXMsIFwibWV0YV9udWMudHN2XCIpLCBoZWFkZXIgPSBULCBzZXAgPSBcIlxcdFwiLCByb3cubmFtZXMgPSAxKVxuc2NfbWV0YSA9IHJlYWQuY3N2KHBhc3RlMChwYXRoVG9GaWxlcywgXCJtZXRhX3NjLnRzdlwiKSwgaGVhZGVyID0gVCwgc2VwID0gXCJcXHRcIiwgcm93Lm5hbWVzID0gMSlcbmBgYCJ9 -->
+<pre class="r"><code>pathToFiles = &quot;/links/groups/treutlein/USERS/tomasgomes/data/published/CebrianSilla2021_mouse/&quot;
+nuc_dat = readRDS(paste0(pathToFiles, &quot;sNucSeq.rds&quot;))
+sc_dat = readRDS(paste0(pathToFiles, &quot;scSeq.rds&quot;))
+nuc_meta = read.csv(paste0(pathToFiles, &quot;meta_nuc.tsv&quot;), header = T, sep = &quot;\t&quot;, row.names = 1)
+sc_meta = read.csv(paste0(pathToFiles, &quot;meta_sc.tsv&quot;), header = T, sep = &quot;\t&quot;, row.names = 1)</code></pre>
+<!-- rnb-source-end -->
+<!-- rnb-chunk-end -->
+<!-- rnb-text-begin -->
+<p>Add metadata, filter, and save</p>
+<!-- rnb-text-end -->
+<!-- rnb-chunk-begin -->
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxubnVjX21ldGEgPSByZWFkLmNzdihwYXN0ZTAocCwgXCJtZXRhX251Yy50c3ZcIiksIGhlYWRlciA9IFQpXG5cbmBgYCJ9 -->
+<pre class="r"><code>nuc_meta = read.csv(paste0(p, &quot;meta_nuc.tsv&quot;), header = T)
+</code></pre>
+<!-- rnb-source-end -->
+<!-- rnb-output-begin eyJkYXRhIjoiY2Fubm90IG9wZW4gZmlsZSAnL2xvY2FsMS9VU0VSUy90b21hc2dvbWVzL21ldGFfbnVjLnRzdic6IE5vIHN1Y2ggZmlsZSBvciBkaXJlY3RvcnlFcnJvciBpbiBmaWxlKGZpbGUsIFwicnRcIikgOiBjYW5ub3Qgb3BlbiB0aGUgY29ubmVjdGlvblxuIn0= -->
+<pre><code>cannot open file &#39;/local1/USERS/tomasgomes/meta_nuc.tsv&#39;: No such file or directoryError in file(file, &quot;rt&quot;) : cannot open the connection</code></pre>
+<!-- rnb-output-end -->
+<!-- rnb-chunk-end -->
+<!-- rnb-text-begin -->
 <!-- rnb-text-end -->
 </div>
 
-<div id="rmd-source-code">LS0tCnRpdGxlOiAiQ29udmVydCBTZXVyYXQgb2JqZWN0cyIKb3V0cHV0OiBodG1sX25vdGVib29rCi0tLQoKTm90ZWJvb2sgZm9yIGNvbnZlcnRpbmcgY29sbGVjdGVkIGRhdGEgaW50byBTZXVyYXQgb2JqZWN0cywgd2hlbiBuZWNlc3NhcnkuIERhdGFzZXRzIHdpbGwgbm90IGJlIHNhdmVkIHdpdGhpbiB0aGlzIHByb2plY3QgZm9sZGVyLCBvbmx5IHNvZnQgbGlua2VkIGluIGRhdGEvZXhwcmVzc2lvbgoKCgojIEdlbmVyYWwgU2V0dXAKU2V0dXAgY2h1bmsKCmBgYHtyLCBzZXR1cCwgaW5jbHVkZT1GQUxTRX0Ka25pdHI6Om9wdHNfY2h1bmskc2V0KGZpZy53aWR0aCA9IDgpCmtuaXRyOjpvcHRzX2tuaXQkc2V0KHJvb3QuZGlyID0gbm9ybWFsaXplUGF0aCgiLi4iKSkKa25pdHI6Om9wdHNfa25pdCRnZXQoInJvb3QuZGlyIikKYGBgCgpTZXR1cCByZXRpY3VsYXRlCgpgYGB7cn0KbGlicmFyeShyZXRpY3VsYXRlKQprbml0cjo6a25pdF9lbmdpbmVzJHNldChweXRob24gPSByZXRpY3VsYXRlOjplbmdfcHl0aG9uKQpweV9hdmFpbGFibGUoaW5pdGlhbGl6ZSA9IEZBTFNFKQp1c2VfcHl0aG9uKFN5cy53aGljaCgicHl0aG9uIikpCnB5X2NvbmZpZygpCmBgYAoKTG9hZCBsaWJyYXJpZXMKCmBgYHtyfQpsaWJyYXJ5KFNldXJhdCkKbGlicmFyeShTZXVyYXREaXNrKQpsaWJyYXJ5KE1hdHJpeCkKbGlicmFyeShxcykKYGBgCgoKCiMgVG9zY2hlcyBldCBhbC4gMjAxOAoKQ29udmVydGluZyB0aGUgVG9zY2hlcyBldCBhbC4gZGF0YSBpbnRvIFNldXJhdCBWMy4gU2VlIGFsc28gW3RoaXMgdGhyZWFkIG9uIGluc3RhbGxpbmcgU2V1cmF0IFYyXSAoaHR0cHM6Ly9naXRodWIuY29tL3NhdGlqYWxhYi9zZXVyYXQvaXNzdWVzLzI2MjUpIGZvciB0aGUgVjEgdG8gVjIgY29udmVyc2lvbiAobW9yZSBub3RlcyBpbiBSRUFETUUubWQpLgoKTG9hZCBUb3NjaGVzIFYyIGRhdGEKCmBgYHtyfQpwYXRoVG9GaWxlcyA9ICIvbGlua3MvZ3JvdXBzL3RyZXV0bGVpbi9VU0VSUy9Bc2hsZXkvcHJvamVjdHMvYXhvbG90bC9wdWJsaXNoZWQvVG9zY2hlczIwMTgvIgpsaXphcmRfYWxsID0gcmVhZFJEUyhwYXN0ZTAocGF0aFRvRmlsZXMsICJ2Mm9iai9saXphcmQuYWxsLmNlbGxzX3YyLlJEUyIpKQpsaXphcmRfbmV1cm9ucyA9IHJlYWRSRFMocGFzdGUwKHBhdGhUb0ZpbGVzLCAidjJvYmovbGl6YXJkLm5ldXJvbnMuY2VsbHNfdjIuUkRTIikpCgp0dXJ0bGVfYWxsID0gcmVhZFJEUyhwYXN0ZTAocGF0aFRvRmlsZXMsICJ2Mm9iai90dXJ0bGUuYWxsLmNlbGxzX3YyLlJEUyIpKQp0dXJ0bGVfbmV1cm9ucyA9IHJlYWRSRFMocGFzdGUwKHBhdGhUb0ZpbGVzLCAidjJvYmovdHVydGxlLm5ldXJvbnMuY2VsbHNfdjIuUkRTIikpCmBgYAoKVXBkYXRlIG9iamVjdHMgYW5kIHNhdmUKCmBgYHtyfQpsaXphcmRfYWxsX3YzID0gVXBkYXRlU2V1cmF0T2JqZWN0KGxpemFyZF9hbGwpCnNhdmVSRFMobGl6YXJkX2FsbF92MywgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgInYzb2JqL2xpemFyZF9hbGxfdjMuUkRTIikpCmxpemFyZF9uZXVyb25zX3YzID0gVXBkYXRlU2V1cmF0T2JqZWN0KGxpemFyZF9uZXVyb25zKQpzYXZlUkRTKGxpemFyZF9uZXVyb25zX3YzLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCAidjNvYmovbGl6YXJkX25ldXJvbnNfdjMuUkRTIikpCgp0dXJ0bGVfYWxsX3YzID0gVXBkYXRlU2V1cmF0T2JqZWN0KHR1cnRsZV9hbGwpCnNhdmVSRFModHVydGxlX2FsbF92MywgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgInYzb2JqL3R1cnRsZV9hbGxfdjMuUkRTIikpCnR1cnRsZV9uZXVyb25zX3YzID0gVXBkYXRlU2V1cmF0T2JqZWN0KHR1cnRsZV9uZXVyb25zKQpzYXZlUkRTKHR1cnRsZV9uZXVyb25zX3YzLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCAidjNvYmovdHVydGxlX25ldXJvbnNfdjMuUkRTIikpCmBgYAoKCgojIExhIE1hbm5vIGV0IGFsLiAyMDIwCkxvYWQgbG9vbSBmaWxlcwoKYGBge3J9CnAgPSAiL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvdG9tYXNnb21lcy9kYXRhL3B1Ymxpc2hlZC9tb3VzZWJyYWluLyIKbDVfYWxsID0gQ29ubmVjdChmaWxlbmFtZSA9IHBhc3RlMChwLCAibDVfYWxsLmxvb20iKSwgbW9kZSA9ICJyIikKZGV2X2FsbCA9IENvbm5lY3QoZmlsZW5hbWUgPSBwYXN0ZTAocCwgImRldl9hbGwubG9vbSIpLCBtb2RlID0gInIiKQoKbDVfYWxsX3NldXJhdCA9IGFzLlNldXJhdChsNV9hbGwpCiNkZXZfYWxsX3NldXJhdCA9IGFzLlNldXJhdChkZXZfYWxsKQpgYGAKClNhdmUgb2JqZWN0cwoKYGBge3J9CnNhdmVSRFMobDVfYWxsX3NldXJhdCwgZmlsZSA9IHBhc3RlMChwLCAibDVfYWxsX3NldXJhdC5SRFMiKSkKI3NhdmVSRFMoZGV2X2FsbF9zZXVyYXQsIGZpbGUgPSBwYXN0ZTAocCwgImRldl9hbGxfc2V1cmF0LlJEUyIpKQojIGRldiBkYXRhIHdhcyBjZWRlZCBieSBaaGlzb25nCmBgYAoKCgojIFJhaiBldCBhbC4gMjAxOAoKU2ltaWxhcmx5IHRvIFRvc2NoZXMgZGF0YSwgdGhpcyBhbHNvIGhhcyBmaXJzdCB0byBiZSBjb252ZXJ0ZWQgZnJvbSBTZXVyYXQgdjEgdG8gdjIuIEknbSBkb2luZyBpdCBpbiBhIGRpZmZlcmVudCBzeXN0ZW0gd2l0aCBTZXVyYXQgMi4zLjQgaW5zdGFsbGVkLgoKTG9hZCBTZXVyYXQgdjIgb2JqZWN0CgpgYGB7cn0KcCA9ICIvbGlua3MvZ3JvdXBzL3RyZXV0bGVpbi9VU0VSUy90b21hc2dvbWVzL2RhdGEvcHVibGlzaGVkL1JhajIwMThfYnJhaW4vIgpmYWxsX3YyID0gcmVhZFJEUyhwYXN0ZTAocCwgIkdTRTEwNTAxMF9mYWxsX3YyLmluRHJvcHMuUkRhdGEiKSkKYGBgCgpVcGRhdGUgYW5kIHNhdmUKCmBgYHtyfQpkcmVyaW9fYnJhaW5fdjMgPSBVcGRhdGVTZXVyYXRPYmplY3QoZmFsbF92MikKc2F2ZVJEUyhkcmVyaW9fYnJhaW5fdjMsIGZpbGUgPSBwYXN0ZTAocCwgImRyZXJpb19icmFpbl92My5SRFMiKSkKYGBgCgoKCiMgQ29scXVpdHQgZXQgYWwuIDIwMjEKCmBgYHtyfQpwYXRoVG9GaWxlcyA9ICIvbGlua3MvZ3JvdXBzL3RyZXV0bGVpbi9VU0VSUy9Bc2hsZXkvcHJvamVjdHMvYXhvbG90bC9wdWJsaXNoZWQvQ29scXVpdHQyMDIxL3Byb2plY3RzL0hWQ19SQV9YLyIKbG9hZChwYXN0ZTAocGF0aFRvRmlsZXMsICJIVkNfUkFfWC5SRGF0YSIpKQpzYXZlUkRTKEhWQ19SQV9YLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCAiSFZDX1JBX1guUkRTIikpCmZpbmNoZXNfbGlzdCA9IFNwbGl0T2JqZWN0KEhWQ19SQV9YLCBzcGxpdC5ieSA9ICJzcGVjaWVzIikKc2F2ZVJEUyhmaW5jaGVzX2xpc3QkWkYsIGZpbGUgPSBwYXN0ZTAocGF0aFRvRmlsZXMsICJ6ZmluY2hfc2V1cmF0LlJEUyIpKQpzYXZlUkRTKGZpbmNoZXNfbGlzdCRCRiwgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgImJmaW5jaF9zZXVyYXQuUkRTIikpCgpwYXRoVG9GaWxlcyA9ICIvbGlua3MvZ3JvdXBzL3RyZXV0bGVpbi9VU0VSUy9Bc2hsZXkvcHJvamVjdHMvYXhvbG90bC9wdWJsaXNoZWQvQ29scXVpdHQyMDIxL3Byb2plY3RzL1gvIgpsb2FkKHBhc3RlMChwYXRoVG9GaWxlcywgIk1DWF9DT01CSU5FRF9DX3NldXJhdC5SRGF0YSIpKQpzYXZlUkRTKE1DWF9DT01CSU5FRF9DX3NldXJhdCwgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgIk1DWF9DT01CSU5FRF9DX3NldXJhdC5SRFMiKSkKYGBgCgpDcmVhdGUgY29tYmluZWQgU2V1cmF0IGZvciBlYWNoIGZpbmNoIHdpdGggYWxsIHRoZSBkYXRhCgpgYGB7cn0KZmluY2hlc19icmFpbiA9IHJlYWRSRFMoImRhdGEvZXhwcmVzc2lvbi9IVkNfUkFfWC5SRFMiKQpmaW5jaGVzX2xpc3QgPSBTcGxpdE9iamVjdChmaW5jaGVzX2JyYWluLCBzcGxpdC5ieSA9ICJzcGVjaWVzIikKbG9hZCgiZGF0YS9leHByZXNzaW9uL01DWF9DT01CSU5FRF9DX3NldXJhdC5SRGF0YSIpCgoKYGBgCgoKCgojIEFsbGVuIEJyYWluIEh1bWFuCgpgYGB7cn0KcGF0aFRvRmlsZXMgPSAiL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvdG9tYXNnb21lcy9kYXRhL3B1Ymxpc2hlZC9BbGxlbl9odW1hbi8iCmRhdDEweCA9IHJlYWQuY3N2KHBhc3RlMChwYXRoVG9GaWxlcywgIm1hdHJpeF8xMHguY3N2IiksIGhlYWRlciA9IFQsIHJvdy5uYW1lcyA9IDEpCmRhdFNTID0gcmVhZC5jc3YocGFzdGUwKHBhdGhUb0ZpbGVzLCAibWF0cml4X1NTLmNzdiIpLCBoZWFkZXIgPSBULCByb3cubmFtZXMgPSAxKQptZXRhMTB4ID0gcmVhZC5jc3YocGFzdGUwKHBhdGhUb0ZpbGVzLCAibWV0YWRhdGFfMTB4LmNzdiIpLCBoZWFkZXIgPSBULCByb3cubmFtZXMgPSAxKQptZXRhU1MgPSByZWFkLmNzdihwYXN0ZTAocGF0aFRvRmlsZXMsICJtZXRhZGF0YV9TUy5jc3YiKSwgaGVhZGVyID0gVCwgcm93Lm5hbWVzID0gMSkKYGBgCgpNYWtlIFNldXJhdCBvYmplY3RzIGFuZCBzYXZlCgpgYGB7cn0KaHVtYW5fMTB4ID0gQ3JlYXRlU2V1cmF0T2JqZWN0KGNvdW50cyA9IHQoZGF0MTB4KSwgbWV0YS5kYXRhID0gbWV0YTEweCkKaHVtYW5fU1MgPSBDcmVhdGVTZXVyYXRPYmplY3QoY291bnRzID0gdChkYXRTUyksIG1ldGEuZGF0YSA9IG1ldGFTUykKCnNhdmVSRFMoaHVtYW5fMTB4LCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCAiaHVtYW5fMTB4LlJEUyIpKQpzYXZlUkRTKGh1bWFuX1NTLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCAiaHVtYW5fU1MuUkRTIikpCmBgYAoKCgoKCgo=</div>
+<div id="rmd-source-code">LS0tCnRpdGxlOiAiQ29udmVydCBTZXVyYXQgb2JqZWN0cyIKb3V0cHV0OiBodG1sX25vdGVib29rCi0tLQoKTm90ZWJvb2sgZm9yIGNvbnZlcnRpbmcgY29sbGVjdGVkIGRhdGEgaW50byBTZXVyYXQgb2JqZWN0cywgd2hlbiBuZWNlc3NhcnkuIERhdGFzZXRzIHdpbGwgbm90IGJlIHNhdmVkIHdpdGhpbiB0aGlzIHByb2plY3QgZm9sZGVyLCBvbmx5IHNvZnQgbGlua2VkIGluIGRhdGEvZXhwcmVzc2lvbgoKCgojIEdlbmVyYWwgU2V0dXAKU2V0dXAgY2h1bmsKCmBgYHtyLCBzZXR1cCwgaW5jbHVkZT1GQUxTRX0Ka25pdHI6Om9wdHNfY2h1bmskc2V0KGZpZy53aWR0aCA9IDgpCmtuaXRyOjpvcHRzX2tuaXQkc2V0KHJvb3QuZGlyID0gbm9ybWFsaXplUGF0aCgiLi4iKSkKa25pdHI6Om9wdHNfa25pdCRnZXQoInJvb3QuZGlyIikKYGBgCgpTZXR1cCByZXRpY3VsYXRlCgpgYGB7cn0KbGlicmFyeShyZXRpY3VsYXRlKQprbml0cjo6a25pdF9lbmdpbmVzJHNldChweXRob24gPSByZXRpY3VsYXRlOjplbmdfcHl0aG9uKQpweV9hdmFpbGFibGUoaW5pdGlhbGl6ZSA9IEZBTFNFKQp1c2VfcHl0aG9uKFN5cy53aGljaCgicHl0aG9uIikpCnB5X2NvbmZpZygpCmBgYAoKTG9hZCBsaWJyYXJpZXMKCmBgYHtyfQpsaWJyYXJ5KFNldXJhdCkKbGlicmFyeShTZXVyYXREaXNrKQpsaWJyYXJ5KE1hdHJpeCkKbGlicmFyeShxcykKYGBgCgoKCiMgVG9zY2hlcyBldCBhbC4gMjAxOAoKQ29udmVydGluZyB0aGUgVG9zY2hlcyBldCBhbC4gZGF0YSBpbnRvIFNldXJhdCBWMy4gU2VlIGFsc28gW3RoaXMgdGhyZWFkIG9uIGluc3RhbGxpbmcgU2V1cmF0IFYyXSAoaHR0cHM6Ly9naXRodWIuY29tL3NhdGlqYWxhYi9zZXVyYXQvaXNzdWVzLzI2MjUpIGZvciB0aGUgVjEgdG8gVjIgY29udmVyc2lvbiAobW9yZSBub3RlcyBpbiBSRUFETUUubWQpLgoKTG9hZCBUb3NjaGVzIFYyIGRhdGEKCmBgYHtyfQpwYXRoVG9GaWxlcyA9ICIvbGlua3MvZ3JvdXBzL3RyZXV0bGVpbi9VU0VSUy9Bc2hsZXkvcHJvamVjdHMvYXhvbG90bC9wdWJsaXNoZWQvVG9zY2hlczIwMTgvIgpsaXphcmRfYWxsID0gcmVhZFJEUyhwYXN0ZTAocGF0aFRvRmlsZXMsICJ2Mm9iai9saXphcmQuYWxsLmNlbGxzX3YyLlJEUyIpKQpsaXphcmRfbmV1cm9ucyA9IHJlYWRSRFMocGFzdGUwKHBhdGhUb0ZpbGVzLCAidjJvYmovbGl6YXJkLm5ldXJvbnMuY2VsbHNfdjIuUkRTIikpCgp0dXJ0bGVfYWxsID0gcmVhZFJEUyhwYXN0ZTAocGF0aFRvRmlsZXMsICJ2Mm9iai90dXJ0bGUuYWxsLmNlbGxzX3YyLlJEUyIpKQp0dXJ0bGVfbmV1cm9ucyA9IHJlYWRSRFMocGFzdGUwKHBhdGhUb0ZpbGVzLCAidjJvYmovdHVydGxlLm5ldXJvbnMuY2VsbHNfdjIuUkRTIikpCmBgYAoKVXBkYXRlIG9iamVjdHMgYW5kIHNhdmUKCmBgYHtyfQpsaXphcmRfYWxsX3YzID0gVXBkYXRlU2V1cmF0T2JqZWN0KGxpemFyZF9hbGwpCnNhdmVSRFMobGl6YXJkX2FsbF92MywgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgInYzb2JqL2xpemFyZF9hbGxfdjMuUkRTIikpCmxpemFyZF9uZXVyb25zX3YzID0gVXBkYXRlU2V1cmF0T2JqZWN0KGxpemFyZF9uZXVyb25zKQpzYXZlUkRTKGxpemFyZF9uZXVyb25zX3YzLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCAidjNvYmovbGl6YXJkX25ldXJvbnNfdjMuUkRTIikpCgp0dXJ0bGVfYWxsX3YzID0gVXBkYXRlU2V1cmF0T2JqZWN0KHR1cnRsZV9hbGwpCnNhdmVSRFModHVydGxlX2FsbF92MywgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgInYzb2JqL3R1cnRsZV9hbGxfdjMuUkRTIikpCnR1cnRsZV9uZXVyb25zX3YzID0gVXBkYXRlU2V1cmF0T2JqZWN0KHR1cnRsZV9uZXVyb25zKQpzYXZlUkRTKHR1cnRsZV9uZXVyb25zX3YzLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCAidjNvYmovdHVydGxlX25ldXJvbnNfdjMuUkRTIikpCmBgYAoKCgojIExhIE1hbm5vIGV0IGFsLiAyMDIwCkxvYWQgZmlsZQoKYGBge3J9Cm1vdXNlZGV2X2ZpbHQgPSByZWFkUkRTKCIvbGlua3MvZ3JvdXBzL3RyZXV0bGVpbi9VU0VSUy96aGlzb25nX2hlL1dvcmsvcHVibGljX2RhdGFzZXRzL0xhTWFubm9fbW91c2VfZGV2X2JyYWluX2F0bGFzL2Rldl9hbGxfc2V1cmF0LnJkcyIpCmBgYAoKRmlsdGVyIGFuZCBzYXZlCgpgYGB7cn0KbW91c2VkZXZfZmlsdCA9IG1vdXNlZGV2X2ZpbHRbLCEobW91c2VkZXZfZmlsdCRDbGFzcyAlaW4lIGMoIkJhZCBjZWxscyIsICJVbmRlZmluZWQiLCAiQmxvb2QiLCAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIkVuZG9kZXJtIiwgIkVjdG9kZXJtIiwgIk1lc29kZXJtIiwgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICJGaWJyb2JsYXN0IiwgIkdhc3RydWxhdGlvbiIsIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAiTWVzZW5jaHltZSIsICJOZXVyYWwgY3Jlc3QiLCAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIk5ldXJhbCB0dWJlIiwgIlNjaHdhbm4gY2VsbCIpKSAmCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIShtb3VzZWRldl9maWx0JENsdXN0ZXJOYW1lICVpbiUgYygibmFuIikpICYKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBtb3VzZWRldl9maWx0JG5GZWF0dXJlX1JOQT49MjUwXQoKc2F2ZVJEUyhtb3VzZWRldl9maWx0LCBmaWxlID0gIi9saW5rcy9ncm91cHMvdHJldXRsZWluL1VTRVJTL3RvbWFzZ29tZXMvZGF0YS9wdWJsaXNoZWQvTGFNYW5ubzIwMjBfbW91c2UvbW91c2VkZXZfZmlsdC5SRFMiKQpgYGAKCgoKIyBaZWlzZWwgZXQgYWwuLCAyMDE4CkxvYWQgbG9vbSBmaWxlcwoKYGBge3J9CnAgPSAiL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvdG9tYXNnb21lcy9kYXRhL3B1Ymxpc2hlZC9tb3VzZWJyYWluLyIKbDVfYWxsID0gQ29ubmVjdChmaWxlbmFtZSA9IHBhc3RlMChwLCAibDVfYWxsLmxvb20iKSwgbW9kZSA9ICJyIikKCmw1X2FsbF9zZXVyYXQgPSBhcy5TZXVyYXQobDVfYWxsKQpgYGAKClNhdmUgb2JqZWN0cwoKYGBge3J9CnNhdmVSRFMobDVfYWxsX3NldXJhdCwgZmlsZSA9IHBhc3RlMChwLCAibDVfYWxsX3NldXJhdC5SRFMiKSkKYGBgCgoKIyMgTW91c2UgZGV2IERpIEJlbGxhCkxvYWQgZGF0YQoKYGBge3J9CnBwID0gIi9saW5rcy9ncm91cHMvdHJldXRsZWluL1VTRVJTL3RvbWFzZ29tZXMvZGF0YS9wdWJsaXNoZWQvRGlCZWxsYTIwMjFfbW91c2UvIgpjbHVzdGVydHNuZSA9IHJlYWQudGFibGUocGFzdGUwKHBwLCAiY2x1c3Rlci9jbHVzdGVyX3NjRGV2U0MubWVyZ2VkLnRzbmUudHh0IiksIGhlYWRlciA9IFQpWy0xLF0KY2x1c3RlcnVtYXAgPSByZWFkLnRhYmxlKHBhc3RlMChwcCwgImNsdXN0ZXIvY2x1c3Rlcl9zY0RldlNDLm1lcmdlZC51bWFwLnR4dCIpLCBoZWFkZXIgPSBUKVstMSxdCmV4cCA9IE1hdHJpeDo6cmVhZE1NKHBhc3RlMChwcCwgImV4cHJlc3Npb24vNjAxYWUyZjQ3NzFhNWIwZDcyNTg4YmZiL2dlbmVfc29ydGVkLW1hdHJpeC5tdHguZ3oiKSkKYmMgPSByZWFkLnRhYmxlKHBhc3RlMChwcCwgImV4cHJlc3Npb24vNjAxYWUyZjQ3NzFhNWIwZDcyNTg4YmZiL2JhcmNvZGVzLnRzdiIpLCBoZWFkZXIgPSBGKQpnID0gcmVhZC50YWJsZShwYXN0ZTAocHAsICJleHByZXNzaW9uLzYwMWFlMmY0NzcxYTViMGQ3MjU4OGJmYi9nZW5lcy50c3YiKSwgaGVhZGVyID0gRikKbWV0YSA9IHJlYWQudGFibGUocGFzdGUwKHBwLCAibWV0YWRhdGEvbWV0YURhdGFfc2NEZXZTQy50eHQiKSwgaGVhZGVyID0gVCwgc2VwID0gIlx0IiwgCiAgICAgICAgICAgICAgICAgIGNvbW1lbnQuY2hhciA9ICIiLCBxdW90ZSA9ICIiKVstMSxdCm1ldGEkRG91YmxldF9pbnRlcnNlY3RbaXMubmEobWV0YSREb3VibGV0X2ludGVyc2VjdCldID0gIk90aGVyIgpyb3duYW1lcyhtZXRhKSA9IG1ldGEkTkFNRQpjb2xuYW1lcyhleHApID0gYmMkVjEKcm93bmFtZXMoZXhwKSA9IGckVjEKc3JhdCA9IENyZWF0ZVNldXJhdE9iamVjdChjb3VudHMgPSBleHAsIG1ldGEuZGF0YSA9IG1ldGEpCgpzcmF0ID0gc3JhdFssc3JhdCRzY3J1YmxldF9kb3VibGV0PT0iRkFMU0UiICYgbWV0YSREb3VibGV0X2ludGVyc2VjdCE9IkRvdWJsZXQiICYKICAgICAgICAgICAgICBzcmF0JE5ld19jZWxsVHlwZSE9IkxvdyBxdWFsaXR5IGNlbGxzIixdCnNhdmVSRFMoc3JhdCwgZmlsZSA9IHBhc3RlMChwcCwgIkRpQmVsbGEyMDIxX21vdXNlRGV2LlJEUyIpKQpgYGAKCgoKIyBSYWogZXQgYWwuIDIwMTgKClNpbWlsYXJseSB0byBUb3NjaGVzIGRhdGEsIHRoaXMgYWxzbyBoYXMgZmlyc3QgdG8gYmUgY29udmVydGVkIGZyb20gU2V1cmF0IHYxIHRvIHYyLiBJJ20gZG9pbmcgaXQgaW4gYSBkaWZmZXJlbnQgc3lzdGVtIHdpdGggU2V1cmF0IDIuMy40IGluc3RhbGxlZC4KCkxvYWQgU2V1cmF0IHYyIG9iamVjdAoKYGBge3J9CnAgPSAiL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvdG9tYXNnb21lcy9kYXRhL3B1Ymxpc2hlZC9SYWoyMDE4X2JyYWluLyIKZmFsbF92MiA9IHJlYWRSRFMocGFzdGUwKHAsICJHU0UxMDUwMTBfZmFsbF92Mi5pbkRyb3BzLlJEYXRhIikpCmBgYAoKVXBkYXRlIGFuZCBzYXZlCgpgYGB7cn0KZHJlcmlvX2JyYWluX3YzID0gVXBkYXRlU2V1cmF0T2JqZWN0KGZhbGxfdjIpCiMgcmVtb3ZlIGRvdWJsZXQgY2x1c3RlcnMKZHJlcmlvX2JyYWluX3YzID0gZHJlcmlvX2JyYWluX3YzWywhKGRyZXJpb19icmFpbl92MyRNb2QyLjUgJWluJSBjKDI0LDMxKSldCnNhdmVSRFMoZHJlcmlvX2JyYWluX3YzLCBmaWxlID0gcGFzdGUwKHAsICJkcmVyaW9fYnJhaW5fdjMuUkRTIikpCmBgYAoKCgojIENvbHF1aXR0IGV0IGFsLiAyMDIxCgpgYGB7cn0KcGF0aFRvRmlsZXMgPSAiL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvQXNobGV5L3Byb2plY3RzL2F4b2xvdGwvcHVibGlzaGVkL0NvbHF1aXR0MjAyMS9wcm9qZWN0cy9IVkNfUkFfWC8iCmxvYWQocGFzdGUwKHBhdGhUb0ZpbGVzLCAiSFZDX1JBX1guUkRhdGEiKSkKRGVmYXVsdEFzc2F5KEhWQ19SQV9YKSA9ICJSTkEiCkhWQ19SQV9YQGFzc2F5cyRSTkFAY291bnRzCnNhdmVSRFMoSFZDX1JBX1gsIGZpbGUgPSBwYXN0ZTAocGF0aFRvRmlsZXMsICJIVkNfUkFfWC5SRFMiKSkKZmluY2hlc19saXN0ID0gU3BsaXRPYmplY3QoSFZDX1JBX1gsIHNwbGl0LmJ5ID0gInNwZWNpZXMiKQpzYXZlUkRTKGZpbmNoZXNfbGlzdCRaRiwgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgInpmaW5jaF9zZXVyYXQuUkRTIikpCnNhdmVSRFMoZmluY2hlc19saXN0JEJGLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCAiYmZpbmNoX3NldXJhdC5SRFMiKSkKCnBhdGhUb0ZpbGVzID0gIi9saW5rcy9ncm91cHMvdHJldXRsZWluL1VTRVJTL0FzaGxleS9wcm9qZWN0cy9heG9sb3RsL3B1Ymxpc2hlZC9Db2xxdWl0dDIwMjEvcHJvamVjdHMvWC8iCmxvYWQocGFzdGUwKHBhdGhUb0ZpbGVzLCAiTUNYX0NPTUJJTkVEX0Nfc2V1cmF0LlJEYXRhIikpCkRlZmF1bHRBc3NheShNQ1hfQ09NQklORURfQ19zZXVyYXQpID0gIlJOQSIKc2F2ZVJEUyhNQ1hfQ09NQklORURfQ19zZXVyYXQsIGZpbGUgPSBwYXN0ZTAocGF0aFRvRmlsZXMsICJNQ1hfQ09NQklORURfQ19zZXVyYXQuUkRTIikpCmBgYAoKCgojIEFsbGVuIEJyYWluIEh1bWFuCgpgYGB7cn0KcGF0aFRvRmlsZXMgPSAiL2xpbmtzL2dyb3Vwcy90cmV1dGxlaW4vVVNFUlMvdG9tYXNnb21lcy9kYXRhL3B1Ymxpc2hlZC9BbGxlbl9odW1hbi8iCmRhdDEweCA9IHJlYWQuY3N2KHBhc3RlMChwYXRoVG9GaWxlcywgIm1hdHJpeF8xMHguY3N2IiksIGhlYWRlciA9IFQsIHJvdy5uYW1lcyA9IDEpCmRhdFNTID0gcmVhZC5jc3YocGFzdGUwKHBhdGhUb0ZpbGVzLCAibWF0cml4X1NTLmNzdiIpLCBoZWFkZXIgPSBULCByb3cubmFtZXMgPSAxKQptZXRhMTB4ID0gcmVhZC5jc3YocGFzdGUwKHBhdGhUb0ZpbGVzLCAibWV0YWRhdGFfMTB4LmNzdiIpLCBoZWFkZXIgPSBULCByb3cubmFtZXMgPSAxKQptZXRhU1MgPSByZWFkLmNzdihwYXN0ZTAocGF0aFRvRmlsZXMsICJtZXRhZGF0YV9TUy5jc3YiKSwgaGVhZGVyID0gVCwgcm93Lm5hbWVzID0gMSkKYGBgCgpNYWtlIFNldXJhdCBvYmplY3RzIGFuZCBzYXZlCgpgYGB7cn0KaHVtYW5fMTB4ID0gQ3JlYXRlU2V1cmF0T2JqZWN0KGNvdW50cyA9IHQoZGF0MTB4KSwgbWV0YS5kYXRhID0gbWV0YTEweCkKaHVtYW5fU1MgPSBDcmVhdGVTZXVyYXRPYmplY3QoY291bnRzID0gdChkYXRTUyksIG1ldGEuZGF0YSA9IG1ldGFTUykKCnNhdmVSRFMoaHVtYW5fMTB4LCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCAiaHVtYW5fMTB4LlJEUyIpKQpzYXZlUkRTKGh1bWFuX1NTLCBmaWxlID0gcGFzdGUwKHBhdGhUb0ZpbGVzLCAiaHVtYW5fU1MuUkRTIikpCmBgYAoKCgojIENlYnJpYW4tU2lsbGEgZXQgYWwuLCAyMDIxCkxvYWQgZmlsZXMKCmBgYHtyfQpwYXRoVG9GaWxlcyA9ICIvbGlua3MvZ3JvdXBzL3RyZXV0bGVpbi9VU0VSUy90b21hc2dvbWVzL2RhdGEvcHVibGlzaGVkL0NlYnJpYW5TaWxsYTIwMjFfbW91c2UvIgpudWNfZGF0ID0gcmVhZFJEUyhwYXN0ZTAocGF0aFRvRmlsZXMsICJzTnVjU2VxLnJkcyIpKQpzY19kYXQgPSByZWFkUkRTKHBhc3RlMChwYXRoVG9GaWxlcywgInNjU2VxLnJkcyIpKQpudWNfbWV0YSA9IHJlYWQuY3N2KHBhc3RlMChwYXRoVG9GaWxlcywgIm1ldGFfbnVjLnRzdiIpLCBoZWFkZXIgPSBULCBzZXAgPSAiXHQiLCByb3cubmFtZXMgPSAxKQpzY19tZXRhID0gcmVhZC5jc3YocGFzdGUwKHBhdGhUb0ZpbGVzLCAibWV0YV9zYy50c3YiKSwgaGVhZGVyID0gVCwgc2VwID0gIlx0Iiwgcm93Lm5hbWVzID0gMSkKYGBgCgpBZGQgbWV0YWRhdGEsIGZpbHRlciwgYW5kIHNhdmUKCmBgYHtyfQpzY19kYXRAbWV0YS5kYXRhID0gc2NfbWV0YQpudWNfZGF0QG1ldGEuZGF0YSA9IG51Y19tZXRhCgpzYXZlUkRTKG51Y19kYXQsIGZpbGUgPSBwYXN0ZTAocGF0aFRvRmlsZXMsICJudWNfZGF0LlJEUyIpKQpzYXZlUkRTKHNjX2RhdCwgZmlsZSA9IHBhc3RlMChwYXRoVG9GaWxlcywgInNjX2RhdC5SRFMiKSkKYGBgCgoKCgoKCgoKCg==</div>
 
 
 

@@ -1,0 +1,965 @@
+---
+title: "Div-seq Analysis"
+output: html_notebook
+---
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(patchwork)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(parallel)
+library(doParallel)
+library(foreach)
+library(ggdendro)
+library(presto)
+library(scatterpie)
+```
+
+Set colours for cell types and regions
+
+```{r}
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+cols_cc = c(
+#epen
+"#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472",
+#gaba
+"#700209", "#75090e","#7a0f13", "#801517", "#851a1b", "#8a1f1f", "#902423", "#952927", "#9a2d2c","#a03230", "#a53634", "#aa3a39", "#b03f3d","#b54342", "#ba4846", "#c04c4b", "#c5504f", "#ca5554", "#d05959", "#d55e5e","#73050c", "#780c11","#8d2221", "#982b2a","#a23432", "#a83837", "#b2413f", "#b84544", "#bd4a49", "#c85352", #"#cd5756",
+#glut
+"#054674", "#134d7b","#1d5481", "#265a88", "#2e618e", "#73a4cb", "#366995", "#3e709c", "#4677a2","#4d7ea9", "#5586b0", "#5c8db7", "#6495bd","#6b9cc4", "#7bacd2", "#8ebfe4", "#96c7eb", "#9ecff2", "#18507e", "#18507e","#2a5e8b", "#497ba6","#5889b3", "#6fa0c8","#7fafd6", "#6091ba", "#5182ac", "#3a6c98", "#a6d7f9",
+#npc
+"#ffb120", "#feb72a","#fdbc34", "#fcc13d", "#fbc745", "#facc4e", "#f9d156", "#f8d65f", "#f8da68","#f7df70", "#f7e479", "#f7e882", "#f7ed8a", "#f7f193", "#eca319"
+)
+ccnames = unique(sort(meta$cellclusters))
+names(cols_cc) = c(ccnames[grepl("epen", ccnames)], ccnames[grepl("GABA", ccnames)],ccnames[grepl("glut", ccnames)],ccnames[grepl("npc", ccnames)])
+
+cols_cc = c(cols_cc, "microglia_8" = "#E6530D", 
+            "oligodendrocyte_15" = "#E43D88", "oligodendrocyte_10" = "#F662A5",
+            "endothelial_11" = "#712166", "endothelial_12" = "#B0279D", 
+            "endothelial_14" = "#BE5AB0")
+
+reg_cols = c("other/unknown_pred" = "#C7CCC7", 
+             "medial" = "#52168D", "medial_pred" = "#661CB0", 
+             "dorsal" = "#C56007", "dorsal_pred" = "#ED7307", 
+             "lateral" = "#118392", "lateral_pred" = "#16A3B6")
+reg_cols_simp = c("medial" = "#52168D", "dorsal" = "#C56007", "lateral" = "#118392")
+```
+
+
+
+# Prepare data
+Load Div-seq
+
+```{r}
+div_dat = readRDS("data/expression/axolotl_reclust/Edu_1_2_4_6_8_12_fil_highvarfeat.RDS")
+```
+
+Save necessary data
+
+```{r}
+outname = "data/processed/axolotl_parts/div_regions_data.mtx"
+outname2 = "data/processed/axolotl_parts/div_regions_counts.mtx"
+if(!file.exists(outname)){
+  metadata_ax = div_dat@meta.data[,c("sample", "batch", "highlevel_clusters")]
+  write.csv(metadata_ax, file = "data/processed/axolotl_parts/div_regions_meta.csv", 
+            col.names = T, row.names = T, quote = F)
+  write.csv(div_dat@assays$RNA@meta.features, 
+            file = "data/processed/axolotl_parts/div_regions_genes.csv", 
+            col.names = T, row.names = T, quote = F)
+  
+  Matrix::writeMM(Matrix::t(div_dat@assays$RNA@data), outname)
+  Matrix::writeMM(Matrix::t(div_dat@assays$RNA@counts), outname2)
+}
+```
+
+
+
+# Region predictions
+Load results from models
+
+```{r}
+all_pred_f = list.files("results/Div-seq/", pattern = "preds_")
+all_pred_f = all_pred_f[grepl("lr", all_pred_f) & !grepl("CT", all_pred_f)]
+# test set results
+test_res = lapply(all_pred_f[grepl("ax.csv", all_pred_f)], 
+                  function(x) read.csv(paste0("results/Div-seq/", x), header = T))
+names(test_res) = unlist(lapply(strsplit(all_pred_f[grepl("ax.csv", all_pred_f)], ".", fixed = T),
+                                function(x) x[1]))
+
+# Div-seq results
+div_res = lapply(all_pred_f[grepl("div", all_pred_f)], 
+                 function(x) read.csv(paste0("results/Div-seq/", x), header = T))
+names(div_res) = unlist(lapply(strsplit(all_pred_f[grepl("div", all_pred_f)], ".", fixed = T),
+                               function(x) x[1]))
+```
+
+Confusion matrices
+
+```{r}
+test_labs_l = list()
+for(g in c("all", "dif", "neu")){
+  n1 = names(test_res)[grepl(g, names(test_res)) & grepl("lr", names(test_res))]
+  test_labs_l[[g]] = test_res[[n1]]
+  print(g)
+  print(table(test_labs_l[[g]]$y_test, test_labs_l[[g]]$pred_lr))
+}
+
+div_labs_l = list()
+for(g in c("all", "dif", "neu")){
+  n1 = names(div_res)[grepl(g, names(div_res)) & grepl("lr", names(div_res))]
+  div_labs_l[[g]] = div_res[[n1]]
+} 
+```
+
+Compare all with neu/dif (test sets are different so overlap is not complete)
+
+```{r}
+test_all_neu = merge(test_labs_l$all, test_labs_l$neu, by = 1)
+table(test_all_neu$pred_lr.x, test_all_neu$pred_lr.y)
+
+test_all_ep = merge(test_labs_l$all, test_labs_l$dif, by = 1)
+table(test_all_ep$pred_lr.x, test_all_ep$pred_lr.y)
+
+
+div_all_neu = merge(div_labs_l$all, div_labs_l$neu, by = 1)
+table(div_all_neu$pred_lr.x, div_all_neu$pred_lr.y)
+
+div_all_ep = merge(div_labs_l$all, div_labs_l$dif, by = 1)
+table(div_all_ep$pred_lr.x, div_all_ep$pred_lr.y)
+```
+
+Plot UMAP with regions
+
+```{r}
+div_dat$pred_regs = div_res$preds_lr_div_all$pred_lr
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "highlevel_clusters", label = T)
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "pred_regs")
+FeaturePlot(div_dat, reduction = "umap_harmony", features = c("SFRP1", "WNT8B", "UNC5C"))
+
+reg_cols_simp = c("medial" = "#52168D", "dorsal" = "#C56007", "lateral" = "#118392")
+
+plt = DimPlot(div_dat, reduction = "umap_harmony", group.by = "pred_regs", shuffle = T)+
+  scale_colour_manual(values = reg_cols_simp)+
+  theme(aspect.ratio = 1,
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        plot.title = element_blank(),
+        legend.position = "none")
+
+pdf("results/Div-seq/Divseq_results/divseq_umap_regions.pdf", height = 2.7, width = 2.7)
+print(plt)
+dev.off()
+```
+
+Plot changes in proportion
+
+```{r}
+tab_ct_reg = table(paste0(div_dat$sample, "..", div_dat$high_level_anno), div_dat$pred_regs)
+tab_ct_reg = data.frame(tab_ct_reg)
+
+tab_ct_reg$time = unlist(lapply(strsplit(as.character(tab_ct_reg$Var1), "_"), 
+                                function(x) paste0(x[1], "_wpi")))
+tab_ct_reg$ct = unlist(lapply(strsplit(as.character(tab_ct_reg$Var1), "..", fixed = T), 
+                                function(x) x[2]))
+
+for(r in unique(tab_ct_reg$time)){
+  cc = tab_ct_reg$time==r
+  tab_ct_reg$Freq[cc] = tab_ct_reg$Freq[cc]/sum(tab_ct_reg$Freq[cc])
+}
+
+for(r in unique(tab_ct_reg$ct)){
+  cc = tab_ct_reg$ct==r
+  tab_ct_reg$Freq[cc] = scales::rescale(tab_ct_reg$Freq[cc], c(0,1))
+}
+
+tab_ct_reg$ct = factor(tab_ct_reg$ct, levels = c("microglia", "endo", 
+                                                 "ependymal_a", "ependymal_q", "NPC",
+                                                 "neuronal"))
+tab_ct_reg$time = factor(tab_ct_reg$time, 
+                         levels = rev(c("1_wpi", "2_wpi", "4_wpi", "6_wpi", "8_wpi", "12_wpi")))
+tab_ct_reg$Var2 = factor(tab_ct_reg$Var2, 
+                         levels = c("medial","dorsal","lateral"))
+
+plt = ggplot(tab_ct_reg, aes(x = Var2, y = time, 
+                       size = Freq, alpha = Freq, colour = Var2))+
+  facet_wrap(~ct, ncol = 6)+
+  scale_colour_manual(values = reg_cols_simp)+
+  geom_point()+
+  labs(x = "Region", y = "Time", colour = "Region", 
+       size = "Norm. proportion", alpha = "Norm. proportion")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        axis.title = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 6.5))
+
+pdf("results/Div-seq/Divseq_results/proportion_region_majorct_time.pdf", height = 2.7, width = 7.5)
+print(plt)
+dev.off()
+```
+
+
+
+# Cell Type predictions
+Load results from models
+
+```{r}
+all_pred_f = list.files("results/Div-seq/", pattern = "preds_")
+all_pred_f = all_pred_f[grepl("rfc", all_pred_f) & grepl("CT", all_pred_f)]
+# test set results
+test_res = lapply(all_pred_f[grepl("ax.csv", all_pred_f)], 
+                  function(x) read.csv(paste0("results/Div-seq/", x), header = T))
+names(test_res) = unlist(lapply(strsplit(all_pred_f[grepl("ax.csv", all_pred_f)], ".", fixed = T),
+                                function(x) x[1]))
+
+# Div-seq results
+div_res = lapply(all_pred_f[grepl("div", all_pred_f)], 
+                 function(x) read.csv(paste0("results/Div-seq/", x), header = T))
+names(div_res) = unlist(lapply(strsplit(all_pred_f[grepl("div", all_pred_f)], ".", fixed = T),
+                               function(x) x[1]))
+```
+
+Plot predictions
+
+```{r}
+div_dat$pred_ctall = div_res$preds_rfc_CT_div_all$pred_rfc[match(colnames(div_dat), 
+                                                                 div_res$preds_rfc_CT_div_all$X)]
+div_dat$pred_ctneu = div_res$preds_rfc_CT_div_neu$pred_rfc[match(colnames(div_dat), 
+                                                                 div_res$preds_rfc_CT_div_neu$X)]
+div_dat$pred_ctneu[!(div_dat$high_level_anno %in% c("NPC", "neuronal"))] = NA
+div_dat$pred_ctdif = div_res$preds_rfc_CT_div_dif$pred_rfc[match(colnames(div_dat), 
+                                                                 div_res$preds_rfc_CT_div_dif$X)]
+div_dat$pred_ctdif[!(div_dat$high_level_anno %in% c("neuronal"))] = NA
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "highlevel_clusters", label = T)
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "pred_ctall")
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "pred_ctneu")
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "pred_ctdif")
+```
+
+Label smoothing
+
+```{r}
+div_dat = FindClusters(div_dat, resolution = c(2, 5, 10, 20, 25, 50), algorithm = 2, verbose = F)
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "RNA_snn_res.2", label = T)+NoLegend()
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "RNA_snn_res.5", label = T)+NoLegend()
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "RNA_snn_res.10", label = T)+NoLegend()
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "RNA_snn_res.20", label = T)+NoLegend()
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "RNA_snn_res.25", label = T)+NoLegend()
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "RNA_snn_res.50", label = T)+NoLegend()
+
+tab_overcl = table(div_dat$RNA_snn_res.20, div_dat$pred_ctall)
+tab_overcl = tab_overcl/rowSums(tab_overcl)
+apply(tab_overcl, 1, function(x) colnames(tab_overcl)[which.max(x)])
+sort(table(apply(tab_overcl, 1, function(x) colnames(tab_overcl)[which.max(x)])))
+sort(apply(tab_overcl, 1, max))
+sum(apply(tab_overcl, 1, max)<.5)/nrow(tab_overcl)
+
+df_overcl = data.frame(tab_overcl)
+nomajdf = unique(df_overcl[df_overcl$Freq<.33,c(1,1)])
+colnames(nomajdf) = colnames(df_overcl)[1:2]
+majdf = df_overcl[df_overcl$Freq>=.33,1:2]
+match_df = rbind(majdf, nomajdf[!(nomajdf$Var1 %in% majdf$Var1),])
+
+div_dat$pred_smooth_20 = match_df$Var2[match(div_dat$RNA_snn_res.20, match_df$Var1)]
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "pred_smooth_20", label = T)+NoLegend()
+DimPlot(div_dat, reduction = "umap_harmony", group.by = "pred_ctall", label = T)+NoLegend()
+```
+
+Save new metadata
+
+```{r}
+meta_div_pred = div_dat@meta.data[,c("sample", "high_level_anno", "highlevel_clusters", 
+                                     "pred_regs", "pred_ctall", "pred_smooth_20")]
+write.csv(meta_div_pred, file = "results/Div-seq/divseq_predicted_metadata.csv", 
+          col.names = T, row.names = T, quote = F)
+```
+
+
+## Dot plots
+Region changes in major predicted cell types
+
+```{r}
+tab_ct_reg = table(meta_div_pred$sample,
+                   paste0(meta_div_pred$pred_smooth_20, "..", meta_div_pred$pred_regs))
+tab_ct_reg = data.frame(tab_ct_reg)
+
+tab_ct_reg$time = unlist(lapply(strsplit(as.character(tab_ct_reg$Var1), "_"), 
+                                function(x) paste0(x[1], "_wpi")))
+tab_ct_reg$pred_reg = unlist(lapply(strsplit(as.character(tab_ct_reg$Var2), "..", fixed = T), 
+                                function(x) x[2]))
+tab_ct_reg$pred_ct = unlist(lapply(strsplit(as.character(tab_ct_reg$Var2), "..", fixed = T), 
+                                function(x) x[1]))
+
+largest_ct = c()
+for(r in unique(tab_ct_reg$time)){ # get the x most frequent cell types/tp
+  cc = tab_ct_reg$time==r
+  tab_ct_reg$Freq[cc] = tab_ct_reg$Freq[cc]/sum(tab_ct_reg$Freq[cc])
+  largest_ct = unique(c(largest_ct, 
+                        tab_ct_reg$pred_ct[cc][order(tab_ct_reg$Freq[cc], decreasing = T)][1:8]))
+  largest_ct = largest_ct[grepl("_", largest_ct)]
+}
+
+tab_ct_reg = tab_ct_reg[tab_ct_reg$pred_ct %in% largest_ct,]
+
+for(r in unique(tab_ct_reg$pred_ct)){
+  cc = tab_ct_reg$pred_ct==r
+  tab_ct_reg$Freq[cc] = scales::rescale(tab_ct_reg$Freq[cc], c(0,1))
+}
+
+tab_ct_reg$time = factor(tab_ct_reg$time, 
+                         levels = rev(c("1_wpi", "2_wpi", "4_wpi", "6_wpi", "8_wpi", "12_wpi")))
+tab_ct_reg$pred_reg = factor(tab_ct_reg$pred_reg, levels = c("medial","dorsal","lateral"))
+
+reg_cols_simp = c("medial" = "#52168D", "dorsal" = "#C56007", "lateral" = "#118392")
+
+plt = ggplot(tab_ct_reg, aes(x = pred_reg, y = time, 
+                       size = Freq, alpha = Freq, colour = pred_reg))+
+  facet_wrap(~pred_ct, ncol = 6)+
+  scale_colour_manual(values = reg_cols_simp)+
+  geom_point()+
+  labs(x = "Region", y = "Time", colour = "Region", 
+       size = "Norm. proportion", alpha = "Norm. proportion")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        axis.title = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 6.5))
+
+pdf("results/Div-seq/Divseq_results/proportion_region_predct_time.pdf", height = 5, width = 7.5)
+print(plt)
+dev.off()
+```
+
+Scatterpie of previous plot
+
+```{r}
+tab_ct_reg = table(meta_div_pred$sample,
+                   paste0(meta_div_pred$pred_smooth_20, "..", meta_div_pred$pred_regs))
+tab_ct_reg = data.frame(tab_ct_reg)
+
+tab_ct_reg$time = unlist(lapply(strsplit(as.character(tab_ct_reg$Var1), "_"), 
+                                function(x) paste0(x[1], "_wpi")))
+tab_ct_reg$pred_reg = unlist(lapply(strsplit(as.character(tab_ct_reg$Var2), "..", fixed = T), 
+                                function(x) x[2]))
+tab_ct_reg$pred_ct = unlist(lapply(strsplit(as.character(tab_ct_reg$Var2), "..", fixed = T), 
+                                function(x) x[1]))
+
+tab_ct_reg$prop = tab_ct_reg$Freq
+largest_ct = c()
+for(r in unique(tab_ct_reg$time)){ # get the x most frequent cell types/tp
+  cc = tab_ct_reg$time==r
+  tab_ct_reg$prop[cc] = tab_ct_reg$prop[cc]/sum(tab_ct_reg$prop[cc])
+  largest_ct = unique(c(largest_ct, 
+                        tab_ct_reg$pred_ct[cc][order(tab_ct_reg$prop[cc], decreasing = T)][1:8]))
+  largest_ct = largest_ct[grepl("_", largest_ct)]
+}
+
+tab_ct_reg = tab_ct_reg[tab_ct_reg$pred_ct %in% largest_ct,]
+
+tab_timect_reg = t(reshape2::dcast(pred_reg~time+pred_ct, value.var = "Freq", 
+                                   data = tab_ct_reg, fill = 0))
+colnames(tab_timect_reg) = tab_timect_reg[1,]
+tab_timect_reg = data.frame(tab_timect_reg[-1,])
+tab_timect_reg$time = unlist(lapply(strsplit(rownames(tab_timect_reg), "_wpi_"), 
+                                    function(x) paste0(x[1], "_wpi")))
+tab_timect_reg$ct = unlist(lapply(strsplit(rownames(tab_timect_reg), "_wpi_"), function(x) x[2]))
+tab_timect_reg$dorsal = as.numeric(tab_timect_reg$dorsal)
+tab_timect_reg$lateral = as.numeric(tab_timect_reg$lateral)
+tab_timect_reg$medial = as.numeric(tab_timect_reg$medial)
+
+tab_timect_reg = tab_timect_reg[tab_timect_reg$ct!="microglia_8",]
+
+propstime = unlist(unname(tapply(apply(tab_timect_reg[,1:3], 1, sum), 
+                                 tab_timect_reg$time, function(x) x/sum(x))))
+
+tab_timect_reg$propstime = propstime[rownames(tab_timect_reg)]
+
+for(r in unique(tab_timect_reg$ct)){
+  cc = tab_timect_reg$ct==r
+  tab_timect_reg$propstime[cc] = scales::rescale(tab_timect_reg$propstime[cc], c(0,1))
+}
+
+tab_timect_reg$gg = 1:nrow(tab_timect_reg)
+
+tab_timect_reg$time = factor(tab_timect_reg$time, 
+                             levels = c("1_wpi","2_wpi","4_wpi","6_wpi","8_wpi","12_wpi"))
+tab_timect_reg$ct = factor(tab_timect_reg$ct, 
+                           levels = rev(c("epen_clus_4", "epen_clus_3", "epen_clus_0",
+                                      "npc_SUBSET_7","npc_SUBSET_8","npc_SUBSET_3",
+                                      "npc_SUBSET_4","npc_SUBSET_10",
+                                      "glut_SUBSET_10", "glut_SUBSET_3", "glut_SUBSET_1",
+                                      "glut_SUBSET_4", "glut_SUBSET_0",
+                                      "GABA_SUBSET_3","GABA_SUBSET_4",
+                                      "GABA_SUBSET_1","GABA_SUBSET_14")))
+
+scplt = ggplot()+
+  geom_scatterpie(aes(x=as.numeric(time), y=as.numeric(ct), 
+                      group=gg, r=propstime/2), data=tab_timect_reg,
+                  cols=c("medial", "dorsal", "lateral"))+ 
+  scale_x_continuous(labels = levels(tab_timect_reg$time),
+                     breaks = 1:6)+
+  scale_y_continuous(labels = levels(tab_timect_reg$ct),
+                     breaks = 1:length(levels(tab_timect_reg$ct)))+
+  scale_fill_manual(values = reg_cols_simp)+
+  coord_equal()+
+  labs(x = "time", y = "cell type", fill = "region")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none")
+
+pdf("results/Div-seq/Divseq_results/proportion_region_predct_time_pie.pdf", height = 7.5, width = 3)
+print(scplt)
+dev.off()
+```
+
+Scatterpie of major cell types
+
+```{r}
+# count time vs ct..region
+major_ct_pred = unlist(lapply(strsplit(meta_div_pred$pred_ctall, "_"), function(x) x[1]))
+tab_ct_reg = table(meta_div_pred$sample,
+                   paste0(major_ct_pred, "..", meta_div_pred$pred_regs))
+tab_ct_reg = data.frame(tab_ct_reg)
+
+# unravel
+tab_ct_reg$time = unlist(lapply(strsplit(as.character(tab_ct_reg$Var1), "_"), 
+                                function(x) paste0(x[1], "_wpi")))
+tab_ct_reg$pred_reg = unlist(lapply(strsplit(as.character(tab_ct_reg$Var2), "..", fixed = T), 
+                                function(x) x[2]))
+tab_ct_reg$pred_ct = unlist(lapply(strsplit(as.character(tab_ct_reg$Var2), "..", fixed = T), 
+                                function(x) x[1]))
+
+# get proportions
+tab_ct_reg$prop = tab_ct_reg$Freq
+for(r in unique(tab_ct_reg$time)){
+  cc = tab_ct_reg$time==r
+  tab_ct_reg$prop[cc] = tab_ct_reg$prop[cc]/sum(tab_ct_reg$prop[cc])
+}
+
+# get counts per region
+tab_timect_reg = t(reshape2::dcast(pred_reg~time+pred_ct, value.var = "Freq", 
+                                   data = tab_ct_reg, fill = 0))
+colnames(tab_timect_reg) = tab_timect_reg[1,]
+tab_timect_reg = data.frame(tab_timect_reg[-1,])
+
+# unravel
+tab_timect_reg$time = unlist(lapply(strsplit(rownames(tab_timect_reg), "_wpi_"), 
+                                    function(x) paste0(x[1], "_wpi")))
+tab_timect_reg$ct = unlist(lapply(strsplit(rownames(tab_timect_reg), "_wpi_"), function(x) x[2]))
+tab_timect_reg$dorsal = as.numeric(tab_timect_reg$dorsal)
+tab_timect_reg$lateral = as.numeric(tab_timect_reg$lateral)
+tab_timect_reg$medial = as.numeric(tab_timect_reg$medial)
+
+# proportions of cell type per time
+propstime = unlist(unname(tapply(apply(tab_timect_reg[,1:3], 1, sum), 
+                                 tab_timect_reg$time, function(x) x/sum(x))))
+tab_timect_reg$propstime = propstime[rownames(tab_timect_reg)]
+
+# scale the proportions per cell type
+for(r in unique(tab_timect_reg$ct)){
+  cc = tab_timect_reg$ct==r
+  tab_timect_reg$propstime[cc] = scales::rescale(tab_timect_reg$propstime[cc], c(0,1))
+}
+tab_timect_reg$gg = 1:nrow(tab_timect_reg) #required for plot
+
+tab_timect_reg$time = factor(tab_timect_reg$time, 
+                             levels = c("1_wpi","2_wpi","4_wpi","6_wpi","8_wpi","12_wpi"))
+tab_timect_reg$ct = factor(tab_timect_reg$ct, 
+                           levels = rev(c("epen", "npc", "glut", "GABA","oligodendrocyte",
+                                      "microglia", "endothelial")))
+
+scplt = ggplot()+
+  geom_scatterpie(aes(x=as.numeric(time), y=as.numeric(ct), 
+                      group=gg, r=propstime/2), data=tab_timect_reg,
+                  cols=c("medial", "dorsal", "lateral"))+ 
+  scale_x_continuous(labels = levels(tab_timect_reg$time),
+                     breaks = 1:6)+
+  scale_y_continuous(labels = levels(tab_timect_reg$ct),
+                     breaks = 1:length(levels(tab_timect_reg$ct)))+
+  scale_fill_manual(values = reg_cols_simp)+
+  coord_equal()+
+  labs(x = "time", y = "cell type", fill = "region")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none")
+
+# add global cell type proportions per region
+prop_df = data.frame(prop.table(table(major_ct_pred, meta_div_pred$pred_regs)))
+prop_df$major_ct_pred = factor(prop_df$major_ct_pred, levels = levels(tab_timect_reg$ct))
+
+col_prop = ggplot()+
+  geom_col(data = prop_df, mapping = aes(x = Freq, y = major_ct_pred, fill = Var2))+
+  scale_x_continuous(expand = c(0,0), limits = c(0,.37))+
+  scale_fill_manual(values = reg_cols_simp)+
+  labs(x = "proportion")+
+  theme_void()+
+  theme(legend.position = "none",
+        axis.line.y = element_line(),
+        axis.text.x = element_text(colour = "black", size = 6, 
+                                   angle = 30, vjust = 1, hjust = 1),
+        axis.title.x = element_text(size = 6.5),
+        axis.line.x = element_line(),
+        axis.ticks.x = element_line())
+
+pdf("results/Div-seq/Divseq_results/proportion_region_predct_time_pie_bar.pdf", 
+    height = 3, width = 3.65)
+scplt + col_prop + plot_layout(widths = c(1,0.2)) & theme(plot.margin = unit(c(0,0,0,0), "cm"))
+dev.off()
+```
+
+
+## Barplots
+Predicted cell type abundances
+
+```{r}
+tab_ctall = data.frame(table(meta_div_pred$sample,meta_div_pred$pred_ctall))
+tab_ctall$majorct = unlist(lapply(strsplit(as.character(tab_ctall$Var2), "_"), function(x) x[1]))
+tab_ctall$majorct = factor(tab_ctall$majorct, 
+                           levels = c("epen", "npc", "glut", "GABA", "microglia",
+                                      "oligodendrocyte", "endothelial"))
+ctord = sort(table(meta_div_pred$pred_ctall))
+tab_ctall$Var2 = factor(tab_ctall$Var2, levels = names(ctord))
+
+pdf("results/Div-seq/Divseq_results/predCellType_abundance_timepoint.pdf", height = 9.5, width = 7.5)
+ggplot(tab_ctall, aes(x = Freq, y = Var2, fill = Var1))+
+  facet_grid(majorct~Var1, scales = "free", space = "free_y")+
+  geom_col(colour = "grey50")+
+  scale_x_continuous(expand = c(0,0))+
+  scale_fill_manual(values = RColorBrewer::brewer.pal(6, "PuBuGn"))+
+  theme_bw()+
+  theme(axis.text.x = element_text(size = 6, colour = "black"),
+        axis.text.y = element_text(size = 6.5, colour = "black"),
+        strip.text = element_text(size = 6.5),
+        legend.position = "none")
+dev.off()
+
+pdf("results/Div-seq/Divseq_results/predCellType_abundance_celltype.pdf", height = 9.5, width = 7.5)
+ggplot(tab_ctall, aes(x = Freq, y = Var2, fill = Var2))+
+  facet_grid(majorct~Var1, scales = "free", space = "free_y")+
+  geom_col()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_fill_manual(values = cols_cc)+
+  theme_bw()+
+  theme(axis.text.x = element_text(size = 6, colour = "black"),
+        axis.text.y = element_text(size = 6.5, colour = "black"),
+        strip.text = element_text(size = 6.5),
+        legend.position = "none")
+dev.off()
+```
+
+Predicted cell type abundances, with predicted region
+
+```{r}
+tab_ctall = data.frame(table(meta_div_pred$sample, 
+                             paste0(meta_div_pred$pred_ctall, "..", meta_div_pred$pred_regs)))
+tab_ctall$ct = unlist(lapply(strsplit(as.character(tab_ctall$Var2), "..", fixed = T), 
+                             function(x) x[1]))
+tab_ctall$reg = unlist(lapply(strsplit(as.character(tab_ctall$Var2), "..", fixed = T), 
+                              function(x) x[2]))
+tab_ctall$majorct = unlist(lapply(strsplit(as.character(tab_ctall$Var2), "_"), function(x) x[1]))
+tab_ctall$majorct = factor(tab_ctall$majorct, 
+                           levels = c("epen", "npc", "glut", "GABA", "microglia",
+                                      "oligodendrocyte", "endothelial"))
+
+ctord = sort(table(meta_div_pred$pred_ctall))
+tab_ctall$ct = factor(tab_ctall$ct, levels = names(ctord))
+
+pdf("results/Div-seq/Divseq_results/predCellType_abundance_predRegion.pdf", height = 9.5, width = 7.5)
+ggplot(tab_ctall, aes(x = Freq, y = ct, fill = reg))+
+  facet_grid(majorct~Var1, scales = "free", space = "free_y")+
+  geom_col()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_fill_manual(values = reg_cols_simp)+
+  theme_bw()+
+  theme(axis.text.x = element_text(size = 6, colour = "black"),
+        axis.text.y = element_text(size = 6.5, colour = "black"),
+        strip.text = element_text(size = 6.5),
+        legend.position = "none")
+dev.off()
+```
+
+Barplots for glut and NPC
+
+```{r}
+plot_df = meta_div_pred[,c(1,4,5)]
+plot_df$sample[plot_df$sample=="1_wpi_pos"] = "1_wpi"
+plot_df$sample = factor(plot_df$sample, levels = rev(paste0(c(1,2,4,6,8,12), "_wpi")))
+plot_df$pred_regs = factor(plot_df$pred_regs, levels = c("medial", "dorsal", "lateral"))
+for(i in c("glut_", "npc_")){
+  sub_plot_df = plot_df[grepl(i, plot_df$pred_ctall),]
+  sub_plot_df$pred_ctall = gsub(paste0(i, "SUBSET_"), "", sub_plot_df$pred_ctall)
+  lvls = if(i=="glut_"){
+    c(9,10,22,27,19,14,17,26,8,6,20,1,11,13,25,2,21,16,3,0,12,7,5,4,24,15,18)
+  } else {c(2,13,0,14,1,3,9,4,11,7)}
+  sub_plot_df = sub_plot_df[sub_plot_df$pred_ctall %in% as.character(lvls),]
+  sub_plot_df$pred_ctall = factor(sub_plot_df$pred_ctall, 
+                                  levels = as.character(lvls))
+  limmax = max(table(sub_plot_df$pred_ctall))
+  
+  for(gg in c("sample", "pred_regs", "grey25")){
+    cols_use = if(gg=="pred_regs"){
+      reg_cols_simp
+    } else if(gg=="sample"){
+      rev(colorRampPalette(c("grey85", "#df16df"))(6))
+    }
+    plt = ggplot(sub_plot_df)+
+      scale_y_continuous(expand = c(0,0), limits = c(0, limmax+0.05*limmax))+
+      theme_classic()+
+      theme(axis.text.x = element_text(colour = "black", size = 7),
+            axis.text.y = element_text(colour = "black", size = 6),
+            axis.title.x = element_blank(),
+            axis.title.y = element_text(size = 7),
+            legend.key.size = unit(0.4, "cm"),
+            legend.text = element_text(size = 6),
+            legend.title = element_text(size = 7))
+    if(gg!="grey25"){
+      plt = plt+geom_bar(mapping = aes_string(x = "pred_ctall", fill = gg))+
+        scale_fill_manual(values = cols_use)
+    } else{
+      plt = plt+geom_bar(mapping = aes_string(x = "pred_ctall"), fill = gg)
+    }
+    pdf(paste0("results/Div-seq/barplots_glutnpc/bar_", i, gg, ".pdf"), width = 4.8, height = 1.25)
+    print(plt)
+    dev.off()
+  }
+}
+```
+
+
+## UMAPs
+UMAP with predicted cell types
+
+```{r}
+plt = DimPlot(div_dat, reduction = "umap_harmony", group.by = "pred_ctall", shuffle = T)+
+  scale_colour_manual(values = cols_cc)+
+  theme(aspect.ratio = 1,
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        plot.title = element_blank(),
+        legend.position = "none")
+
+pdf("results/Div-seq/Divseq_results/divseq_umap_predct.pdf", height = 2.7, width = 2.7)
+print(plt)
+dev.off()
+```
+
+
+## Line plot
+Line plot for major cell types
+
+```{r}
+majorct = sapply(strsplit(meta_div_pred$pred_ctall, "_"), function(x) x[1])
+majorct[meta_div_pred$pred_ctall %in% c("epen_clus_4", "epen_clus_3")] = "epen_a"
+majorct[meta_div_pred$pred_ctall %in% c("epen_clus_1", "epen_clus_13", 
+                                        "epen_clus_7","epen_clus_14")] = "epen_n"
+plot_df = reshape2::melt(prop.table(table(majorct, meta_div_pred$sample), margin = 2))
+plot_df$Var2 = as.character(plot_df$Var2)
+plot_df$Var2[plot_df$Var2=="1_wpi_pos"] = "1_wpi"
+plot_df$Var2 = factor(plot_df$Var2, levels = c("1_wpi", "2_wpi", "4_wpi", 
+                                               "6_wpi", "8_wpi", "12_wpi"))
+
+cols_use = c(unname(cols_cc[grepl("epen", names(cols_cc))][c(1,15,8)]), "#6091ba", "#d05959",
+             "#feb72a", "#E6530D", "#E43D88", "#712166")
+names(cols_use) = c("epen_a", "epen_n", "epen_q", "glut", "GABA", "npc", 
+                    "microglia", "oligodendrocyte", "endothelial")
+ln_plt = ggplot(plot_df, aes(x = Var2, y = value, 
+                    group = majorct, colour = majorct))+
+  geom_point(size = 1)+
+  geom_line()+
+  scale_colour_manual(values = cols_use)+
+  labs(x = "time (wpi)", y = "proportion per timepoint",
+       colour = "major cell type\n(predicted)")+
+  theme_classic()+
+  theme(aspect.ratio = 1/2,
+        axis.text = element_text(size = 7, colour = "black"),
+        axis.title = element_text(size = 7.5),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 7.5),
+        legend.key.size = unit(0.55, "cm"))
+
+pdf("results/Div-seq/Divseq_results/divseq_majorct_lines.pdf", height = 3, width = 5)
+print(ln_plt)
+dev.off()
+```
+
+
+
+# Integrating SS and 1 wpi neg
+Load data
+
+```{r}
+ax_srat = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+ax_srat = AddMetaData(ax_srat, metadata = meta)
+meta_regs = read.csv("data/processed/multiome/WP_region_predictions.csv", 
+                    header = T, row.names = 1)
+newcellnames = rownames(meta_regs)
+newcellnames = gsub("-a1-1", "-1_1", newcellnames)
+newcellnames = gsub("-a1-2", "-1_2", newcellnames)
+newcellnames = gsub("-a3-1", "-1_3", newcellnames)
+newcellnames = gsub("-a3-2", "-1_4", newcellnames)
+rownames(meta_regs) = newcellnames
+ax_srat = AddMetaData(ax_srat, metadata = meta_regs)
+ax_srat$regions_all = ax_srat$pred_regions_top
+ax_srat$regions_all[is.na(ax_srat$regions_all)] = ax_srat$regions[is.na(ax_srat$regions_all)]
+
+neg_srat = readRDS("data/expression/axolotl_reclust/divseq_1wpi_neg.RDS")
+reg_pred = read.csv("results/Div-seq/preds_lr_regions_neg_all.csv", header = T, row.names = 1)
+ct_pred = read.csv("results/Div-seq/preds_rfc_CT_neg_all.csv", header = T, row.names = 1)
+
+neg_srat$pred_regs = reg_pred[colnames(neg_srat),"pred_lr"]
+neg_srat$pred_ctall = ct_pred[colnames(neg_srat),"pred_rfc"]
+```
+
+Merge datasets
+
+```{r}
+# filter metadata
+ax_srat@meta.data = ax_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "chem", "high_level_anno", "cellclusters", "regions_all")]
+colnames(ax_srat@meta.data)[4] = "sample"
+neg_srat@meta.data = neg_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "sample", "seurat_clusters", "pred_ctall", "pred_regs"), drop = F]
+
+ax_neg_srat = merge(ax_srat, neg_srat)
+```
+
+Joint processing
+
+```{r}
+ax_neg_srat$sample_dat = ax_neg_srat$sample
+ax_neg_srat$sample_dat[grepl("wpi", ax_neg_srat$sample_dat)] = "div"
+ax_neg_srat = NormalizeData(ax_neg_srat)
+ax_neg_srat = FindVariableFeatures(ax_neg_srat, nfeatures = 10000)
+ax_neg_srat = ScaleData(ax_neg_srat, vars.to.regress = c("nCount_RNA", "percent.mt", "sample_dat"))
+ax_neg_srat = RunPCA(ax_neg_srat, verbose = F)
+ElbowPlot(ax_neg_srat, ndims = 50)
+```
+
+Run UMAP
+
+```{r}
+ax_neg_srat = RunUMAP(ax_neg_srat, dims = 1:20, verbose = F)
+UMAPPlot(ax_neg_srat, group.by = "sample_dat")
+UMAPPlot(ax_neg_srat, group.by = "cellclusters")
+```
+
+Integrate with Harmony based on multiome/v3.1/div-seq
+
+```{r}
+ax_neg_srat@reductions$harmony = NULL
+ax_neg_srat@reductions$umap_harmony = NULL
+# Run Harmony
+ax_neg_srat = harmony::RunHarmony(ax_neg_srat, group.by.vars = "sample_dat", tau = 30, 
+                                  plot_convergence = F, assay.use = "RNA")
+
+# Run UMAP on Harmony dimentions
+ax_neg_srat = RunUMAP(ax_neg_srat, reduction = "harmony", 
+                      dims = 1:15, reduction.name = "umap_harmony")
+```
+
+Check integration
+
+```{r}
+ax_neg_srat$sample_simp = ax_neg_srat$sample
+ax_neg_srat$sample_simp[ax_neg_srat$sample_simp!="1_wpi_neg"] = "SS"
+ax_neg_srat$ctlabels = ax_neg_srat$cellclusters
+ax_neg_srat$ctlabels[is.na(ax_neg_srat$ctlabels)] = ax_neg_srat$pred_ctall[is.na(ax_neg_srat$ctlabels)]
+ax_neg_srat$reglabels = ax_neg_srat$regions_all
+ax_neg_srat$reglabels[is.na(ax_neg_srat$reglabels)] = ax_neg_srat$pred_regs[is.na(ax_neg_srat$reglabels)]
+DimPlot(ax_neg_srat, group.by = "sample_dat", reduction = "umap_harmony")
+DimPlot(ax_neg_srat, group.by = "ctlabels", reduction = "umap_harmony")
+plt1 = DimPlot(ax_neg_srat, group.by = "ctlabels", reduction = "umap_harmony", 
+               label = T, split.by = "sample_dat")
+plt2 = DimPlot(ax_neg_srat, group.by = "ctlabels", reduction = "umap_harmony", 
+               label = T, split.by = "sample")
+plt3 = DimPlot(ax_neg_srat, group.by = "sample_dat", reduction = "umap_harmony", label = T)
+plt4 = DimPlot(ax_neg_srat, group.by = "reglabels", reduction = "umap_harmony", label = T)
+plt5 = DimPlot(ax_neg_srat, group.by = "ctlabels", reduction = "umap_harmony", 
+               label = T, split.by = "reglabels")
+
+DimPlot(ax_neg_srat, group.by = "ctlabels", reduction = "umap_harmony", 
+        label = T, split.by = "sample_simp")+NoLegend()
+DimPlot(ax_neg_srat, group.by = "sample_simp", reduction = "umap_harmony")
+```
+
+Clustering
+
+```{r}
+ax_neg_srat = FindNeighbors(ax_neg_srat, reduction = "harmony", 
+                            dims = 1:15, graph.name = "integNeg")
+ax_neg_srat = FindClusters(ax_neg_srat, resolution = c(0.8, 1, 1.5, 2, 2.5, 3, 5, 10), 
+                           graph.name = "integNeg", algorithm = 2, verbose = F)
+
+DimPlot(ax_neg_srat, group.by = "integNeg_res.10", 
+        reduction = "umap_harmony", label = T)+NoLegend()
+```
+
+DE between protocols
+
+```{r}
+mk_overall = presto::wilcoxauc(ax_neg_srat, group_by = "sample_simp", pseudocount.use = 0.1)
+saveRDS(mk_overall, file = "results/Div-seq/SS_1wpineg_overall_DE.RDS")
+
+# DE per cell type
+ct_mk_l = list()
+for(ct in unique(ax_neg_srat$ctlabels)){
+  sub_dat = ax_neg_srat[,ax_neg_srat$ctlabels==ct]
+  if(length(unique(sub_dat$sample_simp))>1){
+    ct_mk_l[[ct]] = presto::wilcoxauc(sub_dat, 
+                                      group_by = "sample_simp", pseudocount.use = 0.1)
+  }
+}
+saveRDS(ct_mk_l, file = "results/Div-seq/SS_1wpineg_celltype_DE.RDS")
+
+# DE per cluster
+cl_mk_l = list()
+for(cl in unique(ax_neg_srat$integNeg_res.10)){
+    sub_dat = ax_neg_srat[,ax_neg_srat$integNeg_res.10==cl]
+  if(length(unique(sub_dat$sample_simp))>1){
+    cl_mk_l[[cl]] = presto::wilcoxauc(sub_dat, 
+                                      group_by = "sample_simp", pseudocount.use = 0.1)
+  }
+}
+saveRDS(cl_mk_l, file = "results/Div-seq/SS_1wpineg_cluster_DE.RDS")
+```
+
+Filter the DE genes to those significant and meaningful
+
+```{r}
+ct_mk_l_filt = list()
+for(n in names(ct_mk_l)){
+  ct_mk_l_filt[[n]] = ct_mk_l[[n]][ct_mk_l[[n]]$padj<=0.05 & ct_mk_l[[n]]$logFC>=0.3,]
+  ct_mk_l_filt[[n]] = ct_mk_l_filt[[n]][!startsWith(ct_mk_l_filt[[n]]$feature, "AMEX") &
+                                        !startsWith(ct_mk_l_filt[[n]]$feature, "LOC") &
+                                        !grepl("..", ct_mk_l_filt[[n]]$feature, fixed = T),]
+}
+
+cl_mk_l_filt = list()
+for(n in names(cl_mk_l)){
+  cl_mk_l_filt[[n]] = cl_mk_l[[n]][cl_mk_l[[n]]$padj<=0.05 & cl_mk_l[[n]]$logFC>=0.3,]
+  cl_mk_l_filt[[n]] = cl_mk_l_filt[[n]][!startsWith(cl_mk_l_filt[[n]]$feature, "AMEX") &
+                                      !startsWith(cl_mk_l_filt[[n]]$feature, "LOC") &
+                                      !grepl("..", cl_mk_l_filt[[n]]$feature, fixed = T),]
+}
+```
+
+Count DE genes per cell type and condition
+
+```{r}
+n_de = matrix(0, ncol = 2, nrow = length(ct_mk_l_filt))
+colnames(n_de) = c("SS", "1_wpi_neg")
+rownames(n_de) = names(ct_mk_l_filt)
+for(n in names(ct_mk_l_filt)){
+  tab = table(ct_mk_l_filt[[n]]$group)
+  n_de[n, "SS"] = tab["SS"]
+  n_de[n, "1_wpi_neg"] = tab["1_wpi_neg"]
+}
+n_de[is.na(n_de)] = 0
+
+n_de_cl = matrix(0, ncol = 2, nrow = length(cl_mk_l_filt))
+colnames(n_de_cl) = c("SS", "1_wpi_neg")
+rownames(n_de_cl) = names(cl_mk_l_filt)
+for(n in names(cl_mk_l_filt)){
+  tab = table(cl_mk_l_filt[[n]]$group)
+  n_de_cl[n, "SS"] = tab["SS"]
+  n_de_cl[n, "1_wpi_neg"] = tab["1_wpi_neg"]
+}
+n_de_cl[is.na(n_de_cl)] = 0
+```
+
+Get GO Terms, without repeated genes
+
+```{r}
+genes_comm = c()
+for(ct in names(ct_mk_l_filt)){
+  if(any(n_de[ct,]>=100)){
+    g = ct_mk_l_filt[[ct]]$feature
+    genes_comm = c(genes_comm, g)
+  }
+}
+common = names(table(genes_comm)[table(genes_comm)>=4])
+
+go_ct_l2 = list()
+for(ct in names(ct_mk_l_filt)){
+  for(g in colnames(n_de)){
+    if(n_de[ct,g]>=100){
+      id = paste0(ct, "..", g)
+      genes = ct_mk_l_filt[[ct]]$feature[ct_mk_l_filt[[ct]]$group==g]
+      #
+      genes = genes[!(genes %in% common)]
+      go_ct_l2[[id]] = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP")$result
+    }
+  }
+}
+```
+
+Compare clusters and conditions and cell types
+
+```{r}
+df_ctcl = data.frame(table(ax_neg_srat$ctlabels, ax_neg_srat$integNeg_res.10))
+pheatmap::pheatmap(table(ax_neg_srat$ctlabels, ax_neg_srat$integNeg_res.10), 
+                   fontsize = 6.5, clustering_method = "ward.D", scale = "row")
+
+df_clct = data.frame(table(ax_neg_srat$integNeg_res.10, ax_neg_srat$sample_simp))
+tab_s = prop.table(table(ax_neg_srat$integNeg_res.10, ax_neg_srat$sample_simp), margin = 2)
+pheatmap::pheatmap(tab_s, fontsize = 6.5, clustering_method = "ward.D")
+pheatmap::pheatmap(tab_s[tab_s[,1]>tab_s[,2]*1.1,], fontsize = 6.5, clustering_method = "ward.D")
+```
+Count number of DE genes - plot
+
+```{r}
+plot_df = reshape2::melt(n_de)
+ord = rowSums(n_de)
+plot_df$Var1 = factor(plot_df$Var1, levels = rownames(n_de)[order(ord, decreasing = T)])
+
+ggplot(plot_df, aes(x = Var1, y = value, fill = Var2))+
+  geom_col()+
+  scale_y_continuous(expand = c(0,0), limits = c(0, max(ord)+max(ord)*0.05))+
+  labs(x = "Cell Types", y = "# DE genes")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+```
+
+Save data
+
+```{r}
+saveRDS(ax_neg_srat, file = "data/processed/SS_1wpiNeg_srat.RDS")
+```
+
+
+

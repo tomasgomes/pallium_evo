@@ -1,0 +1,1306 @@
+---
+title: "Region Analysis"
+output: html_notebook
+---
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(parallel)
+library(doParallel)
+library(foreach)
+library(ggdendro)
+library(presto)
+library(scatterpie)
+```
+
+Set colours for cell types and regions
+
+```{r}
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+cols_cc = c(
+#epen
+"#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472",
+#gaba
+"#700209", "#75090e","#7a0f13", "#801517", "#851a1b", "#8a1f1f", "#902423", "#952927", "#9a2d2c","#a03230", "#a53634", "#aa3a39", "#b03f3d","#b54342", "#ba4846", "#c04c4b", "#c5504f", "#ca5554", "#d05959", "#d55e5e","#73050c", "#780c11","#8d2221", "#982b2a","#a23432", "#a83837", "#b2413f", "#b84544", "#bd4a49", "#c85352", #"#cd5756",
+#glut
+"#054674", "#134d7b","#1d5481", "#265a88", "#2e618e", "#73a4cb", "#366995", "#3e709c", "#4677a2","#4d7ea9", "#5586b0", "#5c8db7", "#6495bd","#6b9cc4", "#7bacd2", "#8ebfe4", "#96c7eb", "#9ecff2", "#18507e", "#18507e","#2a5e8b", "#497ba6","#5889b3", "#6fa0c8","#7fafd6", "#6091ba", "#5182ac", "#3a6c98", "#a6d7f9",
+#npc
+"#ffb120", "#feb72a","#fdbc34", "#fcc13d", "#fbc745", "#facc4e", "#f9d156", "#f8d65f", "#f8da68","#f7df70", "#f7e479", "#f7e882", "#f7ed8a", "#f7f193", "#eca319"
+)
+ccnames = unique(sort(meta$cellclusters))
+names(cols_cc) = c(ccnames[grepl("epen", ccnames)], ccnames[grepl("GABA", ccnames)],ccnames[grepl("glut", ccnames)],ccnames[grepl("npc", ccnames)])
+
+cols_cc = c(cols_cc, "microglia_8" = "#E6530D", 
+            "oligodendrocyte_15" = "#E43D88", "oligodendrocyte_10" = "#F662A5",
+            "endothelial_11" = "#712166", "endothelial_12" = "#B0279D", 
+            "endothelial_14" = "#BE5AB0")
+
+reg_cols = c("other/unknown_pred" = "#C7CCC7", 
+             "medial" = "#52168D", "medial_pred" = "#661CB0", 
+             "dorsal" = "#C56007", "dorsal_pred" = "#ED7307", 
+             "lateral" = "#118392", "lateral_pred" = "#16A3B6")
+reg_cols_simp = c("medial" = "#52168D", "dorsal" = "#C56007", "lateral" = "#118392")
+```
+
+
+
+# Load data
+Load expression data
+
+```{r}
+ax_srat = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+ax_srat = AddMetaData(ax_srat, metadata = meta)
+```
+
+Mean expression
+
+```{r}
+axo_mean_exp = readRDS("results/pairwiseDE/axolotl_avgExp.RDS")$cellclusters
+```
+
+
+
+# Region analysis
+## Whole pallium characterisation
+Correlating each cell with populations of each region
+
+```{r}
+sub_dat = ax_srat[,ax_srat$regions!="whole pallium"]
+sub_pal = ax_srat[,ax_srat$regions=="whole pallium"]
+
+# choose cell types in more than one region (<95% in one region) and w/ at least 3 cells in 2 regions
+tab_reg = table(sub_dat@meta.data$cellclusters, sub_dat$regions)[-1,]
+tab_reg_perc = tab_reg/rowSums(tab_reg)*100
+cts = rownames(tab_reg_perc)[apply(tab_reg_perc, 1, function(x) all(x<95))]
+cts = rownames(tab_reg[cts,])[apply(tab_reg[cts,], 1, function(x) sum(x>3)>1)]
+
+sub_dat$ct_reg = paste0(sub_dat$cellclusters, "..", sub_dat$regions)
+sub_dat$ct_reg[!(sub_dat$cellclusters %in% cts)] = sub_dat$cellclusters[!(sub_dat$cellclusters %in% cts)]
+
+# Get the mean expression per cluster region
+avg_exp_l = list()
+for(n in c(unique(sub_dat$cellclusters), "all")){
+  if(n %in% names(mk_reg_l)){
+    g_cl = mk_reg_l[[n]][mk_reg_l[[n]]$p_val_adj<=0.05 & mk_reg_l[[n]]$avg_log2FC>=0.75,"gene"]
+    if(n=="all"){
+      avg_exp_l[[n]] = AverageExpression(sub_dat, 
+                                         assays = "RNA", group.by = "regions")$RNA[g_cl,]
+    } else{
+      avg_exp_l[[n]] = AverageExpression(sub_dat[,sub_dat$cellclusters==n], 
+                                         assays = "RNA", group.by = "regions")$RNA[g_cl,]
+    }
+  } else{
+    g_cl = mk_reg_l[["all"]][mk_reg_l[["all"]]$p_val_adj<=0.05 &
+                               mk_reg_l[["all"]]$avg_log2FC>=0.75,"gene"]
+    avg_exp_l[[n]] = AverageExpression(sub_dat[,sub_dat$cellclusters==n], 
+                                        assays = "RNA", group.by = "regions")$RNA[g_cl,]
+  }
+}
+avg_exp_l = avg_exp_l[unlist(lapply(avg_exp_l, function(x) !is.null(dim(x))))]
+
+cor_reg_l = list()
+for(n in names(avg_exp_l)){
+  if(dim(avg_exp_l[[n]])[1]>0){
+    g = rownames(avg_exp_l[[n]])
+    cor_reg_l[[n]] = if(n!="all"){
+      t(cor(as.matrix(ax_srat@assays$RNA@data[g,ax_srat$cellclusters==n]),avg_exp_l[[n]], method = "pea"))
+    } else{
+      t(cor(as.matrix(ax_srat@assays$RNA@data[g,!(ax_srat$cellclusters %in% names(avg_exp_l))]),
+            avg_exp_l[[n]], method = "pea"))
+    }
+    cor_reg_l[[n]] = cbind(data.frame(rownames(cor_reg_l[[n]])), cor_reg_l[[n]])
+    colnames(cor_reg_l[[n]])[1] = "regions"
+  }
+}
+cor_wp_avg = Reduce(function(dtf1, dtf2) merge(dtf1, dtf2, by = 1, all = T), cor_reg_l)
+rownames(cor_wp_avg) = cor_wp_avg[,1]
+cor_wp_avg = data.frame(t(data.frame(cor_wp_avg[,-1])))
+rownames(cor_wp_avg) = gsub(".", "-", rownames(cor_wp_avg), fixed = T)
+
+cor_wp_avg$cellclusters = ax_srat@meta.data[rownames(cor_wp_avg),"cellclusters"]
+cor_wp_avg$regions = ax_srat@meta.data[rownames(cor_wp_avg),"regions"]
+cor_wp_avg$regions_pred = apply(cor_wp_avg[,1:3], 1, 
+                                       function(x) colnames(cor_wp_avg)[which.max(x)])
+
+#table(cor_wp_avg$regions, cor_wp_avg$regions_pred)
+```
+
+Get markers for cell types, all and per subset
+
+```{r}
+ax_srat = SetIdent(ax_srat, value = "cellclusters")
+outname = "./results/RegionAnalysis/mk_ct_allData_subsets.RDS"
+if(file.exists(outname)){
+  mk_ct_sub = readRDS(outname)
+} else{
+  subsets = list("ependymal" = unique(ax_srat$cellclusters[grepl("epen", ax_srat$cellclusters)]),
+                 "neuronal" = unique(ax_srat$cellclusters[grepl("GABA", ax_srat$cellclusters) | 
+                                                            grepl("glut", ax_srat$cellclusters) |
+                                                            grepl("npc_", ax_srat$cellclusters)]),
+                 "npc" = unique(ax_srat$cellclusters[grepl("npc_", ax_srat$cellclusters)]),
+                 "GABA" = unique(ax_srat$cellclusters[grepl("GABA", ax_srat$cellclusters)]),
+                 "glut" = unique(ax_srat$cellclusters[grepl("glut", ax_srat$cellclusters)]),
+                 "all" = unique(ax_srat$cellclusters))
+  mk_ct_sub = list()
+  for(n in names(subsets)){
+    print(n)
+    mk_ct_sub[[n]] = presto::wilcoxauc(ax_srat[,ax_srat$cellclusters %in% subsets[[n]]], 
+                                       pseudocount.use = 0.1, group_by = "cellclusters")
+  }
+  saveRDS(mk_ct_sub, file = outname)
+}
+```
+
+
+## Whole pallium region classification
+Saving matrices and metadata to load in Jupyter notebooks
+
+```{r}
+outname = "data/processed/axolotl_parts/ax_regions_data.mtx"
+outname2 = "data/processed/axolotl_parts/ax_regions_counts.mtx"
+if(!file.exists(outname)){
+  cells = ax_srat@meta.data$cellclusters!="doublets"
+  
+  metadata_ax = ax_srat@meta.data[cells,c("sample", "chem", "classes", 
+                                          "subclasses", "cellclusters", "regions")]
+  write.csv(metadata_ax, file = "data/processed/axolotl_parts/ax_regions_meta.csv", 
+            col.names = T, row.names = T, quote = F)
+  write.csv(ax_srat@assays$RNA@meta.features, file = "data/processed/axolotl_parts/ax_regions_genes.csv", 
+            col.names = T, row.names = T, quote = F)
+  
+  Matrix::writeMM(Matrix::t(ax_srat@assays$RNA@data[,cells]), outname)
+  Matrix::writeMM(Matrix::t(ax_srat@assays$RNA@counts[,cells]), outname2)
+}
+```
+
+Load results from models
+
+```{r}
+all_pred_f = list.files("results/multiome/", pattern = "preds_")
+# test set results
+test_res = lapply(all_pred_f[grepl("ax.csv", all_pred_f)], 
+                  function(x) read.csv(paste0("results/multiome/", x), header = T))
+names(test_res) = unlist(lapply(strsplit(all_pred_f[grepl("ax.csv", all_pred_f)], ".", fixed = T),
+                                function(x) x[1]))
+
+# WP results
+wp_res = lapply(all_pred_f[grepl("wp", all_pred_f)], 
+                function(x) read.csv(paste0("results/multiome/", x), header = T))
+names(wp_res) = unlist(lapply(strsplit(all_pred_f[grepl("wp", all_pred_f)], ".", fixed = T),
+                              function(x) x[1]))
+```
+
+Compare RFC and LR
+
+```{r}
+test_labs_l = list()
+for(g in c("all", "ep", "neu")){
+  n1 = names(test_res)[grepl(g, names(test_res)) & grepl("lr", names(test_res))]
+  n2 = names(test_res)[grepl(g, names(test_res)) & grepl("rfc", names(test_res))]
+  test_labs_l[[g]] = merge(test_res[[n1]], test_res[[n2]], by = 1)[,c(1:3,8)]
+  print(g)
+  print(table(test_labs_l[[g]]$y_test.x, test_labs_l[[g]]$pred_lr))
+  print(table(test_labs_l[[g]]$y_test.x, test_labs_l[[g]]$pred_rfc))
+  print(table(test_labs_l[[g]]$pred_lr, test_labs_l[[g]]$pred_rfc))
+}
+
+wp_labs_l = list()
+for(g in c("all", "ep", "neu")){
+  n1 = names(wp_res)[grepl(g, names(wp_res)) & grepl("lr", names(wp_res))]
+  n2 = names(wp_res)[grepl(g, names(wp_res)) & grepl("rfc", names(wp_res))]
+  wp_labs_l[[g]] = merge(wp_res[[n1]], wp_res[[n2]], by = 1)[,c(1,2,6)]
+  print(g)
+  print(table(wp_labs_l[[g]]$pred_lr, wp_labs_l[[g]]$pred_rfc))
+} 
+
+gplots::venn(list(rfc = which(apply(wp_res$preds_rfc_wp_all[,3:5], 1, max)<0.75), 
+                  lr = which(apply(wp_res$preds_lr_wp_all[,3:5], 1, max)<0.75)))
+## it's not the same cells with "uncertainty"
+```
+
+Plot confusion matrices
+
+```{r, fig.height=2.3, fig.width=3}
+confMatRegionsPlot = function(c1, c2, lab1 = "lab1", lab2 = "lab2"){
+  c1 = factor(c1, levels = c("medial", "dorsal", "lateral"))
+  c2 = factor(c2, levels = c("medial", "dorsal", "lateral"))
+  tab = table(c1, c2)
+  tabnorm = tab/rowSums(tab)*100
+  plot_df = data.frame(tab)
+  colnames(plot_df) = c(lab1, lab2, "freq")
+  plot_df$perc = data.frame(tabnorm)$Freq
+  
+  plt = ggplot(plot_df, aes_string(x = lab2, y = lab1, fill = "perc", label = "freq"))+
+    geom_tile()+geom_text(colour = "white", size = 2.75)+
+    scale_x_discrete(expand = c(0,0))+
+    scale_y_discrete(expand = c(0,0))+
+    scale_fill_viridis_c(limits = c(0,100))+
+    guides(fill = guide_colourbar(title = "% (rows)", ticks = F, frame.colour = "grey20"))+
+    theme_classic()+
+    theme(aspect.ratio = 1,
+          axis.line = element_blank(),
+          axis.text = element_text(size = 7, colour = "black"),
+          axis.title = element_text(size = 8),
+          legend.title = element_text(size = 8),
+          legend.text = element_text(size = 7))
+  
+  return(plt)
+}
+
+confMatRegionsPlot(test_labs_l$all$y_test.x, test_labs_l$all$pred_lr, "Original", "LR")
+confMatRegionsPlot(test_labs_l$all$y_test.x, test_labs_l$all$pred_rfc, "Original", "RFC")
+confMatRegionsPlot(test_labs_l$all$pred_lr, test_labs_l$all$pred_rfc, "LR", "RFC")
+confMatRegionsPlot(wp_labs_l$all$pred_lr, wp_labs_l$all$pred_rfc, "LR", "RFC")
+```
+
+Compare all with neu/ep (test sets are different so overlap is not complete)
+
+```{r}
+test_all_neu = merge(test_labs_l$all, test_labs_l$neu, by = 1)
+table(test_all_neu$pred_rfc.x, test_all_neu$pred_rfc.y)
+table(test_all_neu$pred_lr.x, test_all_neu$pred_lr.y)
+
+test_all_ep = merge(test_labs_l$all, test_labs_l$ep, by = 1)
+table(test_all_ep$pred_rfc.x, test_all_ep$pred_rfc.y)
+table(test_all_ep$pred_lr.x, test_all_ep$pred_lr.y)
+
+
+wp_all_neu = merge(wp_labs_l$all, wp_labs_l$neu, by = 1)
+table(wp_all_neu$pred_rfc.x, wp_all_neu$pred_rfc.y)
+table(wp_all_neu$pred_lr.x, wp_all_neu$pred_lr.y)
+
+wp_all_ep = merge(wp_labs_l$all, wp_labs_l$ep, by = 1)
+table(wp_all_ep$pred_rfc.x, wp_all_ep$pred_rfc.y)
+table(wp_all_ep$pred_lr.x, wp_all_ep$pred_lr.y)
+```
+
+Compare classification of populations exclusive to a region. This can tell us which models are preforming better (all or neu, lr or rfc). It can also tell us, in WP, how much classification variability we get for cells from these populations
+
+```{r}
+regs_meta = ax_srat@meta.data[ax_srat$regions!="whole pallium",]
+all_meta = ax_srat@meta.data
+
+# choose cell types only one region (>=90% in one region, >=20% in one region with WP)
+tab_reg = table(regs_meta$cellclusters, regs_meta$regions)
+tab_reg_perc = tab_reg/rowSums(tab_reg)*100
+cts = rownames(tab_reg_perc)[apply(tab_reg_perc, 1, function(x) any(x>=90))]
+tab_all = table(all_meta$cellclusters, all_meta$regions)
+tab_all_perc = tab_all/rowSums(tab_all)*100
+cts_wp = rownames(tab_all_perc)[apply(tab_all_perc[,-4], 1, function(x) any(x>=20))]
+cts_use = intersect(cts, cts_wp)
+
+# define metadata with likely region for "single region" clusters
+single_meta = all_meta[all_meta$cellclusters %in% cts_use,]
+tab_single = table(single_meta$cellclusters, single_meta$regions)[,-4]
+ct_reg = colnames(tab_single)[apply(tab_single, 1, which.max)]
+names(ct_reg) = rownames(tab_single)
+single_meta$likelyregion = ct_reg[as.character(single_meta$cellclusters)]
+
+# test fractions testing
+print("Test fractions")
+test_all_single = test_labs_l$all[test_labs_l$all$X %in% rownames(single_meta),]
+table(single_meta$likelyregion, test_all_single$pred_lr[match(rownames(single_meta),
+                                                              test_all_single$X)])
+table(single_meta$likelyregion, test_all_single$pred_rfc[match(rownames(single_meta),
+                                                               test_all_single$X)])
+
+test_neu_single = test_labs_l$neu[test_labs_l$neu$X %in% rownames(single_meta),]
+table(single_meta$likelyregion, test_neu_single$pred_lr[match(rownames(single_meta),
+                                                              test_neu_single$X)])
+table(single_meta$likelyregion, test_neu_single$pred_rfc[match(rownames(single_meta),
+                                                               test_neu_single$X)])
+
+# WP testing
+print("WP")
+wp_all_single = wp_labs_l$all[wp_labs_l$all$X %in% rownames(single_meta),]
+table(single_meta$likelyregion, wp_all_single$pred_lr[match(rownames(single_meta), wp_all_single$X)])
+table(single_meta$likelyregion, wp_all_single$pred_rfc[match(rownames(single_meta), wp_all_single$X)])
+
+wp_neu_single = wp_labs_l$neu[wp_labs_l$neu$X %in% rownames(single_meta),]
+table(single_meta$likelyregion, wp_neu_single$pred_lr[match(rownames(single_meta), wp_neu_single$X)])
+table(single_meta$likelyregion, wp_neu_single$pred_rfc[match(rownames(single_meta), wp_neu_single$X)])
+```
+
+More confusion matrices
+
+```{r, fig.height=2.3, fig.width=3}
+confMatRegionsPlot(single_meta$likelyregion, 
+                   test_all_single$pred_lr[match(rownames(single_meta),test_all_single$X)], "LikelyRegion", "LRprediction")
+confMatRegionsPlot(single_meta$likelyregion, 
+                   test_all_single$pred_rfc[match(rownames(single_meta),test_all_single$X)], "LikelyRegion", "RFCprediction")
+confMatRegionsPlot(single_meta$likelyregion, 
+                   wp_all_single$pred_lr[match(rownames(single_meta), wp_all_single$X)], "LikelyRegion", "LRprediction")
+confMatRegionsPlot(single_meta$likelyregion, 
+                   wp_all_single$pred_rfc[match(rownames(single_meta), wp_all_single$X)], "LikelyRegion", "RFCprediction")
+```
+
+Probabilities per cell type - the lower threshold for region-specific clusters may be the one to use to decide, in WP, which cells belong to neither microdissected region
+
+```{r, fig.width=12, fig.height=9}
+probDistPlots = function(dat){
+  dat$variable = factor(dat$variable, levels = c("medial", "dorsal", "lateral"))
+  dat$issingle = factor(dat$issingle, levels = c("TRUE", "FALSE"))
+  dat$cellclusters = factor(dat$cellclusters, 
+                            levels = unique(dat$cellclusters[order(paste0(dat$issingle, dat$cellclusters), decreasing = T)]))
+  
+  plt = ggplot(dat, aes(x = variable, y = value, fill = variable, colour = issingle))+
+    facet_wrap(~cellclusters, scales = "free_x")+
+    geom_violin(scale = "width")+
+    scale_color_manual(values = c("black", "grey85"))+
+    theme_classic()+
+    theme(axis.text.x = element_blank(), 
+          axis.ticks.x = element_blank(),
+          axis.text.y = element_text(size = 7, colour = "black"), 
+          axis.title = element_text(size = 8),
+          strip.text = element_text(size = 8),
+          legend.title = element_text(size = 8),
+          legend.text = element_text(size = 7))
+  
+  return(plt)
+}
+
+all_meta = ax_srat@meta.data[,c("cellclusters", "regions")]
+
+wp_meta_lr = merge(all_meta, wp_res$preds_lr_wp_all, by.x = 0, by.y = 1)
+wp_meta_lr = reshape2::melt(wp_meta_lr, measure.vars = c("dorsal", "lateral", "medial"))
+wp_meta_lr$issingle = wp_meta_lr$cellclusters %in% cts_use
+
+allcts = levels(factor(wp_meta_lr$cellclusters))
+probDistPlots(wp_meta_lr)
+
+wp_max_lr = merge(all_meta, wp_res$preds_lr_wp_all, by.x = 0, by.y = 1)
+wp_max_lr$maxval = apply(wp_max_lr[,5:7], 1, max)
+wp_max_lr$wmax = apply(wp_max_lr[,5:7], 1, function(x) colnames(wp_max_lr[,5:7])[which.max(x)])
+wp_max_lr$issingle = wp_max_lr$cellclusters %in% cts_use
+
+
+wp_meta_rfc = merge(all_meta, wp_res$preds_rfc_wp_all, by.x = 0, by.y = 1)
+wp_meta_rfc = reshape2::melt(wp_meta_rfc, measure.vars = c("dorsal", "lateral", "medial"))
+wp_meta_rfc$issingle = wp_meta_rfc$cellclusters %in% cts_use
+
+allcts = levels(factor(wp_meta_rfc$cellclusters))
+probDistPlots(wp_meta_rfc)
+
+wp_max_rfc = merge(all_meta, wp_res$preds_rfc_wp_all, by.x = 0, by.y = 1)
+wp_max_rfc$maxval = apply(wp_max_rfc[,5:7], 1, max)
+wp_max_rfc$wmax = apply(wp_max_rfc[,5:7], 1, function(x) colnames(wp_max_rfc[,5:7])[which.max(x)])
+wp_max_rfc$issingle = wp_max_rfc$cellclusters %in% cts_use
+```
+
+Variability across cell types
+
+```{r}
+all_meta = ax_srat@meta.data[,c("cellclusters", "regions")]
+
+reg_meta_lr = merge(all_meta, test_res$preds_lr_allax, by.x = 0, by.y = 1)
+res_l = list("acc" = c(), "n" = c())
+for(ct in unique(reg_meta_lr$cellclusters)){
+  subdf = reg_meta_lr[reg_meta_lr$cellclusters==ct,]
+  subdf$y_test = factor(subdf$y_test, levels= c("medial", "dorsal", "lateral"))
+  subdf$pred_lr = factor(subdf$pred_lr, levels= c("medial", "dorsal", "lateral"))
+  tabdf = table(subdf$y_test, subdf$pred_lr)
+  res_l[["acc"]] = c(res_l[["acc"]] , sum(diag(tabdf))/length(subdf$y_test)*100)
+  res_l[["n"]] = c(res_l[["n"]], length(subdf$y_test))
+}
+test_lr_ctacc = data.frame(res_l)
+test_lr_ctacc$cellclusters = unique(reg_meta_lr$cellclusters)
+
+ggplot(test_lr_ctacc, aes(x = n, y = acc, label = cellclusters))+
+  geom_text()+
+  theme_classic()
+
+reg_meta_rfc = merge(all_meta, test_res$preds_rfc_allax, by.x = 0, by.y = 1)
+res_l = list("acc" = c(), "n" = c())
+for(ct in unique(reg_meta_rfc$cellclusters)){
+  subdf = reg_meta_rfc[reg_meta_rfc$cellclusters==ct,]
+  subdf$y_test = factor(subdf$y_test, levels= c("medial", "dorsal", "lateral"))
+  subdf$pred_rfc = factor(subdf$pred_rfc, levels= c("medial", "dorsal", "lateral"))
+  tabdf = table(subdf$y_test, subdf$pred_rfc)
+  res_l[["acc"]] = c(res_l[["acc"]] , sum(diag(tabdf))/length(subdf$y_test)*100)
+  res_l[["n"]] = c(res_l[["n"]], length(subdf$y_test))
+}
+test_rfc_ctacc = data.frame(res_l)
+test_rfc_ctacc$cellclusters = unique(reg_meta_rfc$cellclusters)
+
+ggplot(test_rfc_ctacc, aes(x = n, y = acc, label = cellclusters))+
+  geom_text()+
+  theme_classic()
+
+
+plot_df = merge(test_lr_ctacc, test_rfc_ctacc, by = 3)
+colnames(plot_df) = c("cellclusters", "accuracy_LR", "n_LR", "accuracy_RFC", "n_RFC")
+plot_df$issingle = plot_df$cellclusters %in% cts_use
+ggplot(plot_df, aes(x = 100-accuracy_LR, y = 100-accuracy_RFC, label = cellclusters, colour = issingle))+
+  geom_text(size = 2.25)+
+  scale_x_continuous(trans = "log1p", limits = c(0,15))+
+  scale_y_continuous(trans = "log1p", limits = c(0,15))+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.title = element_text(colour = "black", size = 8),
+        legend.position = c(.94,.9))
+```
+
+Choose threshold for which cells are not in any of the regions
+
+```{r, fig.width=3.6, fig.height=9}
+# LR metrics are better both globally and per cell type
+
+ggplot(wp_max_lr, aes(x = issingle, y = maxval))+
+  geom_violin(scale = "width")+
+  scale_y_continuous(breaks = seq(0,1,.05))+
+  theme_classic()
+# this plot shows that 90% should be a good threshold for probabilities
+
+meanct = sort(tapply(wp_max_lr$maxval, wp_max_lr$cellclusters, mean))
+wp_max_lr$cellclusters = factor(wp_max_lr$cellclusters, levels = rev(names(meanct)))
+ggplot(wp_max_lr, aes(x = maxval, y = cellclusters, fill = issingle))+
+  geom_violin(scale = "width")+
+  stat_summary(fun.data = mean_se, shape = 21)+
+  geom_vline(xintercept = .9, linetype = "dashed")+
+  labs(x = "Max LR Prob", y = "Cell Types")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.title = element_text(colour = "black", size = 8),
+        legend.position = c(.18,.09),
+        legend.title = element_text(size = 8),
+        legend.text = element_text(size = 7.5))
+
+tab_nolab = table(wp_max_lr$cellclusters, wp_max_lr$maxval<0.9)
+perc_nolab = data.frame(round(tab_nolab/rowSums(tab_nolab)*100, 1))
+perc_nolab$issingle = perc_nolab$Var1 %in% cts_use
+perc_nolab$n_nolab = tab_nolab[perc_nolab$Var1,2]
+perc_nolab$n_nolab = paste0(perc_nolab$n_nolab, "/", rowSums(tab_nolab))
+perc_nolab = perc_nolab[perc_nolab$Var2=="TRUE",]
+perc_nolab = perc_nolab[order(perc_nolab$Freq, decreasing = T),]
+perc_nolab$Var1 = factor(perc_nolab$Var1, levels = rev(unique(perc_nolab$Var1)))
+
+ggplot()+
+  geom_col(data = perc_nolab, mapping = aes(x = Freq, y = Var1, fill = issingle))+
+  geom_vline(xintercept = 30, linetype = "dashed")+
+  geom_text(data = perc_nolab, mapping = aes(x = Freq, y = Var1, label = n_nolab), 
+            nudge_x = 1, hjust = 0, size = 2.25)+
+  scale_x_continuous(limits = c(0,75), expand = c(0,0))+
+  labs(x = "% LR Prob<0.9", y = "Cell Types")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.title = element_text(colour = "black", size = 8),
+        legend.position = c(.82,.09),
+        legend.title = element_text(size = 8),
+        legend.text = element_text(size = 7.5))
+```
+
+How it looks with RFC, for comparison
+
+```{r, fig.width=3.6, fig.height=9}
+# in WP, from likely region, RFC is marginally better than LR
+# in WP, RFC has a bias towards medial (also somewhat present in the likely region test)
+# LR metrics are better both globally and per cell type
+
+ggplot(wp_max_rfc, aes(x = issingle, y = maxval))+
+  geom_violin(scale = "width")+
+  scale_y_continuous(breaks = seq(0,1,.05))+
+  theme_classic()
+# this plot shows that 90% should be a good threshold for probabilities
+
+meanct = sort(tapply(wp_max_rfc$maxval, wp_max_rfc$cellclusters, mean))
+wp_max_rfc$cellclusters = factor(wp_max_rfc$cellclusters, levels = rev(names(meanct)))
+ggplot(wp_max_rfc, aes(x = maxval, y = cellclusters, fill = issingle))+
+  geom_violin(scale = "width")+
+  stat_summary(fun.data = mean_se, shape = 21)+
+  geom_vline(xintercept = .9, linetype = "dashed")+
+  labs(x = "Max RFC Prob", y = "Cell Types")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.title = element_text(colour = "black", size = 8),
+        legend.position = c(.18,.09),
+        legend.title = element_text(size = 8),
+        legend.text = element_text(size = 7.5))
+
+tab_nolab = table(wp_max_rfc$cellclusters, wp_max_rfc$maxval<0.85)
+perc_nolab = data.frame(round(tab_nolab/rowSums(tab_nolab)*100, 1))
+perc_nolab$issingle = perc_nolab$Var1 %in% cts_use
+perc_nolab$n_nolab = tab_nolab[perc_nolab$Var1,2]
+perc_nolab$n_nolab = paste0(perc_nolab$n_nolab, "/", rowSums(tab_nolab))
+perc_nolab = perc_nolab[perc_nolab$Var2=="TRUE",]
+perc_nolab = perc_nolab[order(perc_nolab$Freq, decreasing = T),]
+perc_nolab$Var1 = factor(perc_nolab$Var1, levels = rev(unique(perc_nolab$Var1)))
+
+ggplot()+
+  geom_col(data = perc_nolab, mapping = aes(x = Freq, y = Var1, fill = issingle))+
+  geom_vline(xintercept = 30, linetype = "dashed")+
+  geom_text(data = perc_nolab, mapping = aes(x = Freq, y = Var1, label = n_nolab), 
+            nudge_x = 1, hjust = 0, size = 2.25)+
+  scale_x_continuous(limits = c(0,115), expand = c(0,0))+
+  labs(x = "% RFC Prob<0.9", y = "Cell Types")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7),
+        axis.title = element_text(colour = "black", size = 8),
+        legend.position = c(.82,.09),
+        legend.title = element_text(size = 8),
+        legend.text = element_text(size = 7.5))
+```
+
+Define new regional labels for WP cells. Two sets of labels will be done:  
+1. Cells in the groups with 30% or more cells with <.9 probability get "other/unknown", others get the assigned region
+2. Cells with <.9 probability get "other/unknown", others get the assigned region
+
+```{r}
+tab_nolab = table(wp_max_lr$cellclusters, wp_max_lr$maxval<0.9)
+perc_nolab = data.frame(round(tab_nolab/rowSums(tab_nolab)*100, 1))
+perc_nolab$issingle = perc_nolab$Var1 %in% cts_use
+perc_nolab$n_nolab = tab_nolab[perc_nolab$Var1,2]
+perc_nolab$n_nolab = paste0(perc_nolab$n_nolab, "/", rowSums(tab_nolab))
+perc_nolab = perc_nolab[perc_nolab$Var2=="TRUE",]
+perc_nolab = perc_nolab[order(perc_nolab$Freq, decreasing = T),]
+perc_nolab$Var1 = factor(perc_nolab$Var1, levels = rev(unique(perc_nolab$Var1)))
+
+#pops_many = as.character(perc_nolab$Var1[perc_nolab$Freq>=30])
+pops_many = as.character(perc_nolab$Var1[perc_nolab$Freq>=30 & !perc_nolab$issingle])
+meta_regs = wp_max_lr[,c(1,2,4,8)]
+
+meta_regs$pred_regions_all = meta_regs$pred_regions_top = meta_regs$pred_lr
+#meta_regs$pred_regions_top[meta_regs$maxval<.9 & meta_regs$cellclusters %in% pops_many] = "other/unknown"
+meta_regs$pred_regions_top[(meta_regs$maxval<.9 & meta_regs$cellclusters %in% pops_many) | meta_regs$maxval<.5] = "other/unknown"
+meta_regs$pred_regions_all[meta_regs$maxval<.9] = "other/unknown"
+
+newcellnames = meta_regs$Row.names
+newcellnames = gsub("-1_1", "-a1-1", newcellnames)
+newcellnames = gsub("-1_2", "-a1-2", newcellnames)
+newcellnames = gsub("-1_3", "-a3-1", newcellnames)
+newcellnames = gsub("-1_4", "-a3-2", newcellnames)
+
+rownames(meta_regs) = newcellnames
+meta_regs = meta_regs[,c(3,5:6)]
+```
+
+Save predicted labels
+
+```{r}
+write.csv(meta_regs, file = "data/processed/multiome/WP_region_predictions.csv", 
+          col.names = T, row.names = T, quote = F)
+```
+
+
+## Per-region markers
+Get markers for cell types (in microdissected regions)
+
+```{r}
+outname = "./results/RegionAnalysis/mk_ct.RDS"
+sub_dat = ax_srat[,ax_srat$regions!="whole pallium" & ax_srat$cellclusters!="doublets"]
+sub_dat = SetIdent(sub_dat, value = "cellclusters")
+if(file.exists(outname)){
+  mk_ct = readRDS(outname)
+} else{
+  mk_ct = presto::wilcoxauc(sub_dat, pseudocount.use = 0.1, group.by = "cellclusters")
+  
+  saveRDS(mk_ct, file = outname)
+}
+```
+
+Calculate markers for microdissected regions
+
+```{r}
+sub_dat = ax_srat[,ax_srat$regions!="whole pallium" & ax_srat$cellclusters!="doublets"]
+sub_dat = SetIdent(sub_dat, value = "regions")
+
+# choose cell types in more than one region (<95% in one region) and w/ at least 3 cells in 2 regions
+tab_reg = table(sub_dat@meta.data$cellclusters, sub_dat$regions)[-1,]
+tab_reg_perc = tab_reg/rowSums(tab_reg)*100
+cts = rownames(tab_reg_perc)[apply(tab_reg_perc, 1, function(x) all(x<95))]
+cts = rownames(tab_reg[cts,])[apply(tab_reg[cts,], 1, function(x) sum(x>3)>1)]
+
+outname = "./results/RegionAnalysis/mk_reg_l.RDS"
+if(file.exists(outname)){
+  mk_reg_l = readRDS(outname)
+} else{
+  mk_reg_l = list()
+  for(ct in cts){
+    print(ct)
+    mk_reg_l[[ct]] = presto::wilcoxauc(sub_dat[,sub_dat$cellclusters==ct], pseudocount.use = 0.1, group.by = "regions")
+  }
+  mk_reg_l[["all"]] = presto::wilcoxauc(sub_dat, pseudocount.use = 0.1, group.by = "regions")
+  saveRDS(mk_reg_l, file = outname)
+}
+```
+
+Calculate markers for regions, including predicted
+
+```{r}
+meta_regs = read.csv("data/processed/multiome/WP_region_predictions.csv", header = T, row.names = 1)
+newcellnames = rownames(meta_regs)
+newcellnames = gsub("-a1-1", "-1_1", newcellnames)
+newcellnames = gsub("-a1-2", "-1_2", newcellnames)
+newcellnames = gsub("-a3-1", "-1_3", newcellnames)
+newcellnames = gsub("-a3-2", "-1_4", newcellnames)
+rownames(meta_regs) = newcellnames
+
+sub_dat = ax_srat[,ax_srat$cellclusters!="glut_SUBSET_23"]
+sub_dat = AddMetaData(sub_dat, metadata = meta_regs)
+sub_dat$pred_regions_top[is.na(sub_dat$pred_regions_top)] = sub_dat$regions[is.na(sub_dat$pred_regions_top)]
+
+sub_dat = SetIdent(sub_dat, value = "pred_regions_top")
+
+# choose cell types in more than one region (<95% in one region) and w/ at least 3 cells in 2 regions
+tab_reg = table(sub_dat@meta.data$cellclusters, sub_dat$pred_regions_top)[-1,]
+tab_reg_perc = tab_reg/rowSums(tab_reg)*100
+cts = rownames(tab_reg_perc)[apply(tab_reg_perc, 1, function(x) all(x<95))]
+cts = rownames(tab_reg[cts,])[apply(tab_reg[cts,], 1, function(x) sum(x>3)>1)]
+
+outname = "./results/RegionAnalysis/mk_regWpred_l.RDS"
+if(file.exists(outname)){
+  mk_reg_l = readRDS(outname)
+} else{
+  mk_reg_l = list()
+  for(ct in cts){
+    cat(ct)
+    mk_reg_l[[ct]] = presto::wilcoxauc(sub_dat[,sub_dat$cellclusters==ct], pseudocount.use = 0.1, group.by = "pred_regions_top")
+  }
+  mk_reg_l[["all"]] = presto::wilcoxauc(sub_dat, pseudocount.use = 0.1, group.by = "pred_regions_top")
+  mk_reg_l[["multireg_only"]] = presto::wilcoxauc(sub_dat[,sub_dat$cellclusters %in% cts], pseudocount.use = 0.1, group.by = "pred_regions_top")
+  saveRDS(mk_reg_l, file = outname)
+}
+```
+
+Calculate markers for regions, including predicted
+
+```{r}
+meta_regs = read.csv("data/processed/multiome/WP_region_predictions.csv", header = T, row.names = 1)
+newcellnames = rownames(meta_regs)
+newcellnames = gsub("-a1-1", "-1_1", newcellnames)
+newcellnames = gsub("-a1-2", "-1_2", newcellnames)
+newcellnames = gsub("-a3-1", "-1_3", newcellnames)
+newcellnames = gsub("-a3-2", "-1_4", newcellnames)
+rownames(meta_regs) = newcellnames
+
+sub_dat = ax_srat[,ax_srat$cellclusters!="glut_SUBSET_23"]
+sub_dat = AddMetaData(sub_dat, metadata = meta_regs)
+sub_dat$pred_regions_top[is.na(sub_dat$pred_regions_top)] = sub_dat$regions[is.na(sub_dat$pred_regions_top)]
+
+sub_dat = SetIdent(sub_dat, value = "pred_regions_top")
+
+# choose cell types in more than one region (<95% in one region) and w/ at least 3 cells in 2 regions
+tab_reg = table(sub_dat@meta.data$cellclusters, sub_dat$pred_regions_top)[-1,]
+tab_reg_perc = tab_reg/rowSums(tab_reg)*100
+cts = rownames(tab_reg_perc)[apply(tab_reg_perc, 1, function(x) all(x<95))]
+cts = rownames(tab_reg[cts,])[apply(tab_reg[cts,], 1, function(x) sum(x>3)>1)]
+
+subclasses = unique(sub_dat$subclasses)
+outname = "./results/RegionAnalysis/mk_regWpred_subclass_l.RDS"
+if(file.exists(outname)){
+  mk_reg_l = readRDS(outname)
+} else{
+  mk_reg_l = list()
+  for(ct in subclasses){
+    cat(ct)
+    mk_reg_l[[paste0(ct, "_all")]] = presto::wilcoxauc(sub_dat[,sub_dat$subclasses==ct], 
+                                                       pseudocount.use = 0.1, group.by = "pred_regions_top")
+    mk_reg_l[[paste0(ct, "_multireg")]] = presto::wilcoxauc(sub_dat[,sub_dat$subclasses==ct &
+                                                                      sub_dat$cellclusters %in% cts], 
+                                                            pseudocount.use = 0.1, group.by = "pred_regions_top")
+  }
+  mk_reg_l[["all"]] = presto::wilcoxauc(sub_dat, pseudocount.use = 0.1, group.by = "pred_regions_top")
+  mk_reg_l[["multireg_only"]] = presto::wilcoxauc(sub_dat[,sub_dat$cellclusters %in% cts], pseudocount.use = 0.1, group.by = "pred_regions_top")
+  saveRDS(mk_reg_l, file = outname)
+}
+```
+
+
+## Cell type presence
+Add predictions to metadata
+
+```{r}
+meta_regs = read.csv("data/processed/multiome/WP_region_predictions.csv", header = T, row.names = 1)
+newcellnames = rownames(meta_regs)
+newcellnames = gsub("-a1-1", "-1_1", newcellnames)
+newcellnames = gsub("-a1-2", "-1_2", newcellnames)
+newcellnames = gsub("-a3-1", "-1_3", newcellnames)
+newcellnames = gsub("-a3-2", "-1_4", newcellnames)
+rownames(meta_regs) = newcellnames
+
+# calculate cell proportions
+ax_srat = AddMetaData(ax_srat, meta_regs)
+ax_srat$all_pred_regs_top = paste0(ax_srat$pred_regions_top, "_pred")
+ax_srat$all_pred_regs_top[ax_srat$all_pred_regs_top=="NA_pred"] = ax_srat$region[ax_srat$all_pred_regs_top=="NA_pred"]
+```
+
+Cell type proportions per region
+
+```{r}
+reg_cols = c("other/unknown_pred" = "#C7CCC7", 
+             "medial" = "#52168D", "medial_pred" = "#661CB0", 
+             "dorsal" = "#C56007", "dorsal_pred" = "#ED7307", 
+             "lateral" = "#118392", "lateral_pred" = "#16A3B6")
+
+tab_reg = table(ax_srat$cellclusters, ax_srat$all_pred_regs_top)
+tab_reg = tab_reg/rowSums(tab_reg)*100
+
+reg_simp = unlist(lapply(strsplit(ax_srat$all_pred_regs_top, "_"), function(x) x[1]))
+tab_score = table(ax_srat$cellclusters[reg_simp!="other/unknown"], reg_simp[reg_simp!="other/unknown"])
+tab_score = tab_score/rowSums(tab_score)*100
+
+plot_df = data.frame(tab_reg)
+score_mat = tab_score
+score_mat[,3] = score_mat[,3]*6
+score_mat[,1] = score_mat[,1]*3
+plot_df$score = rowSums(score_mat)
+plot_df = plot_df[order(plot_df$score, decreasing = T),]
+ordct = unique(plot_df$Var1)
+plot_df$Var1 = factor(plot_df$Var1, levels = ordct)
+plot_df$Var2 = factor(plot_df$Var2, levels = rev(names(reg_cols)))
+
+plt_props_ord = ggplot(plot_df, aes(x = Var1, y = Freq, fill = Var2))+
+  geom_col()+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_manual(values = reg_cols)+
+  labs(x = "Cell types", y = "% per region")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 5.8, colour = "black"),
+        axis.text = element_text(colour = "black", size = 5.5),
+        axis.title = element_text(colour = "black", size = 6.7),
+        legend.position = "none")
+
+pdf("results/RegionAnalysis/ordered_cellclRegionProportion.pdf", width = 7.5, height = 2.4, 
+    useDingbats = F)
+print(plt_props_ord)
+dev.off()
+
+plot_df = merge(plot_df, unique(ax_srat@meta.data[,c("cellclusters", "subclasses")]), 
+                by = 1, all.x = T)
+
+plt_props_ord = ggplot(plot_df, aes(x = Var1, y = Freq, fill = Var2))+
+  facet_wrap(~subclasses, scales = "free", nrow = 1)+
+  geom_col()+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_manual(values = reg_cols)+
+  labs(x = "Cell types", y = "% per region")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 5.8, colour = "black"),
+        axis.text = element_text(colour = "black", size = 5.5),
+        axis.title = element_text(colour = "black", size = 6.7),
+        strip.text = element_text(size = 6.7),
+        legend.position = "none")
+
+pdf("results/RegionAnalysis/ordered_cellclRegionProportion_bysubclass.pdf", 
+    width = 20, height = 2.4, useDingbats = F)
+print(plt_props_ord)
+dev.off()
+```
+
+
+## Cluster dendrogrammes
+### Clustering on markers
+Load data required
+
+```{r}
+mk_ct_l = readRDS("./results/RegionAnalysis/mk_ct_allData_subsets.RDS")
+mk_ct = mk_ct_l$all[mk_ct_l$all$padj<=0.05 & mk_ct_l$all$logFC>0.15,]
+
+# compile markers from subsets
+mk_ct_comp = rbind(mk_ct_l$GABA, mk_ct_l$glut, mk_ct_l$ependymal, mk_ct_l$npc,
+                   mk_ct_l$all[mk_ct_l$all$group %in% c("microglia_8", "oligodendrocyte_10","oligodendrocyte_15", 
+                                                        "endothelial_11", "endothelial_12", "endothelial_14"),])
+mk_ct_comp = mk_ct_comp[mk_ct_comp$padj<=0.05 & mk_ct_comp$logFC>0.15,]
+```
+
+Define how many top genes to use and order markers
+
+```{r}
+topn = 200
+top_genes_cl = tapply(rownames(mk_ct), mk_ct$group, 
+                      function(x) mk_ct[x,"feature"][order(mk_ct[x,"logFC"], decreasing = T)])
+top_genes_cl = top_genes_cl[!names(top_genes_cl)=="glut_SUBSET_23"]
+```
+
+Clustering on marker gene expression
+
+```{r}
+avg_exp_all = AverageExpression(ax_srat, features = unique(unlist(top_genes_cl)),
+                                group.by = "cellclusters", slot = "data")$RNA
+
+avg_exp_all_top = AverageExpression(ax_srat, features = unique(unlist(lapply(top_genes_cl,function(x) x[1:topn]))),
+                                    group.by = "cellclusters", slot = "data")$RNA
+
+scaled_all = apply(avg_exp_all, 1, scale, scale = T)
+rownames(scaled_all) = colnames(avg_exp_all)
+hc_all = hclust(dist(scaled_all), method = "ward.D")
+plot(hc_all)
+
+scaled_top = apply(avg_exp_all_top, 1, scale, scale = T)
+rownames(scaled_top) = colnames(avg_exp_all_top)
+hc_all_top = hclust(dist(scaled_top), method = "ward.D")
+plot(hc_all_top)
+```
+
+Calculating and plotting chosen clustering
+
+```{r}
+scaled_top = apply(avg_exp_all_top, 1, scale, scale = T)
+rownames(scaled_top) = colnames(avg_exp_all_top)
+hc_all_top = hclust(dist(scaled_top), method = "ward.D")
+
+dhc = reorder(as.dendrogram(hc_all_top), c(11:1,12:19,46:31,20:30))
+ddata = dendro_data(dhc, type = "rectangle")
+labs_grou = ifelse(grepl("GABA", ddata$labels$label), "GABAergic", 
+            ifelse(grepl("glut", ddata$labels$label), "Glutamatergic", 
+            ifelse(grepl("epend", ddata$labels$label), "Ependymal",
+            ifelse(grepl("npc", ddata$labels$label), "NPC",
+            ifelse(grepl("microglia", ddata$labels$label), "Microglia",
+            ifelse(grepl("oligodendrocyte", ddata$labels$label), "Oligodendrocyte",
+            ifelse(grepl("endothelial", ddata$labels$label), "Endothelial", "Other neurons")))))))
+cols_labs = c("coral2", "darkgoldenrod2", "firebrick2", "dodgerblue4", "darkorchid3", "deepskyblue2", "deeppink",  
+              "dodgerblue3")
+names(cols_labs) = sort(unique(labs_grou))
+
+p = ggplot(segment(ddata))+ 
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend))+ 
+  scale_x_continuous(breaks = seq_along(ddata$labels$label), labels = ddata$labels$label, position = "top")+
+  coord_flip()+ 
+  scale_y_reverse(expand = c(0, 0))+
+  theme_dendro()+
+  theme(axis.text.y = element_text(hjust = 1, colour = cols_labs[labs_grou], face = "bold"),
+        axis.text.x = element_blank())
+
+pdf("results/RegionAnalysis/dendrogramme_all_avgExp_allmk.pdf", height = 7, width = 3.5, useDingbats = F)
+print(p)
+dev.off()
+```
+
+Clustering on shared marker genes
+
+```{r, fig.height=7}
+n_mk_mat = matrix(0, nrow = length(top_genes_cl), ncol = length(top_genes_cl))
+rownames(n_mk_mat) = colnames(n_mk_mat) = names(top_genes_cl)
+for(i in names(top_genes_cl)){
+  for(j in names(top_genes_cl)){
+    n_mk_mat[i,j] = length(intersect(top_genes_cl[[i]][1:topn], top_genes_cl[[j]][1:topn]))
+  }
+}
+
+pheatmap::pheatmap(log10(n_mk_mat+1), clustering_method = "ward.D")
+hc_n = hclust(dist(log10(n_mk_mat+1)), method = "ward.D")
+plot(hc_n)
+hc_n = hclust(dist(log10(n_mk_mat+1)), method = "ward.D2")
+plot(hc_n)
+
+top_genes_cl_comp = tapply(rownames(mk_ct_comp), mk_ct_comp$group, 
+                           function(x) mk_ct_comp[x,"feature"][order(mk_ct_comp[x,"logFC"], decreasing = T)])
+
+n_mk_mat_comp = matrix(0, nrow = length(top_genes_cl_comp), ncol = length(top_genes_cl_comp))
+rownames(n_mk_mat_comp) = colnames(n_mk_mat_comp) = names(top_genes_cl_comp)
+for(i in names(top_genes_cl_comp)){
+  for(j in names(top_genes_cl_comp)){
+    n_mk_mat_comp[i,j] = length(intersect(top_genes_cl_comp[[i]][1:topn], top_genes_cl_comp[[j]][1:topn]))
+  }
+}
+
+pheatmap::pheatmap(log10(n_mk_mat_comp+1), clustering_method = "ward.D")
+hc_n = hclust(dist(log10(n_mk_mat_comp+1)), method = "ward.D")
+plot(hc_n)
+```
+
+Calculating and plotting chosen clustering
+
+```{r}
+hc_all_top = hclust(dist(log10(n_mk_mat+1)), method = "ward.D")
+
+dhc = as.dendrogram(hc_all_top)
+ddata = dendro_data(dhc, type = "rectangle")
+labs_grou = ifelse(grepl("GABA", ddata$labels$label), "GABAergic", 
+            ifelse(grepl("glut", ddata$labels$label), "Glutamatergic", 
+            ifelse(grepl("epend", ddata$labels$label), "Ependymal",
+            ifelse(grepl("npc", ddata$labels$label), "NPC",
+            ifelse(grepl("microglia", ddata$labels$label), "Microglia",
+            ifelse(grepl("oligodendrocyte", ddata$labels$label), "Oligodendrocyte",
+            ifelse(grepl("endothelial", ddata$labels$label), "Endothelial", "Other neurons")))))))
+cols_labs = c("coral2", "darkgoldenrod2", "firebrick2", "dodgerblue4", "darkorchid3", "deepskyblue2", "deeppink",  
+              "dodgerblue3")
+names(cols_labs) = sort(unique(labs_grou))
+
+p = ggplot(segment(ddata))+ 
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend))+ 
+  scale_x_continuous(breaks = seq_along(ddata$labels$label), labels = ddata$labels$label, position = "top")+
+  coord_flip()+ 
+  scale_y_reverse(expand = c(0, 0))+
+  theme_dendro()+
+  theme(axis.text.y = element_text(hjust = 1, colour = cols_labs[labs_grou], face = "bold"),
+        axis.text.x = element_blank())
+
+pdf("results/RegionAnalysis/dendrogramme_all_shared200Mk_allmk.pdf", height = 7, width = 2.75, useDingbats = F)
+print(p)
+dev.off()
+pdf("results/RegionAnalysis/dendrogramme_all_shared200Mk_allmk_noNames.pdf", height = 7, width = 1, useDingbats = F)
+print(p+theme(axis.text.y = element_blank()))
+dev.off()
+```
+
+Clustering based on top200 genes, with barplot
+
+```{r, fig.height=10, fig.width=15}
+hc_all_top = hclust(dist(log10(n_mk_mat+1)), method = "ward.D")
+
+dhc = as.dendrogram(hc_all_top)
+ddata = dendro_data(dhc, type = "rectangle")
+labs_grou = ifelse(grepl("GABA", ddata$labels$label), "GABAergic", 
+            ifelse(grepl("glut", ddata$labels$label), "Glutamatergic", 
+            ifelse(grepl("epend", ddata$labels$label), "Ependymal",
+            ifelse(grepl("npc", ddata$labels$label), "NPC",
+            ifelse(grepl("microglia", ddata$labels$label), "Microglia",
+            ifelse(grepl("oligodendrocyte", ddata$labels$label), "Oligodendrocyte",
+            ifelse(grepl("endothelial", ddata$labels$label), "Endothelial", "Other neurons")))))))
+cols_labs = c("coral2", "darkgoldenrod2", "firebrick2", "dodgerblue4", "darkorchid3", "deepskyblue2", "deeppink",  
+              "dodgerblue3")
+names(cols_labs) = sort(unique(labs_grou))
+
+p = ggplot(segment(ddata))+ 
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend))+ 
+  scale_x_continuous(breaks = seq_along(ddata$labels$label), labels = ddata$labels$label, 
+                     position = "top",expand = c(0.01, 0))+
+  coord_flip()+ 
+  scale_y_reverse(expand = c(0, 0))+
+  theme_dendro()+
+  theme(axis.text.x = element_blank())
+
+
+reg_cols = c("medial" = "#52168D", "medial_pred" = "#661CB0", 
+             "dorsal" = "#C56007", "dorsal_pred" = "#ED7307", 
+             "lateral" = "#118392", "lateral_pred" = "#16A3B6", "other/unknown_pred" = "#C7CCC7")
+
+tab_pred = table(ax_srat$cellclusters, ax_srat$all_pred_regs_top)
+tab_pred = tab_pred/rowSums(tab_pred)
+tab_pred = tab_pred[!rownames(tab_pred)=="glut_SUBSET_23",]
+plot_df = data.frame(tab_pred)
+plot_df$Var1 = factor(plot_df$Var1, levels = hc_all_top$labels[hc_all_top$order])
+plot_df$Var2 = factor(plot_df$Var2, levels = rev(c("medial", "medial_pred", "dorsal", "dorsal_pred", "lateral", "lateral_pred", "other/unknown_pred")))
+barp = ggplot(plot_df, aes(y = Var1, x = Freq, fill = Var2))+
+  geom_col()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_fill_manual(values = reg_cols)+
+  scale_y_discrete(position = "right", expand = c(0, 0))+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, colour = "black"),
+        axis.ticks.y = element_blank(),
+        axis.line = element_blank(),
+        axis.text.y = element_text(hjust = 1, colour = cols_labs[labs_grou], face = "bold"))
+
+
+pdf("results/RegionAnalysis/dendrogramme_perTop200Proportion.pdf", height = 14, width = 7, useDingbats = F)
+cowplot::plot_grid(p, barp, ncol = 2, align = "hv", axis = "l", rel_widths = c(0.3, 1))
+dev.off()
+```
+
+Clustering per subclass
+
+```{r}
+topn = 100
+groups_dendro = list("GABA", "glut", c("npc", "ependymal"))
+clust_l = list()
+for(n in 1:length(groups_dendro)){
+  gs = groups_dendro[[n]]
+  if(length(gs)==1){
+    mk_ct_sub = mk_ct_l[[gs]]
+  } else{
+    mk_ct_sub = rbind(mk_ct_l[[gs[1]]], mk_ct_l[[gs[2]]])
+    gs = paste0(gs[1], "_", gs[2])
+  }
+  mk_ct_sub = mk_ct_sub[mk_ct_sub$padj<=0.05 & mk_ct_sub$logFC>=0.2,]
+  
+  top_genes_cl = tapply(rownames(mk_ct_sub), mk_ct_sub$group, 
+                      function(x) mk_ct_sub[x,"feature"][order(mk_ct_sub[x,"logFC"], 
+                                                               decreasing = T)])
+  
+  avg_exp_all_top = AverageExpression(ax_srat, 
+                                      features = unique(unlist(lapply(top_genes_cl,
+                                                                      function(x) x[1:topn]))),
+                                      group.by = "cellclusters", 
+                                      slot = "data")$RNA[,names(top_genes_cl)]
+
+  scaled_top = apply(avg_exp_all_top, 1, scale, scale = T)
+  rownames(scaled_top) = colnames(avg_exp_all_top)
+  clust_l[[gs]] = hclust(dist(scaled_top), method = "ward.D")
+}
+```
+
+Plot dendrogrammes
+
+```{r}
+for(n in names(clust_l)){
+  dhc = as.dendrogram(clust_l[[n]])
+  ddata = dendro_data(dhc, type = "rectangle")
+
+  p = ggplot(segment(ddata))+ 
+    geom_segment(aes(x = x, y = y, xend = xend, yend = yend))+ 
+    scale_x_continuous(breaks = seq_along(ddata$labels$label), 
+                       labels = ddata$labels$label, position = "top")+
+    coord_flip()+ 
+    scale_y_reverse(expand = c(0, 0))+
+    theme_dendro()+
+    theme(axis.text.y = element_text(hjust = 1, face = "bold"),
+          axis.text.x = element_blank())
+  
+  pdf(paste0("results/RegionAnalysis/dendrogramme_", n, "_avgExp_allmk.pdf"), 
+      height = 4, width = 3.5, useDingbats = F)
+  print(p)
+  dev.off()
+}
+```
+
+Plot dendrogrammes with barplot
+
+```{r}
+for(n in names(clust_l)){
+  dhc = as.dendrogram(clust_l[[n]])
+  ddata = dendro_data(dhc, type = "rectangle")
+
+  p = ggplot(segment(ddata))+ 
+    geom_segment(aes(x = x, y = y, xend = xend, yend = yend))+ 
+    scale_x_continuous(breaks = seq_along(ddata$labels$label), labels = ddata$labels$label, 
+                       position = "top",expand = c(0.01, 0))+
+    coord_flip()+ 
+    scale_y_reverse(expand = c(0, 0))+
+    theme_dendro()+
+    theme(axis.text.x = element_blank())
+  
+  reg_cols = c("medial" = "#52168D", "medial_pred" = "#661CB0", 
+               "dorsal" = "#C56007", "dorsal_pred" = "#ED7307", 
+               "lateral" = "#118392", "lateral_pred" = "#16A3B6", "other/unknown_pred" = "#C7CCC7")
+  
+  tab_pred = table(ax_srat$cellclusters, ax_srat$all_pred_regs_top)
+  tab_pred = (tab_pred/rowSums(tab_pred))[clust_l[[n]]$labels,]
+  plot_df = data.frame(tab_pred)
+  plot_df$Var1 = factor(plot_df$Var1, levels = clust_l[[n]]$labels[clust_l[[n]]$order])
+  plot_df$Var2 = factor(plot_df$Var2, levels = rev(c("medial", "medial_pred", "dorsal",
+                                                     "dorsal_pred", "lateral", "lateral_pred",
+                                                     "other/unknown_pred")))
+  barp = ggplot(plot_df, aes(y = Var1, x = Freq, fill = Var2))+
+    geom_col()+
+    scale_x_continuous(expand = c(0,0))+
+    scale_fill_manual(values = reg_cols)+
+    scale_y_discrete(position = "right", expand = c(0, 0))+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, colour = "black"),
+          axis.ticks.y = element_blank(),
+          axis.line = element_blank(),
+          axis.text.y = element_text(hjust = 1, face = "bold"))
+  
+  pdf(paste0("results/RegionAnalysis/dendrogramme_", n, "_perTop200Proportion.pdf"), 
+      height = 5, width = 6, useDingbats = F)
+  print(cowplot::plot_grid(p, barp, ncol = 2, align = "hv", axis = "l", rel_widths = c(0.3, 1)))
+  dev.off()
+}
+```
+
+### Clustering on region
+Clustering based on cell proportions
+
+```{r, fig.height=10, fig.width=15}
+newcellnames = rownames(meta_regs)
+newcellnames = gsub("-a1-1", "-1_1", newcellnames)
+newcellnames = gsub("-a1-2", "-1_2", newcellnames)
+newcellnames = gsub("-a3-1", "-1_3", newcellnames)
+newcellnames = gsub("-a3-2", "-1_4", newcellnames)
+rownames(meta_regs) = newcellnames
+
+# calculate cell proportions
+ax_srat = AddMetaData(ax_srat, meta_regs)
+ax_srat$all_pred_regs_top = paste0(ax_srat$pred_regions_top, "_pred")
+ax_srat$all_pred_regs_top[ax_srat$all_pred_regs_top=="NA_pred"] = ax_srat$region[ax_srat$all_pred_regs_top=="NA_pred"]
+reg_simp = unlist(lapply(strsplit(ax_srat$pred_regions_top, "_"), function(x) x[1]))
+tab_reg = table(ax_srat$cellclusters, reg_simp)
+tab_reg = tab_reg/rowSums(tab_reg)
+tab_reg = tab_reg[!rownames(tab_reg)=="glut_SUBSET_23",]
+
+clust = hclust(dist(tab_reg), method = "ward.D")
+
+dhc = as.dendrogram(clust)
+ddata = dendro_data(dhc, type = "rectangle")
+labs_grou = ifelse(grepl("GABA", ddata$labels$label), "GABAergic", 
+            ifelse(grepl("glut", ddata$labels$label), "Glutamatergic", 
+            ifelse(grepl("epen", ddata$labels$label), "Ependymal",
+            ifelse(grepl("npc", ddata$labels$label), "NPC",
+            ifelse(grepl("microglia", ddata$labels$label), "Microglia",
+            ifelse(grepl("oligodendrocyte", ddata$labels$label), "Oligodendrocyte",
+            ifelse(grepl("endothelial", ddata$labels$label), "Endothelial", "Other neurons")))))))
+cols_labs = c("coral2", "darkgoldenrod2", "firebrick2", "dodgerblue4", "darkorchid3", "deepskyblue2", "deeppink",  
+              "dodgerblue3")
+names(cols_labs) = sort(unique(labs_grou))
+
+p = ggplot(segment(ddata))+ 
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend))+ 
+  scale_x_continuous(breaks = seq_along(ddata$labels$label), labels = ddata$labels$label, 
+                     position = "top",expand = c(0.01, 0))+
+  coord_flip()+ 
+  scale_y_reverse(expand = c(0, 0))+
+  theme_dendro()+
+  theme(axis.text.x = element_blank())
+
+
+reg_cols = c("medial" = "#52168D", "medial_pred" = "#661CB0", 
+             "dorsal" = "#C56007", "dorsal_pred" = "#ED7307", 
+             "lateral" = "#118392", "lateral_pred" = "#16A3B6", "other/unknown_pred" = "#C7CCC7")
+
+tab_pred = table(ax_srat$cellclusters, ax_srat$all_pred_regs_top)
+tab_pred = tab_pred/rowSums(tab_pred)
+tab_pred = tab_pred[!rownames(tab_pred)=="glut_SUBSET_23",]
+plot_df = data.frame(tab_pred)
+plot_df$Var1 = factor(plot_df$Var1, levels = clust$labels[clust$order])
+plot_df$Var2 = factor(plot_df$Var2, levels = rev(c("medial", "medial_pred", "dorsal", "dorsal_pred", "lateral", "lateral_pred", "other/unknown_pred")))
+barp = ggplot(plot_df, aes(y = Var1, x = Freq, fill = Var2))+
+  geom_col()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_fill_manual(values = reg_cols)+
+  scale_y_discrete(position = "right", expand = c(0, 0))+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, colour = "black"),
+        axis.ticks.y = element_blank(),
+        axis.line = element_blank(),
+        axis.text.y = element_text(hjust = 1, colour = cols_labs[labs_grou], face = "bold"))
+
+
+pdf("results/RegionAnalysis/dendrogramme_perRegionProportion.pdf", height = 14, width = 7, useDingbats = F)
+cowplot::plot_grid(p, barp, ncol = 2, align = "hv", axis = "l", rel_widths = c(0.3, 1))
+dev.off()
+```
+
+### Other technical tests
+Ranking and binarizing doesn't seem to help in any way
+
+```{r}
+hc_all = hclust(dist(t(avg_exp_all)/colSums(avg_exp_all)), method = "ward.D")
+plot(hc_all)
+
+scaled_all = apply(avg_exp_all, 1, scale, scale = T)
+rownames(scaled_all) = colnames(avg_exp_all)
+hc_all = hclust(dist(scaled_all), method = "ward.D")
+plot(hc_all)
+
+hc_all = hclust(dist(t(apply(avg_exp_all, 2, rank))), method = "ward.D")
+plot(hc_all)
+
+hc_all = hclust(dist(apply(avg_exp_all, 1, rank)), method = "ward.D")
+plot(hc_all)
+
+hc_all = hclust(dist(t(avg_exp_all>0), method = "manhattan"), method = "ward.D")
+plot(hc_all)
+```
+
+Clustering method choice
+
+```{r, fig.height=6.5, fig.width=4.5}
+scaled_all = apply(avg_exp_all, 1, scale, scale = T)
+rownames(scaled_all) = colnames(avg_exp_all)
+
+# the two ward clustering essentially vary on the neighbours of GABA_15 and glut_13
+## this may be important! these are the neighbours of NPCs!
+hc_all = hclust(dist(scaled_all), method = "ward.D")
+ggdendro::ggdendrogram(hc_all, rotate = TRUE)
+hc_all = hclust(dist(scaled_all), method = "ward.D2")
+ggdendro::ggdendrogram(hc_all, rotate = TRUE)
+
+hc_all = hclust(dist(scaled_all), method = "complete") # ladder pattern, groupings are more elusive
+ggdendro::ggdendrogram(hc_all, rotate = TRUE)
+hc_all = hclust(dist(scaled_all), method = "mcquitty") # ladder pattern, groupings are more elusive
+ggdendro::ggdendrogram(hc_all, rotate = TRUE)
+hc_all = hclust(dist(scaled_all), method = "average") # no neurons vs rest
+ggdendro::ggdendrogram(hc_all, rotate = TRUE)
+hc_all = hclust(dist(scaled_all), method = "centroid") # no neurons vs rest
+ggdendro::ggdendrogram(hc_all, rotate = TRUE)
+```
+
+Neighbourhood variability with number of genes
+
+```{r}
+ngenes = c(seq(25, 250, 25), 500, 1000, 10000)
+
+getDist = function(i){
+  avgexp = AverageExpression(ax_srat[,ax_srat$cellclusters!="doublets"], 
+                             features = unique(unlist(lapply(top_genes_cl, function(x) x[1:i]))),
+                             group.by = "cellclusters", slot = "data")$RNA
+  
+  scaled_all = apply(avgexp, 1, scale, scale = T)
+  rownames(scaled_all) = colnames(avg_exp_all)
+  
+  return(dist(scaled_all))
+}
+
+registerDoParallel(20)
+dist_res = foreach(i=ngenes) %dopar% {
+
+  getDist(i)
+
+}
+names(dist_res) = as.character(ngenes)
+```
+
+Plot all
+
+```{r, fig.height=7, fig.width=20}
+hc_all = hclust(dist_res[["25"]], method = "ward.D")
+plta = ggdendro::ggdendrogram(hc_all, rotate = TRUE)+ggtitle("25 DE genes/cell type")
+hc_all = hclust(dist_res[["100"]], method = "ward.D")
+pltb = ggdendro::ggdendrogram(hc_all, rotate = TRUE)+ggtitle("100 DE genes/cell type")
+hc_all = hclust(dist_res[["200"]], method = "ward.D")
+pltc = ggdendro::ggdendrogram(hc_all, rotate = TRUE)+ggtitle("200 DE genes/cell type")
+hc_all = hclust(dist_res[["1000"]], method = "ward.D")
+pltd = ggdendro::ggdendrogram(hc_all, rotate = TRUE)+ggtitle("1000 DE genes/cell type")
+hc_all = hclust(dist_res[["10000"]], method = "ward.D")
+plte = ggdendro::ggdendrogram(hc_all, rotate = TRUE)+ggtitle("All DE genes/cell type")
+cowplot::plot_grid(plta, pltb, pltc, pltd, plte, ncol = 5)
+
+hc_all = hclust(dist_res[["25"]], method = "ward.D2")
+plta = ggdendro::ggdendrogram(hc_all, rotate = TRUE)+ggtitle("25 DE genes/cell type")
+hc_all = hclust(dist_res[["100"]], method = "ward.D2")
+pltb = ggdendro::ggdendrogram(hc_all, rotate = TRUE)+ggtitle("100 DE genes/cell type")
+hc_all = hclust(dist_res[["200"]], method = "ward.D2")
+pltc = ggdendro::ggdendrogram(hc_all, rotate = TRUE)+ggtitle("200 DE genes/cell type")
+hc_all = hclust(dist_res[["1000"]], method = "ward.D2")
+pltd = ggdendro::ggdendrogram(hc_all, rotate = TRUE)+ggtitle("1000 DE genes/cell type")
+hc_all = hclust(dist_res[["10000"]], method = "ward.D2")
+plte = ggdendro::ggdendrogram(hc_all, rotate = TRUE)+ggtitle("All DE genes/cell type")
+cowplot::plot_grid(plta, pltb, pltc, pltd, plte, ncol = 5)
+
+# make consensus trees
+ll = list()
+for(n in names(dist_res)){
+  ll[[n]] = ape::as.phylo(hclust(dist_res[[n]], method = "ward.D"))
+}
+xxx = ape::consensus(ll[1:10], p = 0.5)
+plot(xxx)
+
+ll = list()
+for(n in names(dist_res)){
+  ll[[n]] = ape::as.phylo(hclust(dist_res[[n]], method = "ward.D2"))
+}
+xxx = ape::consensus(ll[1:10], p = 0.5)
+plot(xxx)
+```
+
+

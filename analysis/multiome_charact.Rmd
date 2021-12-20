@@ -1,0 +1,751 @@
+---
+title: "Multiome characterisation"
+output: html_notebook
+---
+
+In this notebook we start from the MOFA integrated, annotated object(s) and proceed to do more relevant chacterisations.
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Signac)
+# as of June 2021, Seurat still needs to be installed like this for ATAC integration:
+## remotes::install_github(repo = 'satijalab/seurat', ref = 'develop')
+library(Seurat)
+library(GenomicRanges)
+library(data.table)
+
+# this (bespoke) package hosts the axolotl genome
+# package is very large, cannot be installed in home directory
+# and should be in a fast disk
+library(BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M, 
+        lib.loc = "/local1/USERS/tomasgomes/multiome_analysis/")
+
+# Motif analysis
+library(JASPAR2020)
+library(TFBSTools)
+library(motifmatchr)
+library(chromVAR)
+
+# multiome GRN
+library(Pando)
+library(foreach) # needed for Pando
+library(igraph) # for Pando network analysis
+
+# multiome factor analysis
+library(MOFA2)
+source("scripts/MOFA_toSeurat.R") #might not be needed with MOFA2 dev version
+
+# getting GTF
+# remotes::install_github("alyssafrazee/ballgown")
+library(ballgown)
+
+# plotting
+library(ggplot2)
+library(ggnetwork)
+library(ggrepel)
+library(patchwork)
+
+# parallel processing
+library(foreach)
+library(parallel)
+library(doParallel)
+
+set.seed(23)
+```
+
+
+
+# Load data
+Load MOFA integrated and annotated data
+
+```{r}
+mome_atac_SCT_mofa = readRDS("data/processed/multiome/multiome_integATAC_SCT_annot.RDS")
+meta_regs = read.csv("data/processed/multiome/WP_region_predictions.csv", header = T, row.names = 1)
+
+mome_atac_SCT_mofa = AddMetaData(mome_atac_SCT_mofa, metadata = meta_regs)
+```
+
+
+
+# Global peak characterisation
+Peak regions
+
+```{r}
+DefaultAssay(mome_atac_SCT_mofa) = "ATAC"
+## get transcripts
+transc = Annotation(mome_atac_SCT_mofa)[Annotation(mome_atac_SCT_mofa)$type=="transcript",]
+transc = granges(transc[width(transc)>600,])
+## get promoters
+proms = restrict(promoters(transc, upstream=5000, downstream=500), start = 1) # restrict fixes issues
+
+## get and summarise exons
+exons = reduce(Annotation(mome_atac_SCT_mofa)[Annotation(mome_atac_SCT_mofa)$type=="exon",])
+
+g = Annotation(mome_atac_SCT_mofa)[Annotation(mome_atac_SCT_mofa)$type=="gene",]
+feat = c(proms, g, exons)
+feat$type = c(rep("promoter", length(proms)), rep("gene", length(g)),
+              rep("exon", length(exons)))
+
+overl_f = findOverlaps(mome_atac_SCT_mofa, feat)
+overl_df = data.frame("region" = c(rownames(mome_atac_SCT_mofa)[overl_f@from], 
+                                   setdiff(rownames(mome_atac_SCT_mofa),
+                                           rownames(mome_atac_SCT_mofa)[overl_f@from])),
+                      "type" = c(feat$type[overl_f@to], 
+                                 rep("distal", length(setdiff(rownames(mome_atac_SCT_mofa),
+                                                      rownames(mome_atac_SCT_mofa)[overl_f@from])))))
+overl_df = merge(overl_df, data.frame(table(overl_df$region, overl_df$type)), by = 1)
+overl_df = unique(overl_df[overl_df$Freq>0,c(1,3,4)])
+overl_df = merge(overl_df, data.frame(table(overl_df$region)), by = 1)
+
+## parallel setup
+my.cluster = parallel::makeCluster(24)
+registerDoParallel(cl = my.cluster)
+
+## classify peaks based on region they appear in (~20min with 24 cores)
+typereg = foreach(i = unique(overl_df$region), .combine = 'c') %dopar% {
+    subdf = overl_df[overl_df$region==i,]
+  
+  if("distal" %in% subdf$Var2){
+    "distal"
+  } else if("promoter" %in% subdf$Var2){
+    if(!("exon" %in% subdf$Var2)){
+      "promoter"
+    } else if(subdf$Freq.x[subdf$Var2=="exon"]<2){
+      "promoter"
+    } else{
+      "gene body"
+    }
+  } else if("exon" %in% subdf$Var2){
+    if(subdf$Freq.x[subdf$Var2=="exon"]==1){
+      "exon"
+    } else{
+      "gene body"
+    }
+  } else if("gene" %in% subdf$Var2){
+    "intron"
+  } else{
+    NA
+  }
+}
+```
+
+Peak sizes
+
+```{r}
+p_width = width(mome_atac_SCT_mofa@assays$ATAC@ranges)
+names(p_width) = rownames(mome_atac_SCT_mofa@assays$ATAC@meta.features)
+
+peak_char = data.frame(row.names = rownames(mome_atac_SCT_mofa@assays$ATAC@meta.features),
+                       "width" = p_width,
+                       "region" = typereg[rownames(mome_atac_SCT_mofa@assays$ATAC@meta.features)])
+
+ggplot(peak_char, aes(x = region, y = width))+
+  geom_violin(draw_quantiles = c(.25,.5,.75), scale = "width")+
+  scale_y_log10()+  
+  theme_bw()
+```
+
+Proportion of types of peaks
+
+```{r}
+names(typereg) = unique(overl_df$region)
+pie(table(typereg)) # number of peaks
+pie(tapply(peak_char$width, peak_char$region, sum)) # length of peaks
+```
+
+Open chromatin per cell type
+
+```{r}
+openlength = list()
+for(i in colnames(mome_atac_SCT_mofa@assays$ATAC@counts)){
+  openlength[[i]] = sum(peak_char[rownames(mome_atac_SCT_mofa@assays$ATAC@counts)[mome_atac_SCT_mofa@assays$ATAC@counts[,i]>0],"width"])
+}
+
+plot_df = mome_atac_SCT_mofa@meta.data[,c("annot_GEX", "highlevel_mofa", "nFeature_ATAC", "pred_regions_top")]
+mpeaks = tapply(plot_df$nFeature_ATAC, plot_df$annot_GEX, mean)
+plot_df$annot_GEX = factor(plot_df$annot_GEX, levels = names(mpeaks)[order(mpeaks, decreasing = T)])
+plot_df$totallength = unlist(openlength[rownames(plot_df)])
+
+ggplot(plot_df, aes(x = annot_GEX, y = nFeature_ATAC))+
+  stat_summary()+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+
+ggplot(plot_df, aes(x = annot_GEX, y = totallength))+
+  stat_summary()+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+```
+
+Marker peak sizes and regions for each population
+
+```{r}
+GEXcl_mk_ATAC = read.csv(file = "results/multiome/GEXcl_mk_ATAC.csv", header = T)
+
+peak_char_mk = merge(peak_char, GEXcl_mk_ATAC[,c(1,7)], by.x = 0, by.y = 1, all = T)
+sub_peak_char = peak_char_mk[!is.na(peak_char_mk$cluster),]
+
+ggplot(sub_peak_char, aes(x = cluster, y = width, colour = cluster))+
+  facet_wrap(~region)+
+  ggbeeswarm::geom_beeswarm(size = .33)+
+  scale_y_log10()+  
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        legend.position = "none")
+
+cl_reg = data.frame(table(sub_peak_char$cluster, sub_peak_char$region))
+cl_reg$Var1 = factor(cl_reg$Var1, levels = rev(names(sort(table(sub_peak_char$cluster)))))
+
+ggplot(cl_reg[order(cl_reg$Freq),], aes(y = Var2, x = Var1, 
+                                        fill = log10(Freq+1), size = log10(Freq+1)))+
+  geom_point(shape = 21)+
+  theme_bw()+
+  guides(size = guide_legend("# (log10)", reverse = T), fill = guide_legend("# (log10)", reverse = T))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+```
+
+Motifs per peak
+
+```{r}
+# Get a list of motif position frequency matrices from the JASPAR database - vertebrates
+pfm = getMatrixSet(JASPAR2020, opts = list(tax_group = "vertebrates", all_versions = F))
+
+DefaultAssay(mome_atac_SCT_mofa) = "ATAC"
+
+# add motif information
+mome_atac_SCT_mofa = AddMotifs(object = mome_atac_SCT_mofa, pfm = pfm, assay = "ATAC",
+                               genome = BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M)
+
+peak_char$nmotifs = rowSums(mome_atac_SCT_mofa@assays$ATAC@motifs@data)[rownames(peak_char)]
+peak_char$nmotifsw = peak_char$nmotifs/peak_char$width
+```
+
+Plotting motif density
+
+```{r}
+ggplot(peak_char, aes(x = region, y = nmotifsw))+
+  geom_violin(scale = "width", draw_quantiles = c(.25,.5,.75))+
+  theme_classic()
+
+ggplot(peak_char[peak_char$width>50,], aes(x = region, y = nmotifsw))+
+  geom_violin(scale = "width", draw_quantiles = c(.25,.5,.75))+
+  theme_classic()
+
+ggplot(peak_char, aes(x = log10(width), y = nmotifsw))+
+  facet_wrap(~region, scales = "free")+
+  geom_bin2d()+
+  scale_fill_gradient(name = "count", trans = "log10")+
+  theme_classic()
+```
+
+Get motifs enriched per population using the marker regions
+
+```{r}
+# GC content for each peak has already been computed
+cl_motif_l = list()
+for(cl in unique(GEXcl_mk_ATAC$cluster)){
+  if(length(GEXcl_mk_ATAC$gene[GEXcl_mk_ATAC$cluster==cl])>2){
+    cl_motif_l[[cl]] = FindMotifs(mome_atac_SCT_mofa, background = NULL,
+                                  features = GEXcl_mk_ATAC$gene[GEXcl_mk_ATAC$cluster==cl])
+  }
+}
+```
+
+Get DE motifs
+
+```{r}
+DefaultAssay(mome_atac_SCT_mofa) = "chromvar"
+
+# all cell types
+motifmk_l = list()
+for(g in c("annot_GEX", "neu", "pred_regions_top", "reg_neu")){
+  if(grepl("neu", g)){
+    cells_use = grepl("SUBSET", mome_atac_SCT_mofa$annot_GEX) #neurons only
+  } else{
+    cells_use = mome_atac_SCT_mofa$annot_GEX!="doublets"
+    mome_atac_SCT_mofa = SetIdent(mome_atac_SCT_mofa, value = g)
+  }
+  regs_use = if(grepl("reg", g)) mome_atac_SCT_mofa$pred_regions_top!="other/unknown" &
+    !is.na(mome_atac_SCT_mofa$pred_regions_top) else !is.na(mome_atac_SCT_mofa$pred_regions_top)
+  
+  motifmk_l[[g]] = FindAllMarkers(mome_atac_SCT_mofa[,cells_use & regs_use], 
+                                  min.pct = 0.1, test.use = "wilcox", logfc.threshold = 0.2,
+                                  assay = "chromvar", pseudocount.use = 0.1, verbose = T)
+}
+
+df = motifmk_l$reg_neu[motifmk_l$reg_neu$p_val_adj<=0.05,]
+df$n = unlist(mome_atac_SCT_mofa@assays$ATAC@motifs@motif.names[df$gene])
+df2 = motifmk_l$neu[motifmk_l$neu$p_val_adj<=0.05,]
+df2$n = unlist(mome_atac_SCT_mofa@assays$ATAC@motifs@motif.names[df2$gene])
+df3 = motifmk_l$annot_GEX[motifmk_l$annot_GEX$p_val_adj<=0.05,]
+df3$n = unlist(mome_atac_SCT_mofa@assays$ATAC@motifs@motif.names[df3$gene])
+
+mot_l = tapply(df$n, df$cluster, c)
+
+#get matrix with peak (and its characts), % in a group, % outside that group, number of motifs, number of motifs that are markers for that group 
+mome_atac_SCT_mofa@assays$ATAC@motifs@data
+```
+
+
+```{r, fig.width=12}
+avg_motif = AverageExpression(mome_atac_SCT_mofa, assays = "chromvar", group.by = "annot_GEX", slot = "data")$chromvar
+avg_motif = avg_motif[,colnames(avg_motif)!="doublets"]
+tabmotifs = table(motifmk_l$pred_regions_top$gene[motifmk_l$pred_regions_top$p_val_adj<=0.05 & motifmk_l$pred_regions_top$avg_log2FC>=0.5],
+                  motifmk_l$pred_regions_top$cluster[motifmk_l$pred_regions_top$p_val_adj<=0.05 & motifmk_l$pred_regions_top$avg_log2FC>=0.5])
+tabmotifs = tabmotifs[rowSums(tabmotifs)==1,]
+df_motifs = reshape2::melt(apply(tabmotifs, 2, function(x) rownames(tabmotifs)[x==1]))
+rownames(df_motifs) = df_motifs[,1]
+df_motifs = data.frame(row.names = rownames(df_motifs), "region" = df_motifs$L1)
+pheatmap::pheatmap(avg_motif[rownames(df_motifs),], scale = "row", annotation_row = df_motifs, clustering_method = "ward.D2")
+pheatmap::pheatmap(avg_motif, scale = "row", annotation_row = df_motifs, clustering_method = "ward.D2")
+```
+
+
+
+Region-specific peaks and genes
+
+```{r}
+cells_use = mome_atac_SCT_mofa$annot_GEX!="doublets"
+
+# ATAC
+DefaultAssay(mome_atac_SCT_mofa) = "ATAC"
+de_atac_l = list()
+for(g in c("pred_regions_top", "pred_regions_all", "pred_lr")){
+  mome_atac_SCT_mofa = SetIdent(mome_atac_SCT_mofa, value = g)
+  
+  reg_mk_ATAC = FindAllMarkers(mome_atac_SCT_mofa[,cells_use],  min.pct = 0.1, test.use = 'LR', 
+                               assay = "ATAC", pseudocount.use = 0.1, logfc.threshold = 0.2, 
+                               latent.vars = c('nCount_ATAC'), verbose = T, only.pos = F)
+  reg_mk_ATAC = reg_mk_ATAC[reg_mk_ATAC$p_val_adj<=0.05,]
+  closest_atac = ClosestFeature(mome_atac_SCT_mofa, regions = unique(reg_mk_ATAC$gene))
+  reg_mk_ATAC = merge(reg_mk_ATAC, closest_atac[,c("query_region","type","distance","gene_name")],
+                      by.x = "gene", by.y = "query_region", all.x = T)
+  write.csv(reg_mk_ATAC, file = paste0("results/multiome/", g, "_mk_ATAC.csv"), 
+            col.names = T, row.names = F, quote = F)
+  de_atac_l[[g]] = reg_mk_ATAC
+}
+
+# RNA
+reg_mk_SCT = FindAllMarkers(mome_atac_SCT_mofa[,cells_use], min.pct = 0.1, test.use = "wilcox", 
+                            assay = "SCT", pseudocount.use = 0.1, logfc.threshold = 0.2, verbose = T)
+reg_mk_SCT = reg_mk_SCT[reg_mk_SCT$p_val_adj<=0.05,]
+write.csv(reg_mk_SCT, file = "results/multiome/reg_mk_SCT.csv", col.names = T, row.names = F,
+          quote = F)
+```
+
+Get region markers using FindConservedMarkers
+
+```{r}
+# ATAC
+DefaultAssay(mome_atac_SCT_mofa) = "ATAC"
+cons_atac_l = list()
+cons_rna_l = list()
+
+cells_use = mome_atac_SCT_mofa$annot_GEX!="doublets"
+subdat = mome_atac_SCT_mofa[,cells_use]
+
+for(g in c("pred_regions_top", "pred_regions_all", "pred_lr")){
+  subdat = SetIdent(subdat, value = g)
+  
+  regct = table(subdat$annot_GEX, subdat@meta.data[,g])
+  
+  l_atac = list()
+  l_rna = list()
+  for(id in colnames(regct)){
+    ctuse = rownames(regct)[apply(regct, 1,  function(x) x[id]>=3 &
+                                    sum(x[-which(colnames(regct)==id)])>=3)]
+    subsubdat = subdat[,subdat$annot_GEX %in% ctuse]
+    
+    cons_reg_mk_ATAC = FindConservedMarkers(subsubdat, min.pct = 0.1, ident.1 = id, 
+                                            test.use = 'LR', grouping.var = "annot_GEX", assay = "ATAC",
+                                            pseudocount.use = 0.1, logfc.threshold = 0.2, only.pos = T,
+                                            latent.vars = c('nCount_ATAC'), verbose = T)
+    cons_reg_mk_ATAC = cons_reg_mk_ATAC[cons_reg_mk_ATAC$p_val_adj<=0.05,]
+    l_atac[[id]] = cons_reg_mk_ATAC
+    
+    # RNA
+    cons_reg_mk_SCT = FindConservedMarkers(mome_atac_SCT_mofa[,cells_use], min.pct = 0.1, 
+                                           ident.1 = id, test.use = "wilcox", assay = "SCT",
+                                           pseudocount.use = 0.1, grouping.var = "annot_GEX",
+                                           logfc.threshold = 0.2, verbose = T, min.cells.group = 1)
+    cons_reg_mk_SCT = reg_mk_SCT[reg_mk_SCT$p_val_adj<=0.05,]
+    l_rna[[id]] = cons_reg_mk_SCT
+  }
+  #l_atac = Reduce(rbind, l_atac)
+  #l_rna = Reduce(rbind, l_atac)
+  
+  #closest_atac = ClosestFeature(mome_atac_SCT_mofa, regions = unique(l_atac$gene))
+  #l_atac = merge(l_atac, closest_atac[,c("query_region","type","distance","gene_name")],
+  #               by.x = "gene", by.y = "query_region", all.x = T)
+  #write.csv(l_atac, file = paste0("results/multiome/", g, "_consMk_ATAC.csv"), 
+  #          col.names = T, row.names = F, quote = F)
+  
+  
+  #write.csv(l_rna, file = paste0("results/multiome/", g, "_consMk_SCT.csv"), 
+  #                               col.names = T, row.names = F, quote = F)
+  
+  cons_atac_l[[g]] = l_atac
+  cons_rna_l[[g]] = l_rna
+}
+```
+
+Plot population abundance per region
+
+```{r}
+
+```
+
+
+
+
+# Networking
+Load data
+
+```{r}
+mome_atac_SCT = readRDS(file = "data/processed/multiome/multiome_integATAC_SCT.RDS")
+mome_macs_SCT = readRDS(file = "data/processed/multiome/multiome_integMACS_SCT.RDS")
+```
+
+Load markers
+
+```{r}
+mk_ct_l = readRDS("./results/RegionAnalysis/mk_ct_allData_subsets.RDS")
+mk_ct = mk_ct_l$all[mk_ct_l$all$padj<=0.05 & mk_ct_l$all$logFC>0.15,]
+
+# compile markers from subsets
+mk_ct_comp = rbind(mk_ct_l$GABA, mk_ct_l$glut, mk_ct_l$ependymal, mk_ct_l$npc,
+                   mk_ct_l$all[mk_ct_l$all$group %in% c("microglia_8", "oligodendrocyte_10","oligodendrocyte_15", 
+                                                        "endothelial_11", "endothelial_12", "endothelial_14"),])
+mk_ct_comp = mk_ct_comp[mk_ct_comp$padj<=0.05 & mk_ct_comp$logFC>0.15,]
+```
+
+Split ATAC into 3 types of regions
+
+```{r}
+# CellRanger peaks
+DefaultAssay(mome_atac_SCT) = "ATAC"
+transc = Annotation(mome_atac_SCT)[Annotation(mome_atac_SCT)$type=="transcript",] # get transcripts
+transc = granges(transc[width(transc)>600,])
+proms = restrict(promoters(transc, upstream=5000, downstream=500), start = 1) # restrict fixes issues with negative genome coordinates
+proms$type = "promoter"
+genebodies = setdiff(transc, proms)
+genebodies$type = "genebody"
+feat = c(proms, genebodies)
+
+closest_f = ClosestFeature(mome_atac_SCT, regions = rownames(mome_atac_SCT), annotation = feat)
+closest_f$type = ifelse(closest_f$distance!=0, "distal", closest_f$type)
+
+for(tt in unique(closest_f$type)){
+  p = closest_f$query_region[closest_f$type==tt]
+  i = paste0("ATAC_", tt)
+  mome_atac_SCT[[i]] = CreateChromatinAssay(mome_atac_SCT@assays$ATAC@counts[p,])
+  mome_atac_SCT = RunTFIDF(mome_atac_SCT, assay = i)
+  mome_atac_SCT = FindTopFeatures(mome_atac_SCT, assay=i, min.cutoff = 300)
+  print(length(mome_atac_SCT[[i]]@var.features))
+}
+```
+
+GRN inference - CellRanger peaks
+
+```{r}
+DefaultAssay(mome_atac_SCT) = "RNA"
+
+# Get motif data
+data(motifs)
+
+# define genes
+genes = VariableFeatures(mome_atac_SCT, assay = "RNA")
+genes = unique(mk_ct_comp$feature)
+length(genes)
+
+# define peaks
+mome_atac_SCT = FindTopFeatures(mome_atac_SCT, assay = "ATAC_promoter", min.cutoff = 450)
+mome_atac_SCT = FindTopFeatures(mome_atac_SCT, assay = "ATAC_distal", min.cutoff = 450)
+mome_atac_SCT = FindTopFeatures(mome_atac_SCT, assay = "ATAC_genebody", min.cutoff = 450)
+regions = unique(c(mome_atac_SCT@assays$ATAC_promoter@var.features,
+                   mome_atac_SCT@assays$ATAC_distal@var.features,
+                   mome_atac_SCT@assays$ATAC_genebody@var.features))
+
+isreg = rownames(mome_atac_SCT@assays$ATAC@meta.features) %in% regions
+regions = mome_atac_SCT@assays$ATAC@ranges[isreg,]
+length(regions)
+
+# Initiate GRN object and select candidate regions
+mome_atac_SCT_plus = initiate_grn(mome_atac_SCT, peak_assay = "ATAC", rna_assay = "RNA",
+                                  regions = regions)
+
+# Scan candidate regions for TF binding motifs
+mome_atac_SCT_plus = find_motifs(mome_atac_SCT_plus, pfm = motifs, 
+                                 genome = BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M)
+
+DefaultAssay(mome_atac_SCT_plus) = "ATAC"
+# Infer gene regulatory network
+cl = parallel::makeCluster(32)
+doParallel::registerDoParallel(cl)
+mome_atac_SCT_plus = infer_grn(mome_atac_SCT_plus, downstream = 500, parallel = T)
+
+# Print inferred coefficients
+coef(mome_atac_SCT_plus)
+
+# save
+saveRDS(mome_atac_SCT_plus, file = "data/processed/multiome/multiome_integATAC_SCT_plus.RDS")
+write.csv(coef(mome_atac_SCT_plus), file = "results/multiome/mome_atac_SCT_plus_coef.csv", 
+          col.names = T, row.names = F, quote = F)
+```
+
+Global network plotting
+
+```{r, fig.width=18, fig.height=10}
+pando_atac_coef = coef(mome_atac_SCT_plus)
+pando_atac_coef = pando_atac_coef[pando_atac_coef$padj<=0.05,]
+
+fff = pando_atac_coef$estimate>0.01 & pando_atac_coef$target %in% pando_atac_coef$tf
+dat = as.data.frame(pando_atac_coef[fff,c(1,2,5,9)])
+
+igdat = igraph::graph.data.frame(dat[,1:2])
+xxx = igraph::betweenness(igdat, directed = T)
+ppp = igraph::page_rank(igdat, directed = T)
+ddd = igraph::degree(igdat, mode = "out")
+eee = ego_size(igdat, mode = "out", order = 100)
+iii = ego_size(igdat, mode = "in", order = 100)
+plot(xxx, eee, pch = 21, cex = (ddd+1)/4)
+V(igdat)$name[eee==12]
+
+netdat = network::as.network(unique(dat[,1:2]))
+set.seed(1)
+plot_df = ggnetwork(netdat, layout = "fruchtermanreingold", cell.jitter = 1, component_wise = T)
+
+mk_cluster = lapply(unique(mk_ct_comp[mk_ct_comp$logFC>0.5,"feature"]), function(x) as.character(mk_ct_comp$group[which(mk_ct_comp$logFC==max(mk_ct_comp$logFC[mk_ct_comp$feature==x]))]))
+names(mk_cluster) = unique(mk_ct_comp[mk_ct_comp$logFC>0.5,"feature"])
+mk_cluster = unique(reshape2::melt(mk_cluster)[,2:1])
+colnames(mk_cluster) = c("gene", "cluster")
+plot_df = merge(plot_df, mk_cluster, by.x = "vertex.names", by.y = "gene", all.x = T)
+plot_df$cluster[is.na(plot_df$cluster)] = "other genes"
+plot_df$highlevel = unlist(lapply(strsplit(plot_df$cluster, "_"), function(x) x[1]))
+plot_df$highlevel[is.na(plot_df$highlevel)] = "other genes"
+
+labdf = head(dat[order(abs(dat$estimate), decreasing = T),], 1000)
+ggplot(plot_df, aes(x = x, y = y, fill = highlevel)) +
+  geom_edges(arrow = arrow(length = unit(6, "pt")), colour = "grey35",
+             mapping = aes(xend = xend, yend = yend)) +
+  geom_nodes() +
+  geom_label(data = unique(plot_df[plot_df$vertex.names %in% c(labdf$tf, labdf$target),]), 
+            mapping = aes(label = vertex.names), size=2.7, label.padding = unit(0.1, "lines"))+
+  theme_blank()+
+  theme(legend.position = "bottom")
+
+ggplot(plot_df, aes(x = x, y = y, fill = cluster)) +
+  geom_edges(arrow = arrow(length = unit(6, "pt")), colour = "grey35",
+             mapping = aes(xend = xend, yend = yend)) +
+  guides(fill = guide_legend(nrow = 2))+
+  geom_nodes() +
+  geom_label(data = unique(plot_df[plot_df$vertex.names %in% c(labdf$tf, labdf$target),]), 
+            mapping = aes(label = vertex.names), size=2.7, label.padding = unit(0.1, "lines"))+
+  theme_blank()+
+  theme(legend.position = "bottom")
+```
+
+Cell type-specific network
+
+```{r, fig.width=16, fig.height=10}
+pando_atac_coef = coef(mome_atac_SCT_plus)
+pando_atac_coef = pando_atac_coef[pando_atac_coef$padj<=0.05,]
+
+epmk = GEXcl_mk_SCT$gene[GEXcl_mk_SCT$cluster=="ependymal" & GEXcl_mk_SCT$avg_log2FC>0]
+expep = rowSums(mome_atac_SCT_plus@assays$SCT@counts[,mome_atac_SCT_plus$annot_GEX=="ependymal"])>0
+expep = rownames(mome_atac_SCT_plus@assays$SCT@counts)[expep]
+
+fff = pando_atac_coef$estimate>0.04 & pando_atac_coef$target %in% pando_atac_coef$tf
+dat = as.data.frame(pando_atac_coef[fff,c(1,2,5,9)])
+
+igdat = igraph::graph.data.frame(dat[dat$tf %in% c(epmk, expep) | 
+                                       dat$target %in% c(epmk, expep), 1:2])
+xxx = igraph::betweenness(igdat, directed = T)
+ppp = igraph::page_rank(igdat, directed = T)
+ddd = igraph::degree(igdat, mode = "out")
+eee = ego_size(igdat, mode = "out", order = 100)
+iii = ego_size(igdat, mode = "in", order = 100)
+plot(xxx, eee, pch = 21, cex = (ddd+1)/4)
+V(igdat)$name[eee==12]
+
+netdat = network::as.network(unique(dat[dat$tf %in% c(epmk, expep) | 
+                                          dat$target %in% c(epmk, expep) ,1:2]))
+set.seed(1)
+plot_df = ggnetwork(netdat, layout = "fruchtermanreingold", cell.jitter = 1, component_wise = T)
+
+
+plot_df$markers = ifelse(plot_df$vertex.names %in% epmk, "ependymal", "other genes")
+
+labdf = head(dat[order(abs(dat$estimate), decreasing = T),], 1000)
+ggplot(plot_df, aes(x = x, y = y, fill = markers)) +
+  geom_edges(arrow = arrow(length = unit(6, "pt")), colour = "grey35",
+             mapping = aes(xend = xend, yend = yend)) +
+  guides(fill = guide_legend(nrow = 1))+
+  geom_nodes() +
+  geom_label(data = unique(plot_df[plot_df$vertex.names %in% c(labdf$tf, labdf$target),]), 
+            mapping = aes(label = vertex.names), size=2.7, label.padding = unit(0.1, "lines"))+
+  theme_blank()+
+  theme(legend.position = "bottom")
+```
+
+Network for a couple of cell types
+
+```{r, fig.width=16, fig.height=10}
+pando_atac_coef = coef(mome_atac_SCT_plus)
+pando_atac_coef = pando_atac_coef[pando_atac_coef$padj<=0.05,]
+
+cts = c("glut_SUBSET_12", "glut_SUBSET_13", "GABA_SUBSET_15", "ependymal")
+epmk = GEXcl_mk_SCT$gene[GEXcl_mk_SCT$cluster %in% cts & GEXcl_mk_SCT$avg_log2FC>0]
+expep = rowSums(mome_atac_SCT_plus@assays$SCT@counts[,mome_atac_SCT_plus$annot_GEX %in% cts])>0
+expep = rownames(mome_atac_SCT_plus@assays$SCT@counts)[expep]
+
+fff = pando_atac_coef$estimate>0.04 & pando_atac_coef$target %in% pando_atac_coef$tf
+dat = as.data.frame(pando_atac_coef[fff,c(1,2,5,9)])
+
+igdat = igraph::graph.data.frame(dat[dat$tf %in% c(epmk, expep) | 
+                                       dat$target %in% c(epmk, expep), 1:2])
+xxx = igraph::betweenness(igdat, directed = T)
+ppp = igraph::page_rank(igdat, directed = T)
+ddd = igraph::degree(igdat, mode = "out")
+eee = ego_size(igdat, mode = "out", order = 100)
+iii = ego_size(igdat, mode = "in", order = 100)
+plot(xxx, eee, pch = 21, cex = (ddd+1)/4)
+V(igdat)$name[eee==12]
+
+netdat = network::as.network(unique(dat[dat$tf %in% c(epmk, expep) | 
+                                          dat$target %in% c(epmk, expep) ,1:2]))
+set.seed(1)
+plot_df = ggnetwork(netdat, layout = "fruchtermanreingold", cell.jitter = 1, component_wise = T)
+
+mk_sub_df = list("glut.npc" = GEXcl_mk_SCT$gene[GEXcl_mk_SCT$avg_log2FC>0 &
+                                                  GEXcl_mk_SCT$cluster=="glut_SUBSET_13"],
+                 "glut.eomes" = GEXcl_mk_SCT$gene[GEXcl_mk_SCT$avg_log2FC>0 &
+                                                    GEXcl_mk_SCT$cluster=="glut_SUBSET_12"],
+                 "GABA.npc" = GEXcl_mk_SCT$gene[GEXcl_mk_SCT$avg_log2FC>0 &
+                                                  GEXcl_mk_SCT$cluster=="GABA_SUBSET_15"], 
+                 "ependymal" = GEXcl_mk_SCT$gene[GEXcl_mk_SCT$avg_log2FC>0 &
+                                                  GEXcl_mk_SCT$cluster=="ependymal"])
+mk_sub_df = reshape2::melt(mk_sub_df)
+mk_sub_df = reshape2::dcast(mk_sub_df, value ~ L1, fill = 0)
+rownames(mk_sub_df) = mk_sub_df[,1]
+mk_sub_df = mk_sub_df[,-1]
+mk_sub_df[mk_sub_df!="0"] = "1"
+mkvec = apply(mk_sub_df, 1, function(x) paste(colnames(mk_sub_df)[x=="1"], collapse = "_"))
+plot_df$markers = mkvec[plot_df$vertex.names]
+plot_df$markers[is.na(plot_df$markers)] = "other genes"
+
+plot_df$markers = factor(plot_df$markers, 
+                         levels = c("ependymal", "GABA.npc", "glut.npc", "glut.eomes",
+                                    "ependymal_GABA.npc", "ependymal_glut.npc", 
+                                    "ependymal_glut.eomes", "ependymal_GABA.npc_glut.npc",
+                                    "ependymal_GABA.npc_glut.eomes", "GABA.npc_glut.npc",
+                                    "GABA.npc_glut.eomes", "glut.eomes_glut.npc", "other genes"))
+
+labdf = head(dat[order(abs(dat$estimate), decreasing = T),], 1000)
+ggplot(plot_df, aes(x = x, y = y, fill = markers)) +
+  geom_edges(arrow = arrow(length = unit(6, "pt")), colour = "grey35",
+             mapping = aes(xend = xend, yend = yend)) +
+  guides(fill = guide_legend(nrow = 2))+
+  #geom_nodes() +
+  geom_label(data = unique(plot_df[plot_df$vertex.names %in% c(labdf$tf, labdf$target),]), 
+            mapping = aes(label = vertex.names), size=2.7, label.padding = unit(0.1, "lines"))+
+  scale_fill_brewer(palette = "Set3")+
+  theme_blank()+
+  theme(legend.position = "bottom")
+```
+
+
+
+
+
+
+
+
+```{r}
+subplus_ep = mome_atac_SCT_plus[,mome_atac_SCT_plus$annot_GEX=="ependymal"]
+
+DefaultAssay(subplus_ep) = "ATAC"
+# Infer gene regulatory network
+cl = parallel::makeCluster(32)
+doParallel::registerDoParallel(cl)
+subplus_ep = infer_grn(subplus_ep, downstream = 500, parallel = T)
+```
+
+
+
+```{r, fig.width=16, fig.height=8}
+ep_atac_coef = coef(subplus_ep)
+ep_atac_coef = ep_atac_coef[ep_atac_coef$padj<=0.05,]
+
+expep = rownames(subplus_ep@assays$SCT@data)[rowSums(subplus_ep@assays$SCT@data)>0]
+epmk = GEXcl_mk_SCT$gene[GEXcl_mk_SCT$cluster=="ependymal" & GEXcl_mk_SCT$avg_log2FC>0]
+
+fff = ep_atac_coef$estimate>0 & ep_atac_coef$target %in% ep_atac_coef$tf
+dat = as.data.frame(ep_atac_coef[fff,c(1,2,5,9)])
+
+igdat = igraph::graph.data.frame(dat[,1:2])
+xxx = igraph::betweenness(igdat, directed = T)
+ppp = igraph::page_rank(igdat, directed = T)
+ddd = igraph::degree(igdat, mode = "out")
+eee = ego_size(igdat, mode = "out", order = 100)
+iii = ego_size(igdat, mode = "in", order = 100)
+plot(xxx, eee, pch = 21, cex = (ddd+1)/4)
+V(igdat)$name[eee==12]
+
+netdat = network::as.network(unique(dat[dat$tf %in% c(epmk,expep) | dat$target %in% c(epmk,expep) ,1:2]))
+library(ggnetwork)
+library(ggrepel)
+plot_df = ggnetwork(netdat, layout = "fruchtermanreingold", cell.jitter = 1, component_wise = T)
+
+
+plot_df$cluster = ifelse(plot_df$vertex.names %in% epmk, "ependymal", "other genes")
+
+labdf = head(dat[order(abs(dat$estimate), decreasing = T),], 1000)
+ggplot(plot_df, aes(x = x, y = y, fill = cluster)) +
+  geom_edges(arrow = arrow(length = unit(6, "pt")), colour = "grey35",
+             mapping = aes(xend = xend, yend = yend)) +
+  guides(fill = guide_legend(nrow = 1))+
+  geom_nodes() +
+  geom_label(data = unique(plot_df[plot_df$vertex.names %in% c(labdf$tf, labdf$target),]), 
+            mapping = aes(label = vertex.names), size=2.7, label.padding = unit(0.1, "lines"))+
+  theme_blank()+
+  theme(legend.position = "bottom")
+```
+
+
+
+
+
+
+
+```{r}
+pando_atac_coef = coef(mome_atac_SCT_plus)
+pando_atac_coef = pando_atac_coef[pando_atac_coef$padj<=0.05,]
+
+regions = reshape2::melt(list("promoter" = mome_atac_SCT@assays$ATAC_promoter@var.features,
+               "distal" = mome_atac_SCT@assays$ATAC_distal@var.features,
+               "genebody" = mome_atac_SCT@assays$ATAC_genebody@var.features))
+
+View(merge(pando_atac_coef, regions, by.x = 3, by.y = 1, all.x = T))
+```
+

@@ -1,0 +1,766 @@
+---
+title: "Ependymal cell analysis"
+output: html_notebook
+---
+
+# General setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(Matrix)
+library(mgcv)
+library(foreach)
+library(doParallel)
+library(parallel)
+library(ggdendro)
+library(dplyr)
+```
+
+Set colours for cell types and regions
+
+```{r}
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+cols_cc = c(
+#epen
+"#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472",
+#gaba
+"#700209", "#75090e","#7a0f13", "#801517", "#851a1b", "#8a1f1f", "#902423", "#952927", "#9a2d2c","#a03230", "#a53634", "#aa3a39", "#b03f3d","#b54342", "#ba4846", "#c04c4b", "#c5504f", "#ca5554", "#d05959", "#d55e5e","#73050c", "#780c11","#8d2221", "#982b2a","#a23432", "#a83837", "#b2413f", "#b84544", "#bd4a49", "#c85352", #"#cd5756",
+#glut
+"#054674", "#134d7b","#1d5481", "#265a88", "#2e618e", "#73a4cb", "#366995", "#3e709c", "#4677a2","#4d7ea9", "#5586b0", "#5c8db7", "#6495bd","#6b9cc4", "#7bacd2", "#8ebfe4", "#96c7eb", "#9ecff2", "#18507e", "#18507e","#2a5e8b", "#497ba6","#5889b3", "#6fa0c8","#7fafd6", "#6091ba", "#5182ac", "#3a6c98", "#a6d7f9",
+#npc
+"#ffb120", "#feb72a","#fdbc34", "#fcc13d", "#fbc745", "#facc4e", "#f9d156", "#f8d65f", "#f8da68","#f7df70", "#f7e479", "#f7e882", "#f7ed8a", "#f7f193", "#eca319"
+)
+ccnames = unique(sort(meta$cellclusters))
+names(cols_cc) = c(ccnames[grepl("epen", ccnames)], ccnames[grepl("GABA", ccnames)],ccnames[grepl("glut", ccnames)],ccnames[grepl("npc", ccnames)])
+
+reg_cols = c("other/unknown_pred" = "#C7CCC7", 
+             "medial" = "#52168D", "medial_pred" = "#661CB0", 
+             "dorsal" = "#C56007", "dorsal_pred" = "#ED7307", 
+             "lateral" = "#118392", "lateral_pred" = "#16A3B6")
+reg_cols_simp = c("medial" = "#52168D", "dorsal" = "#C56007", "lateral" = "#118392")
+```
+
+
+
+# Load data
+Load data
+
+```{r}
+ax_srat = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+ax_srat = AddMetaData(ax_srat, metadata = meta)
+meta_regs = read.csv("data/processed/multiome/WP_region_predictions.csv", 
+                    header = T, row.names = 1)
+newcellnames = rownames(meta_regs)
+newcellnames = gsub("-a1-1", "-1_1", newcellnames)
+newcellnames = gsub("-a1-2", "-1_2", newcellnames)
+newcellnames = gsub("-a3-1", "-1_3", newcellnames)
+newcellnames = gsub("-a3-2", "-1_4", newcellnames)
+rownames(meta_regs) = newcellnames
+ax_srat = AddMetaData(ax_srat, metadata = meta_regs)
+ax_srat$regions_all = ax_srat$pred_regions_top
+ax_srat$regions_all[is.na(ax_srat$regions_all)] = ax_srat$regions[is.na(ax_srat$regions_all)]
+
+div_srat = readRDS("data/expression/axolotl_reclust/Edu_1_2_4_6_8_12_fil_highvarfeat.RDS")
+meta_pred = read.csv("results/Div-seq/divseq_predicted_metadata.csv", 
+                     header = T, row.names = 1)
+div_srat = AddMetaData(div_srat, metadata = meta_pred)
+
+neg_srat = readRDS("data/expression/axolotl_reclust/divseq_1wpi_neg.RDS")
+```
+
+Save necessary data to predict negative data
+
+```{r}
+outname = "data/processed/axolotl_parts/neg_regions_data.mtx"
+outname2 = "data/processed/axolotl_parts/neg_regions_counts.mtx"
+if(!file.exists(outname)){
+  metadata_ax = neg_srat@meta.data[,c("sample", "batch")]
+  write.csv(metadata_ax, file = "data/processed/axolotl_parts/neg_regions_meta.csv", 
+            col.names = T, row.names = T, quote = F)
+  write.csv(neg_srat@assays$RNA@meta.features, 
+            file = "data/processed/axolotl_parts/neg_regions_genes.csv", 
+            col.names = T, row.names = T, quote = F)
+  
+  Matrix::writeMM(Matrix::t(neg_srat@assays$RNA@data), outname)
+  Matrix::writeMM(Matrix::t(neg_srat@assays$RNA@counts), outname2)
+}
+```
+
+Add predicted labels to negative data
+
+```{r}
+reg_pred = read.csv("results/Div-seq/preds_lr_regions_neg_all.csv", header = T, row.names = 1)
+ct_pred = read.csv("results/Div-seq/preds_rfc_CT_neg_all.csv", header = T, row.names = 1)
+
+neg_srat$pred_regs = reg_pred[colnames(neg_srat),"pred_lr"]
+neg_srat$pred_ctall = ct_pred[colnames(neg_srat),"pred_rfc"]
+```
+
+Ependymal only set
+
+```{r}
+ep_srat = ax_srat[,ax_srat$subclasses=="Ependymal"]
+```
+
+Ependymal + NB
+
+```{r}
+epnb_srat = ax_srat[,ax_srat$subclasses=="Ependymal" | ax_srat$subclasses=="NPC"]
+```
+
+Ependymal from all datasets
+
+```{r}
+# define 1wpi neg ependymal cells
+mk_neg = presto::wilcoxauc(neg_srat, group_by = "seurat_clusters")
+## 14 is ependymal, 23 is pericytes, 20 is microglia, 21 is some other glia?
+ep_neg = neg_srat[,neg_srat$seurat_clusters==14 & grepl("epen", neg_srat$pred_ctall)]
+
+# div-seq ependymal
+ep_div = div_srat[,grepl("epen", div_srat$high_level_anno) & grepl("epen", div_srat$pred_ctall)]
+
+# filter metadata
+ep_srat@meta.data = ep_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "chem", "high_level_anno", "cellclusters", "regions_all")]
+colnames(ep_srat@meta.data)[4] = "sample"
+ep_div@meta.data = ep_div@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "sample", "high_level_anno", "pred_ctall", "pred_regs")]
+ep_neg@meta.data = ep_neg@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "sample", "seurat_clusters", "pred_ctall", "pred_regs"), drop = F]
+
+all_ep = merge(ep_srat, list(ep_div, ep_neg))
+```
+
+
+
+# NPC and ependymal
+Plot cell cycle scores
+
+```{r}
+epnb_srat = CellCycleScoring(epnb_srat, g2m.features = cc.genes$g2m.genes,
+                             s.features = cc.genes$s.genes)
+plot_df = data.frame("g2m_score" = epnb_srat$G2M.Score,
+                     "cellclusters" = epnb_srat$cellclusters,
+                     "subcl" = epnb_srat$subclasses)
+g2m_med = tapply(plot_df$g2m_score, plot_df$cellclusters, median)
+plot_df$cellclusters = factor(plot_df$cellclusters, levels = rev(names(sort(g2m_med))))
+
+cc_box = ggplot(plot_df, aes(x = cellclusters, y = g2m_score, fill = cellclusters))+
+  facet_grid(~subcl, scales = "free_x", space = "free")+
+  geom_boxplot(outlier.size = 0.2)+
+  labs(y = "G2M score")+
+  scale_fill_manual(values = cols_cc[names(cols_cc) %in% plot_df$cellclusters])+
+  theme_classic()+
+  theme(axis.text.y = element_text(colour = "black", size = 6),
+        axis.text.x = element_text(size = 6.5, angle = 30, hjust = 1, vjust = 1, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        legend.position = "none")
+
+pdf("results/Ependymal/Epe_NB/NB_Ep_boxplots_G2M.pdf", height = 2.3, width = 5.5)
+print(cc_box)
+dev.off()
+```
+
+G2M score per group
+
+```{r}
+epnb_srat$epen_subg = ifelse(epnb_srat$cellclusters %in% c("epen_clus_3", "epen_clus_4"), "epen_a", 
+                    ifelse(epnb_srat$cellclusters %in% c("epen_clus_7", "epen_clus_1",
+                                                       "epen_clus_13", "epen_clus_14"), "epen_n", 
+                      ifelse(grepl("npc", epnb_srat$cellclusters), "NB", "epen_q")))
+
+plot_df = data.frame("g2m_score" = epnb_srat$G2M.Score,
+                     "cellclusters" = epnb_srat$epen_subg,
+                     "subcl" = epnb_srat$subclasses)
+g2m_med = tapply(plot_df$g2m_score, plot_df$cellclusters, median)
+plot_df$cellclusters = factor(plot_df$cellclusters, levels = rev(names(sort(g2m_med))))
+
+cc_box = ggplot(plot_df, aes(x = cellclusters, y = g2m_score, fill = cellclusters))+
+  facet_grid(~subcl, scales = "free_x", space = "free")+
+  geom_boxplot(outlier.size = 0.2)+
+  labs(y = "G2M score")+
+  scale_fill_manual(values = cols_cc[names(cols_cc) %in% plot_df$cellclusters])+
+  theme_classic()+
+  theme(axis.text.y = element_text(colour = "black", size = 6),
+        axis.text.x = element_text(size = 6.5, angle = 30, hjust = 1, vjust = 1, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        legend.position = "none")
+
+pdf("results/Ependymal/Epe_NB/NB_Ep_boxplots_G2M_grouped.pdf", height = 2.3, width = 2.3)
+print(cc_box)
+dev.off()
+```
+
+G2M score per group (2)
+
+```{r}
+epnb_srat$epen_subg = ifelse(epnb_srat$cellclusters %in% c("epen_clus_3", "epen_clus_4"), "epen_a", 
+                      ifelse(epnb_srat$cellclusters %in% c("epen_clus_7", "epen_clus_1",
+                                                           "epen_clus_13", "epen_clus_14"), "epen_n", 
+                      ifelse(epnb_srat$cellclusters %in% c("npc_SUBSET_7", "npc_SUBSET_8"), 
+                             "early NB",
+                      ifelse(grepl("npc", epnb_srat$cellclusters), "other NB", "epen_q"))))
+
+plot_df = data.frame("g2m_score" = epnb_srat$G2M.Score,
+                     "cellclusters" = epnb_srat$epen_subg,
+                     "subcl" = epnb_srat$subclasses)
+g2m_med = tapply(plot_df$g2m_score, plot_df$cellclusters, median)
+plot_df$cellclusters = factor(plot_df$cellclusters, levels = rev(names(sort(g2m_med))))
+plot_df$subcl[plot_df$subcl=="NPC"] = "NB"
+
+cols_ng = c("#12400c", "#f7ed8a", "#f9d156", "#468b3b", "#81e472")
+names(cols_ng) = levels(plot_df$cellclusters)
+
+cc_box = ggplot(plot_df, aes(x = cellclusters, y = g2m_score, fill = cellclusters))+
+  facet_grid(~subcl, scales = "free_x", space = "free")+
+  geom_boxplot(outlier.size = 0.2, size = 0.18)+
+  labs(y = "G2M score")+
+  scale_fill_manual(values = cols_ng)+
+  theme_classic()+
+  theme(axis.text.y = element_text(colour = "black", size = 6),
+        axis.text.x = element_text(size = 6.5, angle = 30, hjust = 1, vjust = 1, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        legend.position = "none")
+
+pdf("results/Ependymal/Epe_NB/NB_Ep_boxplots_G2M_grouped2.pdf", height = 1.8, width = 2)
+print(cc_box)
+dev.off()
+```
+
+
+
+# Ependymal characterisation
+Ependymal markers
+
+```{r}
+mk_all = presto::wilcoxauc(ep_srat, group_by = "cellclusters")
+```
+
+Ependymal dendrogramme with top markers
+
+```{r}
+topn = 50
+mk_ct_sub = mk_all[mk_all$padj<=0.05 & mk_all$logFC>=0.2,]
+
+top_genes_cl = tapply(rownames(mk_ct_sub), mk_ct_sub$group, 
+                    function(x) mk_ct_sub[x,"feature"][order(mk_ct_sub[x,"logFC"], 
+                                                             decreasing = T)])
+
+avg_exp_all_top = AverageExpression(ep_srat, 
+                                    features = unique(unlist(lapply(top_genes_cl,
+                                                                    function(x) x[1:topn]))),
+                                    group.by = "cellclusters", 
+                                    slot = "data")$RNA[,names(top_genes_cl)]
+
+scaled_top = apply(avg_exp_all_top, 1, scale, scale = T)
+rownames(scaled_top) = colnames(avg_exp_all_top)
+hc_ep = hclust(dist(scaled_top), method = "ward.D")
+
+dhc = as.dendrogram(hc_ep)
+ddata = dendro_data(dhc, type = "rectangle")
+
+p = ggplot(segment(ddata))+ 
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend))+ 
+  scale_x_continuous(breaks = seq_along(ddata$labels$label), 
+                     labels = ddata$labels$label, position = "top")+
+  coord_flip()+ 
+  scale_y_reverse(expand = c(0, 0))+
+  theme_dendro()+
+  theme(axis.text.y = element_text(hjust = 1, face = "bold", colour = cols_cc[ddata$labels$label]),
+        axis.text.x = element_blank())
+print(p)
+
+pdf(paste0("results/Ependymal/Epe_SS/dendrogramme_Epe_avgExp_50mk.pdf"), 
+    height = 4, width = 3.5, useDingbats = F)
+print(p)
+dev.off()
+```
+
+Make broad ependymal groups
+
+```{r}
+ep_srat$epen_subg = ifelse(ep_srat$cellclusters %in% c("epen_clus_3", "epen_clus_4"), "epen_a", 
+                    ifelse(ep_srat$cellclusters %in% c("epen_clus_7", "epen_clus_1",
+                                                       "epen_clus_13", "epen_clus_14"), 
+                           "epen_n", "epen_q"))
+```
+
+Get ependymal markers
+
+```{r}
+mk_subg = presto::wilcoxauc(ep_srat, group_by = "epen_subg")
+
+write.csv(mk_subg, file = "results/Ependymal/markers_broad_ependymal_groups.csv", 
+          col.names = T, row.names = T, quote = F)
+```
+
+Get GO Terms per broad group
+
+```{r}
+bg = rownames(ep_srat)
+bg = bg[!grepl("AMEX", bg) & !grepl("..", bg, fixed = T)]
+epen_go = list()
+for(g in unique(ep_srat$epen_subg)){
+  subdf = mk_subg[mk_subg$group==g & mk_subg$padj<=0.05 & mk_subg$logFC>=0.3 &
+                    !grepl("AMEX", mk_subg$feature) & !grepl("..", mk_subg$feature, fixed = T),]
+  epen_go[[g]] = gprofiler2::gost(subdf$feature[order(subdf$logFC, decreasing = T)], 
+                                  ordered_query = T, custom_bg = bg)
+}
+```
+
+List terms and genes
+
+```{r}
+genes_epen_go = list()
+for(g in names(epen_go)){
+  terms = epen_go[[g]]$result$term_id
+  terms = terms[grepl("GO:", terms, fixed = T)]
+  terms = terms[!(terms %in% unlist(epen_go[[g]]$result$parents))]
+  
+  tnames = unique(epen_go[[g]]$result[grepl("BP", epen_go[[g]]$result$source),c(9,11,3)])
+  tnames = tnames[tnames[,1] %in% terms,]
+  
+  genes_epen_go[[g]] = gprofiler2::gconvert(terms, organism = "hsapiens",
+                                            target="HGNC", mthreshold = Inf, filter_na = TRUE)
+  g_de = mk_subg[mk_subg$group==g & mk_subg$padj<=0.05 & mk_subg$logFC>=0.3 &
+                   !grepl("AMEX", mk_subg$feature) & 
+                   !grepl("..", mk_subg$feature, fixed = T),"feature"]
+  genes_epen_go[[g]] = genes_epen_go[[g]][,c(2,5)]
+  genes_epen_go[[g]] = genes_epen_go[[g]][genes_epen_go[[g]][,2] %in% g_de,]
+  genes_epen_go[[g]] = merge(genes_epen_go[[g]], tnames, by = 1)
+}
+genes_epen_go = reshape2::melt(genes_epen_go)
+
+mk_go_epen = merge(unique(mk_subg[mk_subg$padj<=0.05 & mk_subg$logFC>=0.3,c(1,2,3,4,8)]), 
+                   unique(genes_epen_go[,-4]), by.x = 1, by.y = 2)
+
+write.csv(mk_go_epen, file = "results/Ependymal/Epe_SS/mk_go_epen.csv", row.names = T, quote = F)
+```
+
+Plot enriched modules
+
+```{r}
+subdat = unique(mk_go_epen[,c(7,8,9)])
+write.csv(subdat, file = "results/Ependymal/Epe_SS/go_epen.csv", row.names = T, quote = F)
+subdat = subdat[order(subdat$value, decreasing = F),]
+subdat = subdat %>% group_by(L1) %>% top_n(-5, value)
+
+subdat$term_name = gsub("(.{15,}?)\\s", "\\1\n", subdat$term_name)
+subdat$term_name = factor(subdat$term_name, levels = rev(subdat$term_name))
+
+enr_plt = ggplot(subdat, aes(x = -log10(value), y = term_name, group = term_name))+
+  facet_wrap(~L1, scales = "free")+
+  geom_segment(mapping = aes(xend = -log10(value), yend = term_name), x = 0)+
+  geom_point(size = 2)+
+  labs(x = "-log10(pvalue)")+
+  theme_bw()+
+  theme(axis.text = element_text(size = 6.5, colour = "black"),
+        axis.title = element_text(size = 7),
+        strip.text = element_text(size = 7))
+
+pdf(paste0("results/Ependymal/Epe_SS/GO_ependymal_top5.pdf"), 
+    height = 2.3, width = 8, useDingbats = F)
+print(enr_plt)
+dev.off()
+```
+
+Plot enriched module scores as box plots
+
+```{r}
+for(tn in subdat$term_name){
+  truetn = gsub("\n", " ", tn)
+  ep_srat = AddModuleScore(ep_srat, features = list(unique(mk_go_epen$feature[mk_go_epen$term_name==truetn])), name = truetn)
+}
+
+box_scores = list()
+for(tn in colnames(ep_srat@meta.data)[endsWith(colnames(ep_srat@meta.data), "1")]){
+  g_exp = data.frame("gene" = ep_srat@meta.data[,tn],
+                     "cc" = ep_srat$cellclusters,
+                     "subg" = ep_srat$epen_subg)
+  titi = gsub("1", "", gsub(".", " ", tn, fixed = T))
+  
+  box_scores[[tn]] = ggplot(g_exp, aes(x = cc, y = gene, fill = cc))+
+    facet_grid(~subg, scales = "free_x", space = "free")+
+    geom_boxplot()+
+    scale_fill_manual(values = cols_cc[names(cols_cc) %in% g_exp$cc])+
+    labs(y = "expression score")+
+    theme_classic()+
+    theme(axis.text.y = element_text(colour = "black", size = 6),
+          axis.text.x = element_text(size = 7, angle = 30, hjust = 1, vjust = 1, colour = "black"),
+          axis.title.x = element_blank(),
+          axis.title.y = element_text(size = 7),
+          strip.text = element_text(size = 7),
+          legend.position = "none")
+  
+  pdf(paste0("results/Ependymal/Epe_SS/Ep_boxplots_", titi, ".pdf"), height = 2.3, width = 4.5)
+  print(box_scores[[tn]])
+  dev.off()
+}
+```
+
+
+
+# Ependymal joint analysis
+## Processing and integration
+Joint processing
+
+```{r}
+all_ep$sample_dat = all_ep$sample
+all_ep$sample_dat[grepl("wpi", all_ep$sample_dat)] = "div"
+all_ep = NormalizeData(all_ep)
+all_ep = FindVariableFeatures(all_ep, nfeatures = 10000)
+all_ep = ScaleData(all_ep, vars.to.regress = c("nCount_RNA", "percent.mt", "sample_dat"))
+all_ep = RunPCA(all_ep, verbose = F)
+ElbowPlot(all_ep, ndims = 50)
+```
+
+Run UMAP
+
+```{r}
+all_ep = RunUMAP(all_ep, dims = 1:20, verbose = F)
+UMAPPlot(all_ep, group.by = "sample_dat")
+UMAPPlot(all_ep, group.by = "cellclusters")
+```
+
+Integrate with Harmony based on multiome/v3.1/div-seq
+
+```{r}
+all_ep@reductions$harmony = NULL
+all_ep@reductions$umap_harmony = NULL
+# Run Harmony
+all_ep = harmony::RunHarmony(all_ep, group.by.vars = "sample_dat", tau = 30, 
+                             plot_convergence = F, assay.use = "RNA")
+
+# Run UMAP on Harmony dimentions
+all_ep = RunUMAP(all_ep, reduction = "harmony", dims = 1:10, reduction.name = "umap_harmony")
+```
+
+Check integration
+
+```{r}
+all_ep$ctlabels = all_ep$cellclusters
+all_ep$ctlabels[is.na(all_ep$ctlabels)] = all_ep$pred_ctall[is.na(all_ep$ctlabels)]
+all_ep$reglabels = all_ep$regions_all
+all_ep$reglabels[is.na(all_ep$reglabels)] = all_ep$pred_regs[is.na(all_ep$reglabels)]
+DimPlot(all_ep, group.by = "sample_dat", reduction = "umap_harmony")
+DimPlot(all_ep, group.by = "cellclusters", reduction = "umap_harmony")
+plt1 = DimPlot(all_ep, group.by = "ctlabels", reduction = "umap_harmony", 
+               label = T, split.by = "sample_dat")
+plt2 = DimPlot(all_ep, group.by = "ctlabels", reduction = "umap_harmony", 
+               label = T, split.by = "sample")
+plt3 = DimPlot(all_ep, group.by = "sample_dat", reduction = "umap_harmony", label = T)
+plt4 = DimPlot(all_ep, group.by = "reglabels", reduction = "umap_harmony", label = T)
+plt5 = DimPlot(all_ep, group.by = "ctlabels", reduction = "umap_harmony", 
+               label = T, split.by = "reglabels")
+```
+
+Differences between protocols
+
+```{r}
+plot_df = cbind(all_ep@meta.data, all_ep@reductions$umap_harmony@cell.embeddings)
+plot_df$groups = plot_df$sample_dat
+plot_df$groups[plot_df$groups %in% c("v3.1", "multiome")] = "SS"
+plot_df$groups[plot_df$sample %in% c("1_wpi_neg")] = "1_wpi_neg"
+plot_df$epen_subg = ifelse(plot_df$ctlabels %in% c("epen_clus_3", "epen_clus_4"), "epen_a", 
+                    ifelse(plot_df$ctlabels %in% c("epen_clus_7", "epen_clus_1",
+                                                       "epen_clus_13", "epen_clus_14"), 
+                           "epen_n", "epen_q"))
+plot_df = plot_df[sample(1:nrow(plot_df), nrow(plot_df), replace = F),]
+plot_df$reglabels = factor(plot_df$reglabels, levels = c("medial", "dorsal", "lateral","other/unknown"))
+
+group_byreg = ggplot(plot_df[plot_df$reglabels!="other/unknown",], 
+                     aes(x = umap_harmony_1, y = umap_harmony_2, colour = groups))+
+  facet_grid(~reglabels)+
+  geom_point(size = 0.2)+
+  guides(colour = guide_legend(override.aes = list(size = 3)))+
+  theme_classic()+
+  theme(aspect.ratio = 1,
+        legend.position = "bottom",
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+pdf("results/Ependymal/Epe_SS_Div_neg/group_byreg_umap.pdf", height = 3, width = 7)
+print(group_byreg)
+dev.off()
+
+plot_df$groups = factor(plot_df$groups, levels = c("div", "1_wpi_neg", "SS"))
+
+epensubg_plt = ggplot(plot_df[plot_df$reglabels!="other/unknown",], 
+                      aes(x = umap_harmony_1, y = umap_harmony_2, colour = epen_subg))+
+  facet_grid(reglabels~groups)+
+  geom_point(size = 0.2)+
+  scale_colour_manual(values = unname(cols_cc[grepl("epen", names(cols_cc))][c(1,15,8)]))+
+  guides(colour = guide_legend(override.aes = list(size = 2)))+
+  theme_classic()+
+  theme(aspect.ratio = 1,
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+pdf("results/Ependymal/Epe_SS_Div_neg/epensubg_umap.pdf", height = 8, width = 8.5)
+print(epensubg_plt)
+dev.off()
+```
+
+All together
+
+```{r}
+plot_df = cbind(all_ep@meta.data, all_ep@reductions$umap_harmony@cell.embeddings)
+plot_df$groups = plot_df$sample_dat
+plot_df$groups[plot_df$groups %in% c("v3.1", "multiome")] = "SS"
+plot_df$groups[plot_df$sample %in% c("1_wpi_neg")] = "1_wpi_neg"
+plot_df$epen_subg = ifelse(plot_df$ctlabels %in% c("epen_clus_3", "epen_clus_4"), "epen_a", 
+                    ifelse(plot_df$ctlabels %in% c("epen_clus_7", "epen_clus_1",
+                                                       "epen_clus_13", "epen_clus_14"), 
+                           "epen_n", "epen_q"))
+plot_df = plot_df[sample(1:nrow(plot_df), nrow(plot_df), replace = F),]
+plot_df$reglabels = factor(plot_df$reglabels, levels = c("medial", "dorsal", "lateral","other/unknown"))
+isneg = plot_df$groups=="1_wpi_neg"
+plot_df$groups = factor(plot_df$groups, levels = c("SS", "div", "1_wpi_neg"))
+
+plt_byg = ggplot(plot_df[order(plot_df$groups),], 
+                     aes(x = umap_harmony_1, y = umap_harmony_2, colour = groups))+
+  geom_point(size = 0.8)+
+  guides(colour = guide_legend(override.aes = list(size = 3),
+                               title.position = "top", title.hjust = 0))+
+  scale_colour_manual(values = c("div" = "#df16df", "SS" = "gray85", "1_wpi_neg" = "gray20"))+
+  theme_classic()+
+  theme(aspect.ratio = 1,
+        legend.position = "bottom",
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+pdf("results/Ependymal/Epe_SS_Div_neg/epen_chem_umap.pdf", height = 3, width = 2.7)
+print(plt_byg)
+dev.off()
+```
+
+Table of cell type proportions
+
+```{r}
+plot_df$groups2 = plot_df$groups
+plot_df$groups2[plot_df$sample %in% c("2_wpi", "1_wpi_pos")] = "early Div-seq"
+plot_df$groups2[plot_df$sample %in% c("4_wpi", "6_wpi")] = "mid Div-seq"
+plot_df$groups2[plot_df$sample %in% c("12_wpi", "8_wpi")] = "late Div-seq"
+
+# count (removing the unknown region)
+tab_c = data.frame(prop.table(table(paste0(plot_df$groups2, "..", plot_df$reglabels),
+              plot_df$ctlabels)[-16,], margin = 1))
+
+tab_c$region = unlist(lapply(strsplit(as.character(tab_c$Var1), "..", fixed = T), function(x) x[2]))
+tab_c$region = factor(tab_c$region, levels = c("medial", "dorsal", "lateral"))
+tab_c$sample = unlist(lapply(strsplit(as.character(tab_c$Var1), "..", fixed = T), function(x) x[1]))
+tab_c$sample = factor(tab_c$sample, levels = c("early Div-seq", "mid Div-seq", "late Div-seq", "1_wpi_neg", "SS"))
+tab_c$Var2 = factor(tab_c$Var2, levels = rev(c(paste0("epen_clus_", c(4:3, 2, 12, 10, 8, 9, 0, 11, 6, 5, 1, 7, 13:14)))))
+
+tab_reg_ct_cond = ggplot(tab_c, aes(x = region, y = Var2, size = Freq, alpha = Freq, colour = region))+
+  facet_wrap(~sample, ncol = 5)+
+  geom_point()+
+  scale_colour_manual(values = reg_cols_simp)+
+  theme_classic()+
+  theme(axis.text = element_text(colour = "black", size = 6.5),
+        axis.text.x = element_text(angle = 30 ,hjust = 1, vjust = 1),
+        axis.title = element_text(size = 7))
+pdf("results/Ependymal/Epe_SS_Div_neg/tab_reg_ct_cond.pdf", height = 3.74, width = 6.5)
+print(tab_reg_ct_cond)
+dev.off()
+```
+
+
+## Region differences
+Get ependymal region signature from steady-state
+
+```{r}
+mtgenes = c("COX1", "COX2", "COX3", "ATP6", "ND1", "ND5", "CYTB", "ND2", "ND4", 
+             "ATP8", "MT-CO1", "COI", "LOC9829747")
+mtgenes = c(mtgenes, paste0("MT", mtgenes), paste0("MT-", mtgenes))
+
+genes_use = rownames(all_ep)[!startsWith(rownames(all_ep), "LOC") &
+                             !startsWith(rownames(all_ep), "AMEX") &
+                             !grepl("..", rownames(all_ep), fixed = T) &
+                             !(rownames(all_ep) %in% mtgenes)]
+
+mk_reg = presto::wilcoxauc(all_ep[genes_use,all_ep$sample_dat!="div" &
+                                    all_ep$reglabels!="other/unknown"],
+                           group_by = "reglabels")
+mk_reg = mk_reg[mk_reg$padj<=0.05 & mk_reg$logFC>0.2 & !(mk_reg$feature %in% mtgenes),]
+mk_reg = mk_reg[order(mk_reg$logFC, decreasing = T),]
+top25 = tapply(mk_reg$feature, mk_reg$group, function(x) x[1:25])
+
+mk_reg_nonneu = presto::wilcoxauc(all_ep[genes_use,all_ep$sample_dat!="div" &
+                                          all_ep$reglabels!="other/unknown" &
+                                          !(all_ep$ctlabels %in% c("epen_clus_14","epen_clus_7",
+                                            "epen_clus_1","epen_clus_13"))],
+                           group_by = "reglabels")
+mk_reg_nonneu = mk_reg_nonneu[mk_reg_nonneu$padj<=0.05 & mk_reg_nonneu$logFC>0.2 & 
+                                !(mk_reg_nonneu$feature %in% mtgenes),]
+mk_reg_nonneu = mk_reg_nonneu[order(mk_reg_nonneu$logFC, decreasing = T),]
+top25_nonneu = tapply(mk_reg_nonneu$feature, mk_reg_nonneu$group, function(x) x[1:25])
+
+mk_reg_q = presto::wilcoxauc(all_ep[genes_use,all_ep$sample_dat!="div" &
+                                          all_ep$reglabels!="other/unknown" &
+                                          !(all_ep$ctlabels %in% c("epen_clus_14","epen_clus_7",
+                                            "epen_clus_1","epen_clus_13", 
+                                            "epen_clus_3", "epen_clus_4"))],
+                           group_by = "reglabels")
+mk_reg_q = mk_reg_q[mk_reg_q$padj<=0.05 & mk_reg_q$logFC>0.2 & !(mk_reg_q$feature %in% mtgenes),]
+mk_reg_q = mk_reg_q[order(mk_reg_q$logFC, decreasing = T),]
+top25_q = tapply(mk_reg_q$feature, mk_reg_q$group, function(x) x[1:25])
+
+
+all_ep = AddModuleScore(all_ep, features = top30_q, seed = 1, name = names(top30_q))
+```
+
+Plot signatures
+
+```{r}
+FeaturePlot(all_ep, reduction = "umap_harmony", 
+            features = c("dorsal1", "lateral2", "medial3"), order = T)
+
+plot_df = data.frame("dorsal" = all_ep$dorsal1,
+                     "medial" = all_ep$medial3,
+                     "lateral" = all_ep$lateral2,
+                     "cellclusters" = all_ep$ctlabels,
+                     "sample" = all_ep$sample_dat,
+                     "time" = all_ep$sample)
+plot_df = reshape2::melt(plot_df)
+plot_df$isDiv = ifelse(!grepl("wpi", plot_df$time), "SS",
+                ifelse(grepl("neg", plot_df$time), "1wpi neg", "Div"))
+plot_df$isDiv = factor(plot_df$isDiv, levels = c("Div", "1wpi neg", "SS"))
+
+reg_med = tapply(plot_df$value[plot_df$isDiv=="SS" & plot_df$variable=="dorsal"], 
+                 plot_df$cellclusters[plot_df$isDiv=="SS" & plot_df$variable=="dorsal"], median)
+plot_df$cellclusters = factor(plot_df$cellclusters, levels = rev(names(sort(reg_med))))
+plot_df$time[plot_df$time=="v3.1" | plot_df$time=="multiome"] = "SS"
+plot_df$time = factor(plot_df$time, levels = c("1_wpi_pos", "2_wpi", 
+                                               "4_wpi", "6_wpi", "8_wpi", "12_wpi",
+                                               "1_wpi_neg", "SS"))
+
+# plot by cell type
+ct_box = ggplot(plot_df, aes(x = cellclusters, y = value, fill = variable))+
+  facet_grid(isDiv~., scales = "free_x", space = "free")+
+  geom_boxplot(outlier.size = 0.2, size = .2)+
+  labs(y = "Region score")+
+  scale_fill_manual(values = reg_cols_simp)+
+  theme_classic()+
+  theme(axis.text.y = element_text(colour = "black", size = 6),
+        axis.text.x = element_text(size = 6.5, angle = 30, hjust = 1, vjust = 1, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        legend.position = "none")
+
+# plot by time point
+medians_df = reshape2::melt(tapply(plot_df$value, 
+                                   paste0(plot_df$variable, "..", plot_df$time), median))
+medians_df$time = unlist(lapply(strsplit(as.character(medians_df$Var1), "..", fixed = T), 
+                                function(x) x[2]))
+medians_df$region = unlist(lapply(strsplit(as.character(medians_df$Var1), "..", fixed = T),
+                                  function(x) x[1]))
+medians_df$isDiv = ifelse(grepl("neg", medians_df$time), "1wpi neg",
+                   ifelse(grepl("wpi", medians_df$time), "Div", "SS"))
+medians_df$isDiv = factor(medians_df$isDiv, levels = c("Div", "1wpi neg", "SS"))
+medians_df$region = factor(medians_df$region, levels = levels(plot_df$variable))
+
+reg_box = ggplot(plot_df)+
+  facet_grid(~isDiv, scales = "free_x", space = "free")+
+  geom_boxplot(data = plot_df, mapping = aes(x = time, y = value, fill = variable), 
+               outlier.size = 0.2, size = .2)+
+  geom_line(data = medians_df, mapping = aes(x = time, y = value, 
+                                             colour = region, group = region),
+            position = position_dodge(0.9))+
+  labs(y = "Region score")+
+  scale_fill_manual(values = reg_cols_simp)+
+  scale_colour_manual(values = reg_cols_simp)+
+  theme_classic()+
+  theme(axis.text.y = element_text(colour = "black", size = 6),
+        axis.text.x = element_text(size = 6.5, angle = 30, hjust = 1, vjust = 1, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        legend.position = "none")
+
+pdf("results/Ependymal/Epe_SS_Div_neg/ependymal_region_score_by_ct.pdf", height = 2.5, width = 4.5)
+print(ct_box)
+dev.off()
+pdf("results/Ependymal/Epe_SS_Div_neg/ependymal_region_score_by_time.pdf", height = 2, width = 4)
+print(reg_box)
+dev.off()
+```
+
+Check model genes
+
+```{r}
+coef_lr = read.csv("results/Div-seq/lr_axolotlRegions_all_model_coef.csv", header = T, row.names = 1)
+
+coef_top100 = lapply(coef_lr, function(x) rownames(coef_lr)[order(x, decreasing = T)][1:100])
+
+all_ep = AddModuleScore(all_ep, features = coef_top100, seed = 1, 
+                        name = paste0("coef_", names(top30_q)))
+
+FeaturePlot(all_ep, reduction = "umap_harmony", 
+            features = c("coef_dorsal1", "coef_lateral2", "coef_medial3"), order = T)
+
+plot_df = data.frame("dorsal" = all_ep$coef_dorsal1,
+                     "medial" = all_ep$coef_medial3,
+                     "lateral" = all_ep$coef_lateral2,
+                     "cellclusters" = all_ep$ctlabels,
+                     "sample" = all_ep$sample_dat,
+                     "time" = all_ep$sample)
+plot_df = reshape2::melt(plot_df)
+plot_df$isDiv = ifelse(!grepl("wpi", plot_df$time), "SS",
+                ifelse(grepl("neg", plot_df$time), "1wpi neg", "Div"))
+plot_df$isDiv = factor(plot_df$isDiv, levels = c("SS", "1wpi neg", "Div"))
+
+reg_med = tapply(plot_df$value[plot_df$isDiv=="SS" & plot_df$variable=="dorsal"], 
+                 plot_df$cellclusters[plot_df$isDiv=="SS" & plot_df$variable=="dorsal"], median)
+plot_df$cellclusters = factor(plot_df$cellclusters, levels = rev(names(sort(reg_med))))
+
+reg_box = ggplot(plot_df, aes(x = cellclusters, y = value, fill = variable))+
+  facet_grid(isDiv~., scales = "free_x", space = "free")+
+  geom_boxplot(outlier.size = 0.2, size = .2)+
+  labs(y = "Region score")+
+  scale_fill_manual(values = reg_cols_simp)+
+  theme_classic()+
+  theme(axis.text.y = element_text(colour = "black", size = 6),
+        axis.text.x = element_text(size = 6.5, angle = 30, hjust = 1, vjust = 1, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        legend.position = "none")
+reg_box
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

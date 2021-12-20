@@ -1,0 +1,31 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+Following https://bioconductor.org/packages/release/bioc/vignettes/BSgenome/inst/doc/BSgenomeForge.pdf
+
+Split axolotl genome into chromosomes (using the "cut" version):
+
+python cutChroms.py AmexG_v6_chr/AmexG_v6.DD.corrected.round2.chr.sizes ../AmexT_v47.FULL_corr_chr.gtf AmexG_v6_chr/AmexT_v47.FULL_corr_chr_cut.gtf AmexG_v6_chr/cutcoord.txt AmexG_v6_chr 500000000 2000
+
+faidx --split-files ../AmexG_v6.chr_cut.fa
+
+Needs a hacked version of the package that doesn't check if the genome exists in UCSC
+
+```{r}
+source("../scripts/hacked_BSgenomeforge.R")
+seqs_srcdir = "/local1/USERS/tomasgomes/axolotl/axolotl_genome/AmexG_v6.chr_cut/"
+forgeBSgenomeDataPkg("../data/BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M.seed",
+                     destdir="../data/", seqs_srcdir = seqs_srcdir)
+```
+
+
+R CMD build BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M/
+
+R CMD INSTALL -l /links/groups/treutlein/USERS/tomasgomes/bin/Rpackages BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M_1.0.0.tar.gz
+
+
+
+

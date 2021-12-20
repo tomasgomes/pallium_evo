@@ -1,0 +1,1394 @@
+---
+title: "Multiome analysis"
+output: html_notebook
+---
+
+
+https://satijalab.org/signac/articles/merging.html
+https://satijalab.org/signac/articles/integrate_atac.html
+https://satijalab.org/signac/articles/pbmc_multiomic.html
+
+ - merge peaks from all samples
+ - recount
+ - merge
+ - (if necessary) integrate
+ - motif enrichment analysis
+ - TF footprint
+ 
+ - load RNA-seq
+ - match cell barcodes - actually, cellranger-arc gives to GEX and ATAC the GEX barcodes
+ - do integrated processing
+   - joint UMAP - done with WNN integration
+   - gene-peak connection
+   - multiome GRN
+   - MOFA 2
+ 
+ - co-accessibility analysis - not done, requires Monocle 3
+ 
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Signac)
+# as of June 2021, Seurat still needs to be installed like this for ATAC integration:
+## remotes::install_github(repo = 'satijalab/seurat', ref = 'develop')
+library(Seurat)
+library(GenomicRanges)
+library(data.table)
+
+# this (bespoke) package hosts the axolotl genome
+# package is very large, cannot be installed in home directory
+# and should be in a fast disk
+library(BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M, 
+        lib.loc = "/local1/USERS/tomasgomes/multiome_analysis/")
+
+# Motif analysis
+library(JASPAR2020)
+library(TFBSTools)
+library(motifmatchr)
+library(chromVAR)
+
+# multiome GRN
+library(Pando)
+library(foreach) # needed for Pando
+library(igraph) # for Pando network analysis
+
+# multiome factor analysis
+library(MOFA2)
+source("scripts/MOFA_toSeurat.R") #might not be needed with MOFA2 dev version
+
+# getting GTF
+# remotes::install_github("alyssafrazee/ballgown")
+library(ballgown)
+
+# plotting
+library(ggplot2)
+library(ggnetwork)
+library(ggrepel)
+library(patchwork)
+
+# parallel processing
+#library(future)
+#plan("multiprocess", workers = 12)
+#options(future.globals.maxSize = 100000 * 1024^2) # for 100 Gb RAM
+
+set.seed(23)
+```
+
+
+
+# scATAC
+## Gene setup
+Mitochondrial genes
+
+```{r}
+mtgenes = c("COX1", "COX2", "COX3", "ATP6", "ND1", "ND5", "CYTB", "ND2", "ND4",
+            "ATP8", "MT-CO1", "COI", "LOC9829747")
+mtgenes = c(mtgenes, paste0("MT", mtgenes), paste0("MT-", mtgenes))
+
+# in axolotl, MT genes are assembled within the genome, and also annotation is not 100% clear
+# all these tricks are necessary because some regions make "ClosestFeature" crash
+# get MT gene_id
+basedir = "/links/groups/treutlein/USERS/tomasgomes/gene_refs/axolotl/Amex_T_v47/"
+gene_name_match = read.table(paste0(basedir, "AmexT_v47.FULL_t2g_note.txt"), sep = "\t")[,2:3]
+mtid = unique(gene_name_match[gene_name_match$V3 %in% mtgenes,1])
+l_gtf = lapply(mtid, function(x) grepl(x, granges_axolotl$gene_id))
+l_gtf = Reduce(cbind, l_gtf)
+mtcoord = rowSums(l_gtf)>0
+chrmt = unique(seqnames(granges_axolotl[mtcoord,]))
+```
+
+Read in axolotl features
+
+```{r}
+gtf_axolotl = "/local1/USERS/tomasgomes/multiome_analysis/AmexT_v47.FULL_corr_chr_cut.gtf"
+granges_axolotl = ballgown::gffReadGR(gtf_axolotl)
+# adding a gene biotype, as that's necessary for TSS metaprofile
+granges_axolotl$gene_biotype = "protein_coding"
+
+# with need to add the "proper" gene name
+basedir = "/links/groups/treutlein/USERS/tomasgomes/gene_refs/axolotl/Amex_T_v47/"
+gene_name_match = read.table(paste0(basedir, "AmexT_v47.FULL_t2g_note.txt"), sep = "\t")[,2:3]
+gene_name_match = gene_name_match[!duplicated(gene_name_match$V2), ]
+rownames(gene_name_match) = gene_name_match$V2
+
+newgenenames = gene_name_match[granges_axolotl$gene_id,2]
+granges_axolotl$gene_name = newgenenames
+```
+
+
+## Load data
+### CellRanger peaks
+Read in data
+
+```{r}
+samples = c("a1_1", "a1_2", "a3_1", "a3_2")
+#data_dir = "/links/groups/treutlein/USERS/tomasgomes/data/axolotl/"
+data_dir = "/local1/USERS/tomasgomes/multiome_analysis/"
+
+counts_l = list()
+frags_l = list()
+peaks_l = list()
+for(s in samples){
+  counts_l[[s]] = Read10X_h5(filename = paste0(data_dir, s, "_ARC/outs/filtered_feature_bc_matrix.h5"))
+  frags_file = paste0(data_dir, s, "_ARC/outs/atac_fragments.tsv.gz")
+  peaks = read.table(paste0(data_dir, s, "_ARC/outs/atac_peaks.bed"), 
+                     col.names = c("chr", "start", "end"))
+  peaks_l[[s]] = makeGRangesFromDataFrame(peaks)
+  
+  frags_l[[s]] = CreateFragmentObject(path = frags_file, cells = colnames(counts_l[[s]]$Peaks))
+}
+```
+
+Merge peaks
+
+```{r}
+# Create a unified set of peaks to quantify in each dataset
+combined.peaks = reduce(x = c(peaks_l$a1_1, peaks_l$a1_2, peaks_l$a3_1, peaks_l$a3_2))
+
+# Filter out bad peaks based on length
+peakwidths = width(combined.peaks)
+combined.peaks = combined.peaks[peakwidths > 12]
+
+# there is a problem with coordinates starting at 0 for some reason...
+combined.peaks = restrict(combined.peaks, start = 1)
+combined.peaks
+```
+
+Make all individual Seurats with common peaks
+
+```{r}
+srat_atac_l = list()
+for(s in names(frags_l)){
+  feat = FeatureMatrix(fragments = frags_l[[s]], features = combined.peaks, 
+                       cells = colnames(counts_l[[s]]$Peaks))
+  ass = CreateChromatinAssay(feat, fragments = frags_l[[s]], sep = c(":", "-"), min.cells = 0,
+                             min.features = 100, annotation = granges_axolotl)
+  srat_atac_l[[s]] = CreateSeuratObject(ass, assay = "ATAC")
+  srat_atac_l[[s]]$dataset = s
+  srat_atac_l[[s]]$animal = strsplit(s, "_")[[1]][1]
+}
+```
+
+Getting MT peaks and calculating MT%
+
+```{r}
+# match regions with MT genes
+allregions = rownames(srat_atac_l$a1_1)
+ischrmt = lapply(chrmt, function(x) grepl(x, allregions))
+ischrmt = Reduce(cbind, ischrmt)
+ischrmt = rowSums(ischrmt)>0
+
+# add MT%
+for(n in names(srat_atac_l)){
+  all_cl = ClosestFeature(srat_atac_l[[n]], regions = allregions[ischrmt])
+  ## get MT regions
+  mt_peaks = all_cl[all_cl$gene_id %in% mtid,"query_region"]
+  srat_atac_l[[n]] = PercentageFeatureSet(srat_atac_l[[n]], features = mt_peaks, col.name = "mt_perc")
+}
+```
+
+Nucleosome and TSS signal (serve as QC metrics)
+
+```{r}
+tss_atac_plts = list()
+frag_atac_plts = list()
+for(n in names(srat_atac_l)){
+  # compute nucleosome signal score per cell
+  srat_atac_l[[n]] = NucleosomeSignal(object = srat_atac_l[[n]])
+  
+  # compute TSS enrichment score per cell
+  srat_atac_l[[n]] = TSSEnrichment(object = srat_atac_l[[n]], fast = FALSE)
+  
+  srat_atac_l[[n]]$high.tss = ifelse(srat_atac_l[[n]]$TSS.enrichment > 2, 'High', 'Low')
+  tss_atac_plts[[n]] = TSSPlot(srat_atac_l[[n]], group.by = 'high.tss') + NoLegend()
+  
+  srat_atac_l[[n]]$nucleosome_group = ifelse(srat_atac_l[[n]]$nucleosome_signal > 4, 
+                                             'NS > 2', 'NS < 4')
+  # this is veeery slow (~30-40min)
+  frag_atac_plts[[n]] = FragmentHistogram(object = srat_atac_l[[n]], group.by = 'nucleosome_group')
+}
+```
+
+Save data
+
+```{r}
+saveRDS(srat_atac_l, file = "data/processed/multiome/srat_atac_l_raw.RDS")
+```
+
+### MACS peaks
+Peak calling with MACS
+
+```{r}
+macs_l = list()
+for(n in names(srat_atac_l)){
+  print(n)
+  srat_atac_l[[n]] = RunTFIDF(srat_atac_l[[n]])
+  srat_atac_l[[n]] = FindTopFeatures(srat_atac_l[[n]], min.cutoff = 5)
+  srat_atac_l[[n]] = RunSVD(srat_atac_l[[n]])
+  
+  cordat = DepthCor(srat_atac_l[[n]], n = 30)$data
+  dims_use = cordat$Component[abs(cordat$counts)<0.3]
+  print(dims_use)
+  srat_atac_l[[n]] = FindNeighbors(object = srat_atac_l[[n]], reduction = 'lsi', dims = dims_use, 
+                                   force.recalc = T, graph.name = "thegraph")
+  srat_atac_l[[n]] = FindClusters(object = srat_atac_l[[n]], verbose = FALSE, algorithm = 3, 
+                                  graph.name = "thegraph", resolution = 2)
+  
+  macs_l[[n]] = CallPeaks(object = srat_atac_l[[n]], group.by = "thegraph_res.2",
+                          macs2.path = "~/bin/miniconda3/envs/macs2env/bin/macs3",
+                          effective.genome.size = 2.0e+10, verbose = F)
+}
+```
+
+How do new peaks compare with the original?
+
+```{r}
+# Create a unified set of peaks to quantify in each dataset
+combined_macs = reduce(x = c(macs_l$a1_1, macs_l$a1_2, macs_l$a3_1, macs_l$a3_2))
+
+# Filter out bad peaks based on length
+peakwidths = width(combined_macs)
+combined_macs = combined_macs[peakwidths > 12]
+
+# there is a problem with coordinates starting at 0 for some reason...
+combined_macs = restrict(combined_macs, start = 1)
+combined_macs
+
+boxplot(x = list("MACS" = log10(width(combined_macs)), "Original" = log10(width(combined.peaks))))
+```
+
+Generate new counts and objects
+
+```{r}
+srat_macs_l = list()
+for(s in names(frags_l)){
+  print(s)
+  feat = FeatureMatrix(fragments = frags_l[[s]], features = combined_macs, 
+                       cells = colnames(counts_l[[s]]$Peaks))
+  ass = CreateChromatinAssay(feat, fragments = frags_l[[s]], sep = c(":", "-"), min.cells = 0,
+                             min.features = 100, annotation = granges_axolotl)
+  srat_macs_l[[s]] = CreateSeuratObject(ass, assay = "ATAC")
+  srat_macs_l[[s]]$dataset = s
+  srat_macs_l[[s]]$animal = strsplit(s, "_")[[1]][1]
+}
+```
+
+Getting MT peaks and calculating MT%
+
+```{r}
+# match regions with MT genes
+allregions = rownames(srat_macs_l$a1_1)
+ischrmt = lapply(chrmt, function(x) grepl(x, allregions))
+ischrmt = Reduce(cbind, ischrmt)
+ischrmt = rowSums(ischrmt)>0
+
+for(n in names(srat_macs_l)){
+  all_cl = ClosestFeature(srat_macs_l[[n]], regions = allregions[ischrmt])
+  ## get MT regions
+  mt_peaks = all_cl[all_cl$gene_id %in% mtid,"query_region"]
+  srat_macs_l[[n]] = PercentageFeatureSet(srat_macs_l[[n]], features = mt_peaks, 
+                                          col.name = "mt_perc")
+}
+```
+
+Nucleosome and TSS signal (serve as QC metrics)
+
+```{r}
+tss_macs_plts = list()
+frag_macs_plts = list()
+for(n in names(srat_macs_l)){
+  # compute nucleosome signal score per cell
+  srat_macs_l[[n]] = NucleosomeSignal(object = srat_macs_l[[n]])
+  
+  # compute TSS enrichment score per cell
+  srat_macs_l[[n]] = TSSEnrichment(object = srat_macs_l[[n]], fast = FALSE)
+  
+  srat_macs_l[[n]]$high.tss = ifelse(srat_macs_l[[n]]$TSS.enrichment > 2, 'High', 'Low')
+  tss_macs_plts[[n]] = TSSPlot(srat_macs_l[[n]], group.by = 'high.tss') + NoLegend()
+  
+  srat_macs_l[[n]]$nucleosome_group = ifelse(srat_macs_l[[n]]$nucleosome_signal > 4, 
+                                             'NS > 2', 'NS < 4')
+  # this is veeery slow (~30-40min)
+  frag_macs_plts[[n]] = FragmentHistogram(object = srat_macs_l[[n]], group.by = 'nucleosome_group')
+}
+```
+
+Save data
+
+```{r}
+saveRDS(srat_macs_l, file = "data/processed/multiome/srat_macs_l_raw.RDS")
+```
+
+
+## Quality Control
+Plotting QC metrics
+
+```{r}
+pdf("results/multiome/vln_qc_ATAC.pdf", width = 14, height = 4)
+vln_atac_plts = list()
+for(n in names(srat_atac_l)){
+  vln_atac_plts[[n]] = VlnPlot(object = srat_atac_l[[n]], pt.size = 0.1, ncol = 5, log = T,
+                               features = c('nCount_ATAC', 'nFeature_ATAC', "mt_perc",
+                                            'TSS.enrichment', 'nucleosome_signal'))
+  print(vln_atac_plts[[n]])
+}
+dev.off()
+
+pdf("results/multiome/vln_qc_MACS.pdf", width = 14, height = 4)
+vln_macs_plts = list()
+for(n in names(srat_macs_l)){
+  vln_macs_plts[[n]] = VlnPlot(object = srat_macs_l[[n]], pt.size = 0.1, ncol = 5, log = T,
+                               features = c('nCount_ATAC', 'nFeature_ATAC', "mt_perc",
+                                            'TSS.enrichment', 'nucleosome_signal'))
+  print(vln_macs_plts[[n]])
+}
+dev.off()
+```
+
+Removing cells based on QC metrics
+
+```{r}
+# this filtering is done per dataset, since different datasets can have different distributions
+qc_list = list(c(12000, 300, 12000, 300, 2, 3, 2),
+               c(12000, 300, 12000, 300, 2, 3, 2),
+               c(12000, 300, 12000, 300, 2, 3, 2),
+               c(12000, 300, 12000, 300, 2, 3, 2))
+names(qc_list) = names(srat_atac_l)
+for(n in names(srat_atac_l)){
+  srat_atac_l[[n]] = subset(x = srat_atac_l[[n]], 
+                            subset = nCount_ATAC<qc_list[[n]][1] & nCount_ATAC>qc_list[[n]][2] &
+                              nFeature_ATAC<qc_list[[n]][3] & nFeature_ATAC>qc_list[[n]][4] &
+                              nucleosome_signal<qc_list[[n]][5] & TSS.enrichment>qc_list[[n]][6] &
+                              mt_perc<qc_list[[n]][7])
+}
+srat_atac_l
+
+# this filtering is done per dataset, since different datasets can have different distributions
+qc_list = list(c(10000, 200, 10000, 200, 2, 3, 5),
+               c(10000, 200, 10000, 200, 2, 3, 5),
+               c(10000, 200, 10000, 200, 2, 3, 5),
+               c(10000, 200, 10000, 200, 2, 3, 5))
+names(qc_list) = names(srat_macs_l)
+for(n in names(srat_macs_l)){
+  srat_macs_l[[n]] = subset(x = srat_macs_l[[n]], 
+                            subset = nCount_ATAC<qc_list[[n]][1] & nCount_ATAC>qc_list[[n]][2] &
+                              nFeature_ATAC<qc_list[[n]][3] & nFeature_ATAC>qc_list[[n]][4] &
+                              nucleosome_signal<qc_list[[n]][5] & TSS.enrichment>qc_list[[n]][6] &
+                              mt_perc<qc_list[[n]][7])
+}
+srat_macs_l
+```
+
+
+## Combine and analyse
+Combine all ATAC data
+
+```{r}
+# renaming cells - will have to be accounted for when adding the RNA!
+for(n in names(srat_atac_l)){
+  cn = unlist(lapply(strsplit(colnames(srat_atac_l[[n]]), "-", fixed = T), function(x) x[1]))
+  srat_atac_l[[n]] = RenameCells(srat_atac_l[[n]], 
+                                 new.names = paste0(cn, "-", gsub("_", "-", n, fixed = T)))
+}
+
+# merging
+srat_atac_all = Reduce(merge, srat_atac_l)
+
+# renaming cells - will have to be accounted for when adding the RNA!
+for(n in names(srat_macs_l)){
+  cn = unlist(lapply(strsplit(colnames(srat_macs_l[[n]]), "-", fixed = T), function(x) x[1]))
+  srat_macs_l[[n]] = RenameCells(srat_macs_l[[n]], 
+                                 new.names = paste0(cn, "-", gsub("_", "-", n, fixed = T)))
+}
+
+# merging
+srat_macs_all = Reduce(merge, srat_macs_l)
+```
+
+Check how the data looks between samples
+
+```{r}
+CoveragePlot(object = srat_atac_all, group.by = 'dataset', region = "chr2ps2-334100000-334140000")
+CoveragePlot(object = srat_macs_all, group.by = 'dataset', region = "chr2ps2-334100000-334140000")
+```
+
+
+## Processing
+Processing ATAC-seq data
+
+```{r}
+srat_atac_all = RunTFIDF(srat_atac_all)
+srat_atac_all = FindTopFeatures(srat_atac_all, min.cutoff = 5)
+srat_atac_all = RunSVD(srat_atac_all)
+
+srat_macs_all = RunTFIDF(srat_macs_all)
+srat_macs_all = FindTopFeatures(srat_macs_all, min.cutoff = 5)
+srat_macs_all = RunSVD(srat_macs_all)
+```
+
+Check correlation of LSI with sequencing depth (since often times the first component is technical var)
+
+```{r}
+DepthCor(srat_atac_all, n = 30)
+DepthCor(srat_macs_all, n = 30)
+```
+
+Get UMAP
+
+```{r}
+cordat = DepthCor(srat_atac_all, n = 30)$data
+dims_use = cordat$Component[abs(cordat$counts)<0.3]
+srat_atac_all = RunUMAP(object = srat_atac_all, reduction = 'lsi', dims = dims_use, verbose = F)
+DimPlot(object = srat_atac_all, group.by = "dataset")
+FeaturePlot(object = srat_atac_all, features = c('nCount_ATAC', "nFeature_ATAC", "mt_perc"),
+            pt.size = 0.1, ncol = 2)
+
+cordat = DepthCor(srat_macs_all, n = 30)$data
+dims_use = cordat$Component[abs(cordat$counts)<0.3]
+srat_macs_all = RunUMAP(object = srat_macs_all, reduction = 'lsi', dims = dims_use, verbose = F)
+DimPlot(object = srat_macs_all, group.by = "dataset")
+FeaturePlot(object = srat_macs_all, features = c('nCount_ATAC', "nFeature_ATAC", "mt_perc"),
+            pt.size = 0.1, ncol = 2)
+```
+
+
+## Integration
+Processing for each ATAC-seq sample
+
+```{r}
+for(n in names(srat_atac_l)){
+  srat_atac_l[[n]] = RunTFIDF(srat_atac_l[[n]])
+  srat_atac_l[[n]] = FindTopFeatures(srat_atac_l[[n]], min.cutoff = "q0")
+  srat_atac_l[[n]] = RunSVD(srat_atac_l[[n]])
+}
+DepthCor(srat_atac_l$a1_1, reduction = "lsi", n = 30)
+DepthCor(srat_atac_l$a1_2, reduction = "lsi", n = 30)
+DepthCor(srat_atac_l$a3_1, reduction = "lsi", n = 30)
+DepthCor(srat_atac_l$a3_2, reduction = "lsi", n = 30)
+
+for(n in names(srat_macs_l)){
+  srat_macs_l[[n]] = RunTFIDF(srat_macs_l[[n]])
+  srat_macs_l[[n]] = FindTopFeatures(srat_macs_l[[n]], min.cutoff = "q0")
+  srat_macs_l[[n]] = RunSVD(srat_macs_l[[n]])
+}
+DepthCor(srat_macs_l$a1_1, reduction = "lsi", n = 30)
+DepthCor(srat_macs_l$a1_2, reduction = "lsi", n = 30)
+DepthCor(srat_macs_l$a3_1, reduction = "lsi", n = 30)
+DepthCor(srat_macs_l$a3_2, reduction = "lsi", n = 30)
+```
+
+Integrate based on each experiment - CellRanger peaks
+
+```{r}
+# find integration anchors
+integration.anchors = FindIntegrationAnchors(object.list = srat_atac_l, reduction = "rlsi", dims = 2:30,
+                                             anchor.features = rownames(srat_atac_all))
+
+# integrate LSI embeddings
+integ_all = IntegrateEmbeddings(anchorset = integration.anchors, reductions = srat_atac_all[["lsi"]],
+                                 new.reduction.name = "integrated_lsi", dims.to.integrate = 1:30)
+
+DepthCor(integ_all, reduction = "integrated_lsi", n = 30)
+
+# create a new UMAP using the integrated embeddings
+cordat = DepthCor(integ_all, reduction = "integrated_lsi", n = 30)$data
+dims_use = cordat$Component[abs(cordat$counts)<0.3]
+integ_all = RunUMAP(integ_all, reduction = "integrated_lsi", dims = dims_use, verbose = F)
+DimPlot(integ_all, group.by = "dataset")
+FeaturePlot(object = integ_all, features = c('nCount_ATAC', "nFeature_ATAC", "mt_perc"),
+            pt.size = 0.1, ncol = 2)
+```
+
+Integrate based on each experiment - MACS3 peaks
+
+```{r}
+# find integration anchors
+integration.anchors = FindIntegrationAnchors(object.list = srat_macs_l, reduction = "rlsi", dims = 2:30,
+                                             anchor.features = rownames(srat_macs_all))
+
+# integrate LSI embeddings
+integ_macs_all = IntegrateEmbeddings(anchorset = integration.anchors, 
+                                     reductions = srat_macs_all[["lsi"]],
+                                     new.reduction.name = "integrated_lsi", dims.to.integrate = 1:30)
+
+DepthCor(integ_macs_all, reduction = "integrated_lsi", n = 30)
+
+# create a new UMAP using the integrated embeddings
+cordat = DepthCor(integ_macs_all, reduction = "integrated_lsi", n = 30)$data
+dims_use = cordat$Component[abs(cordat$counts)<0.3]
+integ_macs_all = RunUMAP(integ_macs_all, reduction = "integrated_lsi", dims = dims_use, verbose = F)
+DimPlot(integ_macs_all, group.by = "dataset")
+FeaturePlot(object = integ_macs_all, features = c('nCount_ATAC', "nFeature_ATAC", "mt_perc"),
+            pt.size = 0.1, ncol = 2)
+```
+
+Processing ATAC-seq by animal
+
+```{r}
+srat_atac_animal = SplitObject(srat_atac_all, split.by = "animal")
+
+for(n in names(srat_atac_animal)){
+  srat_atac_animal[[n]] = RunTFIDF(srat_atac_animal[[n]])
+  srat_atac_animal[[n]] = FindTopFeatures(srat_atac_animal[[n]], min.cutoff = "q0")
+  srat_atac_animal[[n]] = RunSVD(srat_atac_animal[[n]])
+}
+DepthCor(srat_atac_animal$a1, reduction = "lsi", n = 30)
+DepthCor(srat_atac_animal$a3, reduction = "lsi", n = 30)
+
+srat_macs_animal = SplitObject(srat_macs_all, split.by = "animal")
+
+for(n in names(srat_macs_animal)){
+  srat_macs_animal[[n]] = RunTFIDF(srat_macs_animal[[n]])
+  srat_macs_animal[[n]] = FindTopFeatures(srat_macs_animal[[n]], min.cutoff = "q0")
+  srat_macs_animal[[n]] = RunSVD(srat_macs_animal[[n]])
+}
+DepthCor(srat_macs_animal$a1, reduction = "lsi", n = 30)
+DepthCor(srat_macs_animal$a3, reduction = "lsi", n = 30)
+```
+
+Integrate based on each animal - CellRanger peaks
+
+```{r}
+# find integration anchors
+integration.anchors = FindIntegrationAnchors(object.list = srat_atac_animal, 
+                                             reduction = "rlsi", dims = c(2:4,6:30),
+                                             anchor.features = rownames(srat_atac_all))
+
+# integrate LSI embeddings
+integ_animal = IntegrateEmbeddings(anchorset = integration.anchors, reductions = srat_atac_all[["lsi"]],
+                                   new.reduction.name = "integrated_lsi", dims.to.integrate = 1:30)
+
+DepthCor(integ_animal, reduction = "integrated_lsi", n = 30)
+
+# create a new UMAP using the integrated embeddings
+cordat = DepthCor(integ_animal, reduction = "integrated_lsi", n = 30)$data
+dims_use = cordat$Component[abs(cordat$counts)<0.3]
+integ_animal = RunUMAP(integ_animal, reduction = "integrated_lsi", dims = dims_use, verbose = F)
+DimPlot(integ_animal, group.by = "dataset")
+FeaturePlot(object = integ_animal, features = c('nCount_ATAC', "nFeature_ATAC", "mt_perc"),
+            pt.size = 0.1, ncol = 2)
+```
+
+Integrate based on each animal - MACS3 peaks
+
+```{r}
+# find integration anchors
+integration.anchors = FindIntegrationAnchors(object.list = srat_macs_animal, 
+                                             reduction = "rlsi", dims = c(2:4,6:30),
+                                             anchor.features = rownames(srat_macs_all))
+
+# integrate LSI embeddings
+integ_macs_animal = IntegrateEmbeddings(anchorset = integration.anchors, 
+                                        reductions = srat_macs_all[["lsi"]],
+                                        new.reduction.name = "integrated_lsi", dims.to.integrate = 1:30)
+
+DepthCor(integ_macs_animal, reduction = "integrated_lsi", n = 30)
+
+# create a new UMAP using the integrated embeddings
+cordat = DepthCor(integ_macs_animal, reduction = "integrated_lsi", n = 30)$data
+dims_use = cordat$Component[abs(cordat$counts)<0.3]
+integ_macs_animal = RunUMAP(integ_macs_animal, reduction = "integrated_lsi", dims = dims_use, verbose = F)
+DimPlot(integ_macs_animal, group.by = "dataset")
+FeaturePlot(object = integ_macs_animal, features = c('nCount_ATAC', "nFeature_ATAC", "mt_perc"),
+            pt.size = 0.1, ncol = 2)
+```
+
+Saving data so far
+
+```{r}
+saveRDS(srat_atac_l, file = "data/processed/multiome/srat_atac_l.RDS")
+saveRDS(srat_atac_animal, file = "data/processed/multiome/srat_atac_animal.RDS")
+saveRDS(srat_atac_all, file = "data/processed/multiome/srat_atac_all.RDS")
+saveRDS(integ_all, file = "data/processed/multiome/integ_all.RDS")
+saveRDS(integ_animal, file = "data/processed/multiome/integ_animal.RDS")
+
+saveRDS(srat_macs_l, file = "data/processed/multiome/srat_macs_l.RDS")
+saveRDS(srat_macs_animal, file = "data/processed/multiome/srat_macs_animal.RDS")
+saveRDS(srat_macs_all, file = "data/processed/multiome/srat_macs_all.RDS")
+saveRDS(integ_macs_all, file = "data/processed/multiome/integ_macs_all.RDS")
+saveRDS(integ_macs_animal, file = "data/processed/multiome/integ_macs_animal.RDS")
+```
+
+
+## Clustering and annotation
+We're going with the integration by animal
+Find clusters
+
+```{r}
+cordat = DepthCor(integ_animal, reduction = "integrated_lsi", n = 30)$data
+dims_use = cordat$Component[abs(cordat$counts)<0.3]
+integ_animal = FindNeighbors(object = integ_animal, reduction = 'integrated_lsi', dims = dims_use, 
+                             force.recalc = T, graph.name = "thegraph")
+integ_animal = FindClusters(object = integ_animal, verbose = FALSE, algorithm = 3, 
+                            graph.name = "thegraph", resolution = 0.8)
+DimPlot(object = integ_animal, label = TRUE) + NoLegend()
+
+cordat = DepthCor(integ_macs_animal, reduction = "integrated_lsi", n = 30)$data
+dims_use = cordat$Component[abs(cordat$counts)<0.3]
+integ_macs_animal = FindNeighbors(object = integ_macs_animal, reduction = 'integrated_lsi', 
+                                  dims = dims_use, 
+                             force.recalc = T, graph.name = "thegraph")
+integ_macs_animal = FindClusters(object = integ_macs_animal, verbose = FALSE, algorithm = 3, 
+                                 graph.name = "thegraph", resolution = 0.8)
+DimPlot(object = integ_macs_animal, label = TRUE) + NoLegend()
+```
+
+Get DE peaks
+
+```{r}
+allmk_ATAC = suppressWarnings(FindAllMarkers(object = integ_animal, min.pct = 0.2, test.use = 'LR', 
+                            latent.vars = 'nCount_ATAC', verbose = T))
+allmk_ATAC = allmk_ATAC[allmk_ATAC$p_val_adj<=0.05,]
+
+allmk_macs = suppressWarnings(FindAllMarkers(object = integ_macs_animal, min.pct = 0.2, test.use = 'LR', 
+                            latent.vars = 'nCount_ATAC', verbose = T))
+allmk_macs = allmk_macs[allmk_macs$p_val_adj<=0.05,]
+```
+
+Annotate said peaks
+
+```{r}
+reg = unique(allmk_ATAC$gene)
+closest_allmk = ClosestFeature(integ_animal, regions = unique(reg))
+
+allmk_ATAC = merge(allmk_ATAC, closest_allmk[,c("query_region","type","distance","gene_name")], 
+                   by.x = "gene", by.y = "query_region", all.x = T)
+
+write.csv(allmk_ATAC, file = "results/multiome/allmk_ATAC.csv", col.names = T, row.names = F, quote = F)
+
+reg = unique(allmk_macs$gene)
+closest_allmk_macs = ClosestFeature(integ_macs_animal, regions = unique(reg))
+
+allmk_macs = merge(allmk_macs[,-c(8:10)],
+                   closest_allmk_macs[,c("query_region","type","distance","gene_name")], 
+                   by.x = "gene", by.y = "query_region", all.x = T)
+
+write.csv(allmk_macs, file = "results/multiome/allmk_macs.csv", col.names = T, row.names = F, quote = F)
+```
+
+Example coverage plot
+
+```{r}
+CoveragePlot(object = integ_animal, region = "chr8ps1-430732645-430746183", 
+             extend.upstream = 5000, extend.downstream = 5000)
+
+CoveragePlot(object = integ_macs_animal, region = "chr8ps1-430732645-430746183", 
+             extend.upstream = 5000, extend.downstream = 5000)
+```
+
+
+## Gene activities
+Obtaining gene activities - helps give meaning to the detected peaks
+
+```{r}
+gene_act = GeneActivity(integ_animal, max.width = NULL, extend.upstream = 5000, extend.downstream = 5000)
+# collapse identical gene names
+gn = rownames(gene_act)
+gn = unlist(lapply(strsplit(gn, ".", fixed = T), function(x) x[1]))
+gene_act_coll = rowsum(gene_act, group = gn)
+
+# add the gene activity matrix to the Seurat object as a new assay and normalize it
+integ_animal[['GeneAct']] = CreateAssayObject(counts = gene_act_coll)
+integ_animal = NormalizeData(object = integ_animal, assay = 'GeneAct', 
+                             normalization.method = 'LogNormalize', 
+                             scale.factor = median(integ_animal$nCount_GeneAct))
+
+gene_act = GeneActivity(integ_macs_animal, max.width = NULL, extend.upstream = 5000, extend.downstream = 5000)
+# collapse identical gene names
+gn = rownames(gene_act)
+gn = unlist(lapply(strsplit(gn, ".", fixed = T), function(x) x[1]))
+gene_act_coll = rowsum(gene_act, group = gn)
+
+# add the gene activity matrix to the Seurat object as a new assay and normalize it
+integ_macs_animal[['GeneAct']] = CreateAssayObject(counts = gene_act_coll)
+integ_macs_animal = NormalizeData(object = integ_macs_animal, assay = 'GeneAct', 
+                                  normalization.method = 'LogNormalize', 
+                                  scale.factor = median(integ_macs_animal$nCount_GeneAct))
+```
+
+Plotting gene activities and get DE genes
+
+```{r}
+DefaultAssay(integ_animal) = 'GeneAct'
+
+FeaturePlot(object = integ_animal, features = c('GAD2', 'MEX3A', 'MEIS1', 'PDGFRA', 'SLC17A6', 'EPOR'),
+            pt.size = 0.1, max.cutoff = 'q95', ncol = 3, order = F)
+
+allmk_geneact = FindAllMarkers(object = integ_animal, min.pct = 0.2, 
+                               test.use = 'LR', latent.vars = 'nCount_GeneAct')
+allmk_geneact = allmk_geneact[allmk_geneact$p_val_adj<=0.05,]
+
+write.csv(allmk_geneact, file = "results/multiome/allmk_geneact.csv", 
+          col.names = T, row.names = F, quote = F)
+
+DefaultAssay(integ_macs_animal) = 'GeneAct'
+
+FeaturePlot(object = integ_macs_animal, 
+            features = c('GAD2', 'MEX3A', 'MEIS1', 'PDGFRA', 'SLC17A6', 'EPOR'),
+            pt.size = 0.1, max.cutoff = 'q95', ncol = 3, order = F)
+
+allmk_geneact_macs = FindAllMarkers(object = integ_macs_animal, min.pct = 0.2, 
+                               test.use = 'LR', latent.vars = 'nCount_GeneAct')
+allmk_geneact_macs = allmk_geneact_macs[allmk_geneact_macs$p_val_adj<=0.05,]
+
+write.csv(allmk_geneact_macs, file = "results/multiome/allmk_geneact_macs.csv", 
+          col.names = T, row.names = F, quote = F)
+```
+
+Save object with annotations and gene activities
+
+```{r}
+saveRDS(integ_animal, file = "data/processed/multiome/integ_animal_clusters.RDS")
+saveRDS(integ_macs_animal, file = "data/processed/multiome/integ_macs_animal_clusters.RDS")
+```
+
+
+## Motif analysis
+Add motif information to the ATAC object
+
+```{r}
+# Get a list of motif position frequency matrices from the JASPAR database - vertebrates
+pfm = getMatrixSet(JASPAR2020, opts = list(tax_group = "vertebrates", all_versions = F))
+
+DefaultAssay(integ_animal) = "ATAC"
+
+# add motif information
+integ_animal = AddMotifs(object = integ_animal, pfm = pfm, assay = "ATAC",
+                         genome = BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M)
+
+DefaultAssay(integ_macs_animal) = "ATAC"
+
+# add motif information
+integ_macs_animal = AddMotifs(object = integ_macs_animal, pfm = pfm, assay = "ATAC",
+                              genome = BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M)
+```
+
+Determine enriched Motifs from group of regions
+
+```{r}
+allmk_ATAC = FindAllMarkers(object = integ_animal, min.pct = 0.2, test.use = 'LR', 
+                            latent.vars = 'nCount_ATAC', verbose = F)
+allmk_ATAC = allmk_ATAC[allmk_ATAC$p_val_adj<=0.05,]
+
+write.csv(allmk_ATAC, file = "results/multiome/allmk_motifs.csv", 
+          col.names = T, row.names = F, quote = F)
+
+# first compute the GC content for each peak
+integ_animal = RegionStats(integ_animal, 
+                           genome = BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M)
+
+enr_motifs_atac = FindMotifs(integ_animal, features = unique(allmk_ATAC$gene))
+
+allmk_macs = FindAllMarkers(object = integ_macs_animal, min.pct = 0.2, test.use = 'LR', 
+                            latent.vars = 'nCount_ATAC', verbose = F)
+allmk_macs = allmk_macs[allmk_macs$p_val_adj<=0.05,]
+
+write.csv(allmk_macs, file = "results/multiome/allmk_motifs_macs.csv", 
+          col.names = T, row.names = F, quote = F)
+
+# first compute the GC content for each peak
+integ_macs_animal = RegionStats(integ_macs_animal, 
+                                genome = BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M)
+
+enr_motifs_macs = FindMotifs(integ_macs_animal, features = unique(allmk_macs$gene))
+```
+
+Plot top enriched motifs
+
+```{r}
+MotifPlot(integ_animal, motifs = head(rownames(enr_motifs_atac)))
+MotifPlot(integ_macs_animal, motifs = head(rownames(enr_motifs_macs)))
+```
+
+Compute motif activity
+
+```{r}
+integ_animal = RunChromVAR(integ_animal,
+                          genome = BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M)
+
+DefaultAssay(integ_animal) = 'chromvar'
+
+# look at the activity of Mef2c
+FeaturePlot(object = integ_animal, features = "MA1099.2", min.cutoff = 'q10', 
+            max.cutoff = 'q90', pt.size = 0.1)
+
+integ_macs_animal = RunChromVAR(integ_macs_animal,
+                                genome = BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M)
+
+DefaultAssay(integ_macs_animal) = 'chromvar'
+
+# look at the activity of Mef2c
+FeaturePlot(object = integ_macs_animal, features = "MA1099.2", min.cutoff = 'q10', 
+            max.cutoff = 'q90', pt.size = 0.1)
+```
+
+DE motifs by activity
+
+```{r}
+DefaultAssay(integ_animal) = 'chromvar'
+diff_motifact = FindAllMarkers(object = integ_animal, min.pct = 0.2, test.use = 'LR', 
+                               latent.vars = 'nCount_ATAC', verbose = F)
+diff_motifact = diff_motifact[diff_motifact$p_val_adj<=0.05,]
+diff_motifact$name = unlist(integ_animal@assays$ATAC@motifs@motif.names[diff_motifact$gene])
+
+write.csv(diff_motifact, file = "results/multiome/diff_motifact_atac.csv", 
+          col.names = T, row.names = F, quote = F)
+
+MotifPlot(integ_animal, motifs = head(diff_motifact$gene), assay = 'ATAC')
+
+DefaultAssay(integ_macs_animal) = 'chromvar'
+diff_motifact_macs = FindAllMarkers(object = integ_macs_animal, min.pct = 0.2, test.use = 'LR',
+                                    latent.vars = 'nCount_ATAC', verbose = F)
+diff_motifact_macs = diff_motifact_macs[diff_motifact_macs$p_val_adj<=0.05,]
+diff_motifact_macs$name = unlist(integ_macs_animal@assays$ATAC@motifs@motif.names[diff_motifact_macs$gene])
+
+write.csv(diff_motifact_macs, file = "results/multiome/diff_motifact_macs.csv", 
+          col.names = T, row.names = F, quote = F)
+
+MotifPlot(integ_macs_animal, motifs = head(diff_motifact_macs$gene), assay = 'ATAC')
+```
+
+TF footprinting (needs access to fragments) - VERY SLOW, do for relevant ones only
+
+```{r}
+DefaultAssay(integ_animal) = "ATAC"
+
+# gather the footprinting information for sets of motifs
+## VERY LONG STEP
+tfmotif = c("HES1")#c("Sox3", "HES1", "ZBTB14")
+integ_animal = Footprint(object = integ_animal, motif.name = tfmotif,
+                         in.peaks = T,
+                         genome = BSgenome.Amexicanum.axolotlomics.AmexGv6cut500M)
+
+# plot the footprint data for each group of cells
+PlotFootprint(integ_animal, features = tfmotif)
+```
+
+Save object with annotations and gene activities
+
+```{r}
+saveRDS(integ_animal, file = "data/processed/multiome/integ_animal_clusters_motifs.RDS")
+saveRDS(integ_macs_animal, file = "data/processed/multiome/integ_macs_animal_clusters_motifs.RDS")
+```
+
+
+
+# Adding snRNA-seq
+## Load data
+Load ATAC data again
+
+```{r}
+integ_animal = readRDS("data/processed/multiome/integ_animal_clusters_motifs.RDS")
+integ_macs_animal = readRDS("data/processed/multiome/integ_macs_animal_clusters_motifs.RDS")
+```
+
+
+Load all snRNA-seq (multiome and other)
+
+```{r}
+rna_dat = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
+```
+
+Filter non-multiome data
+
+```{r}
+rna_dat = rna_dat[,rna_dat$chem=="multiome"]
+```
+
+Reformat cell names to match those in ATAC
+
+```{r}
+newcellnames = colnames(rna_dat)
+newcellnames = gsub("-1_1", "-a1-1", newcellnames)
+newcellnames = gsub("-1_2", "-a1-2", newcellnames)
+newcellnames = gsub("-1_3", "-a3-1", newcellnames)
+newcellnames = gsub("-1_4", "-a3-2", newcellnames)
+rna_dat = RenameCells(rna_dat, new.names = newcellnames)
+```
+
+Overlap in cells with ATAC
+
+```{r}
+par(mfrow = c(2,3), mar = c(0.7,0,0.7,0))
+gplots::venn(list("RNA" = colnames(rna_dat), "ATAC" = colnames(integ_animal)))
+title("all")
+for(s in c("a1-1","a1-2","a3-1","a3-2")){
+  gplots::venn(list("RNA" = colnames(rna_dat)[grepl(s,colnames(rna_dat))], 
+                    "ATAC" = colnames(integ_animal)[grepl(s,colnames(integ_animal))]))
+  title(s)
+}
+
+par(mfrow = c(2,3), mar = c(0.7,0,0.7,0))
+gplots::venn(list("RNA" = colnames(rna_dat), "ATAC" = colnames(integ_macs_animal)))
+title("all")
+for(s in c("a1-1","a1-2","a3-1","a3-2")){
+  gplots::venn(list("RNA" = colnames(rna_dat)[grepl(s,colnames(rna_dat))], 
+                    "ATAC" = colnames(integ_macs_animal)[grepl(s,colnames(integ_macs_animal))]))
+  title(s)
+}
+```
+
+
+## Normalise RNA data
+Subset and SCT normalise
+
+```{r}
+sub_rna_atac = rna_dat[,colnames(rna_dat) %in% colnames(integ_animal)]
+sub_rna_atac = NormalizeData(sub_rna_atac)
+sub_rna_atac = FindVariableFeatures(sub_rna_atac)
+sub_rna_atac = ScaleData(sub_rna_atac, vars.to.regress = c("nCount_RNA", "nFeature_RNA", "percent.mt"))
+
+
+sub_rna_macs = rna_dat[,colnames(rna_dat) %in% colnames(integ_macs_animal)]
+sub_rna_macs = NormalizeData(sub_rna_macs)
+sub_rna_macs = FindVariableFeatures(sub_rna_macs)
+sub_rna_macs = ScaleData(sub_rna_macs, vars.to.regress = c("nCount_RNA", "nFeature_RNA", "percent.mt"))
+```
+
+Get PCA and UMAP for RNA
+
+```{r}
+sub_rna_atac = RunPCA(sub_rna_atac, verbose = FALSE, assay = "RNA")
+ElbowPlot(sub_rna_atac, ndims = 50)
+sub_rna_atac = RunUMAP(sub_rna_atac, reduction = "pca", dims = 1:40, verbose = F)
+
+sub_rna_macs = RunPCA(sub_rna_macs, verbose = FALSE, assay = "RNA")
+ElbowPlot(sub_rna_macs, ndims = 50)
+sub_rna_macs = RunUMAP(sub_rna_macs, reduction = "pca", dims = 1:40, verbose = F)
+```
+
+## Add RNA to ATAC data
+Subset ATAC data
+
+```{r}
+atac_multiome = integ_animal[,colnames(integ_animal) %in% colnames(sub_rna_atac)]
+macs_multiome = integ_macs_animal[,colnames(integ_macs_animal) %in% colnames(sub_rna_macs)]
+```
+
+Processing ATAC
+
+```{r}
+DefaultAssay(atac_multiome) = 'ATAC'
+
+atac_multiome = RunTFIDF(atac_multiome)
+atac_multiome = FindTopFeatures(atac_multiome, min.cutoff = "q0")
+atac_multiome = RunSVD(atac_multiome)
+
+DepthCor(atac_multiome, n = 50)
+
+atac_multiome = RunUMAP(atac_multiome, reduction = "lsi", dims = c(2:4,6:30), verbose = F)
+DimPlot(atac_multiome, group.by = "dataset")
+
+DefaultAssay(macs_multiome) = 'ATAC'
+
+macs_multiome = RunTFIDF(macs_multiome)
+macs_multiome = FindTopFeatures(macs_multiome, min.cutoff = "q0")
+macs_multiome = RunSVD(macs_multiome)
+
+DepthCor(macs_multiome, n = 50)
+
+macs_multiome = RunUMAP(macs_multiome, reduction = "lsi", dims = c(2:4,6:30), verbose = F)
+DimPlot(macs_multiome, group.by = "dataset")
+```
+
+### Re-integrating ATAC-seq
+Processing ATAC-seq by animal
+
+```{r}
+multiome_atac_animal = SplitObject(atac_multiome, split.by = "animal")
+
+for(n in names(multiome_atac_animal)){
+  multiome_atac_animal[[n]] = RunTFIDF(multiome_atac_animal[[n]])
+  multiome_atac_animal[[n]] = FindTopFeatures(multiome_atac_animal[[n]], min.cutoff = "q0")
+  multiome_atac_animal[[n]] = RunSVD(multiome_atac_animal[[n]])
+}
+DepthCor(multiome_atac_animal$a1, reduction = "lsi", n = 30)
+DepthCor(multiome_atac_animal$a3, reduction = "lsi", n = 30)
+
+multiome_macs_animal = SplitObject(macs_multiome, split.by = "animal")
+
+for(n in names(multiome_macs_animal)){
+  multiome_macs_animal[[n]] = RunTFIDF(multiome_macs_animal[[n]])
+  multiome_macs_animal[[n]] = FindTopFeatures(multiome_macs_animal[[n]], min.cutoff = "q0")
+  multiome_macs_animal[[n]] = RunSVD(multiome_macs_animal[[n]])
+}
+DepthCor(multiome_macs_animal$a1, reduction = "lsi", n = 30)
+DepthCor(multiome_macs_animal$a3, reduction = "lsi", n = 30)
+```
+
+Integrate based on each animal - CellRanger peaks
+
+```{r}
+# find integration anchors
+integration.anchors = FindIntegrationAnchors(object.list = multiome_atac_animal, 
+                                             reduction = "rlsi", dims = c(2:4,6:30),
+                                             anchor.features = rownames(multiome_atac_animal))
+
+# integrate LSI embeddings
+mome_atac = IntegrateEmbeddings(anchorset = integration.anchors, dims.to.integrate = 1:30,
+                                reductions = atac_multiome[["lsi"]],
+                                new.reduction.name = "integrated_lsi")
+
+DepthCor(mome_atac, reduction = "integrated_lsi", n = 30)
+
+# create a new UMAP using the integrated embeddings
+mome_atac = RunUMAP(mome_atac, reduction = "integrated_lsi", dims = c(2:4,6:30), verbose = F)
+DimPlot(mome_atac, group.by = "dataset")
+FeaturePlot(object = mome_atac, features = c('nCount_ATAC', "nFeature_ATAC", "mt_perc"),
+            pt.size = 0.1, ncol = 2)
+```
+
+Integrate based on each animal - MACS peaks
+
+```{r}
+# find integration anchors
+integration.anchors = FindIntegrationAnchors(object.list = multiome_macs_animal, 
+                                             reduction = "rlsi", dims = c(2:3,6:30),
+                                             anchor.features = rownames(multiome_macs_animal))
+
+# integrate LSI embeddings
+mome_macs = IntegrateEmbeddings(anchorset = integration.anchors, dims.to.integrate = 1:30,
+                                reductions = macs_multiome[["lsi"]],
+                                new.reduction.name = "integrated_lsi")
+
+DepthCor(mome_macs, reduction = "integrated_lsi", n = 30)
+
+# create a new UMAP using the integrated embeddings
+mome_macs = RunUMAP(mome_macs, reduction = "integrated_lsi", dims = c(2:3,5:30), verbose = F)
+DimPlot(mome_macs, group.by = "dataset")
+FeaturePlot(object = mome_macs, features = c('nCount_ATAC', "nFeature_ATAC", "mt_perc"),
+            pt.size = 0.1, ncol = 2)
+```
+
+Add RNA to ATAC
+
+```{r}
+mome_atac[["RNA"]] = sub_rna_atac@assays$RNA
+mome_atac@reductions$pca = sub_rna_atac@reductions$pca
+
+mome_macs[["RNA"]] = sub_rna_macs@assays$RNA
+mome_macs@reductions$pca = sub_rna_macs@reductions$pca
+```
+
+Save multiome data
+
+```{r}
+saveRDS(mome_atac, file = "data/processed/multiome/multiome_integATAC_SCT.RDS")
+saveRDS(mome_macs, file = "data/processed/multiome/multiome_integMACS_SCT.RDS")
+```
+
+Plot ATAC with regions and cellclusters
+
+```{r}
+dir = "/links/groups/treutlein/USERS/tomasgomes/projects/pallium_evo/"
+
+# read data 
+mome_atac_SCT = readRDS(file = paste0(dir,
+                                      "data/processed/multiome/multiome_integATAC_SCT.RDS"))
+
+# annotations
+## cell type annotations
+meta = read.csv(paste0(dir,"data/annotations/axolotl_all_umeta.csv"), 
+                header = T, row.names = 1)
+### these cell names need reformatting
+newcellnames = rownames(meta)
+newcellnames = gsub("-1_1", "-a1-1", newcellnames)
+newcellnames = gsub("-1_2", "-a1-2", newcellnames)
+newcellnames = gsub("-1_3", "-a3-1", newcellnames)
+newcellnames = gsub("-1_4", "-a3-2", newcellnames)
+rownames(meta) = newcellnames
+mome_atac_SCT = AddMetaData(mome_atac_SCT, metadata = meta)
+
+## predicted regions (top is used)
+meta_reg = read.csv(paste0(dir,"data/processed/multiome/WP_region_predictions.csv"), 
+                    header = T, row.names = 1)
+mome_atac_SCT = AddMetaData(mome_atac_SCT, metadata = meta_reg)
+
+
+cols_cc = c(
+#epen
+"#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472",
+#gaba
+"#700209", "#75090e","#7a0f13", "#801517", "#851a1b", "#8a1f1f", "#902423", "#952927", "#9a2d2c","#a03230", "#a53634", "#aa3a39", "#b03f3d","#b54342", "#ba4846", "#c04c4b", "#c5504f", "#ca5554", "#d05959", "#d55e5e","#73050c", "#780c11","#8d2221", "#982b2a","#a23432", "#a83837", "#b2413f", "#b84544", "#bd4a49", "#c85352", #"#cd5756",
+#glut
+"#054674", "#134d7b","#1d5481", "#265a88", "#2e618e", "#73a4cb", "#366995", "#3e709c", "#4677a2","#4d7ea9", "#5586b0", "#5c8db7", "#6495bd","#6b9cc4", "#7bacd2", "#8ebfe4", "#96c7eb", "#9ecff2", "#18507e", "#18507e","#2a5e8b", "#497ba6","#5889b3", "#6fa0c8","#7fafd6", "#6091ba", "#5182ac", "#3a6c98", "#a6d7f9",
+#npc
+"#ffb120", "#feb72a","#fdbc34", "#fcc13d", "#fbc745", "#facc4e", "#f9d156", "#f8d65f", "#f8da68","#f7df70", "#f7e479", "#f7e882", "#f7ed8a", "#f7f193", "#eca319"
+)
+ccnames = unique(sort(meta$cellclusters))
+names(cols_cc) = c(ccnames[grepl("epen", ccnames)], ccnames[grepl("GABA", ccnames)],ccnames[grepl("glut", ccnames)],ccnames[grepl("npc", ccnames)])
+
+more_cols = c("#712166","#B0279D", "#BE5AB0",   "#E43D88", "#F662A5",   "#E6530D")
+names(more_cols) = c("endothelial_11","endothelial_12","endothelial_14",
+                     "oligodendrocyte_10","oligodendrocyte_15","microglia_8")
+
+reg_cols = c("other/unknown_pred" = "#C7CCC7", 
+             "medial" = "#52168D", "medial_pred" = "#661CB0", 
+             "dorsal" = "#C56007", "dorsal_pred" = "#ED7307", 
+             "lateral" = "#118392", "lateral_pred" = "#16A3B6")
+reg_cols_simp = c("medial" = "#52168D", "dorsal" = "#C56007", "lateral" = "#118392")
+
+
+
+
+# plotting most important labels
+pdf("results/ATAC_axolotl_features/UMAP_multiome_ATAC_only_cellclusters.pdf", height = 3, width = 3.2)
+DimPlot(mome_atac_SCT, reduction = "umap", group.by = "cellclusters", 
+        pt.size = 0.000000001, shuffle = T)+
+  scale_colour_manual(values = c(cols_cc, more_cols))+
+  NoAxes()+NoLegend()+
+  theme(aspect.ratio = 1, plot.title = element_blank())
+dev.off()
+
+pdf("results/ATAC_axolotl_features/UMAP_multiome_ATAC_only_region.pdf", height = 3, width = 3.2)
+DimPlot(mome_atac_SCT, reduction = "umap", group.by = "pred_regions_top", 
+        pt.size = 0.000000001, shuffle = T)+
+  scale_colour_manual(values = reg_cols_simp)+
+  NoAxes()+NoLegend()+
+  theme(aspect.ratio = 1, plot.title = element_blank())
+dev.off()
+```
+
+
+
+
+## Integrated processing
+Load multiome data
+
+```{r}
+mome_atac_SCT = readRDS(file = "data/processed/multiome/multiome_integATAC_SCT.RDS")
+mome_macs_SCT = readRDS(file = "data/processed/multiome/multiome_integMACS_SCT.RDS")
+```
+
+### Combined projections
+Prepare segregated peaks. This is done using the annotation based on the original GTF file
+
+```{r}
+# CellRanger peaks
+DefaultAssay(mome_atac_SCT) = "ATAC"
+transc = Annotation(mome_atac_SCT)[Annotation(mome_atac_SCT)$type=="transcript",] # get transcripts
+transc = granges(transc[width(transc)>600,])
+proms = restrict(promoters(transc, upstream=5000, downstream=500), start = 1) # restrict fixes issues with negative genome coordinates
+proms$type = "promoter"
+genebodies = setdiff(transc, proms)
+genebodies$type = "genebody"
+feat = c(proms, genebodies)
+
+closest_f = ClosestFeature(mome_atac_SCT, regions = rownames(mome_atac_SCT), annotation = feat)
+closest_f$type = ifelse(closest_f$distance!=0, "distal", closest_f$type)
+
+for(tt in unique(closest_f$type)){
+  p = closest_f$query_region[closest_f$type==tt]
+  i = paste0("ATAC_", tt)
+  mome_atac_SCT[[i]] = CreateChromatinAssay(mome_atac_SCT@assays$ATAC@counts[p,])
+  mome_atac_SCT = RunTFIDF(mome_atac_SCT, assay = i)
+  mome_atac_SCT = FindTopFeatures(mome_atac_SCT, assay=i, min.cutoff = 300)
+  print(length(mome_atac_SCT[[i]]@var.features))
+}
+
+# MACS3 peaks
+DefaultAssay(mome_macs_SCT) = "ATAC"
+transc = Annotation(mome_macs_SCT)[Annotation(mome_macs_SCT)$type=="transcript",] # get transcripts
+transc = granges(transc[width(transc)>600,])
+proms = restrict(promoters(transc, upstream=5000, downstream=500), start = 1)
+proms$type = "promoter"
+genebodies = setdiff(transc, proms)
+genebodies$type = "genebody"
+feat = c(proms, genebodies)
+
+closest_f = ClosestFeature(mome_macs_SCT, regions = rownames(mome_macs_SCT), annotation = feat)
+closest_f$type = ifelse(closest_f$distance!=0, "distal", closest_f$type)
+
+for(tt in unique(closest_f$type)){
+  p = closest_f$query_region[closest_f$type==tt]
+  i = paste0("ATAC_", tt)
+  mome_macs_SCT[[i]] = CreateChromatinAssay(mome_macs_SCT@assays$ATAC@counts[p,])
+  mome_macs_SCT = RunTFIDF(mome_macs_SCT, assay = i)
+  mome_macs_SCT = FindTopFeatures(mome_macs_SCT, assay=i, min.cutoff = 200)
+  print(length(mome_macs_SCT[[i]]@var.features))
+}
+```
+
+Multiome factor analysis - CellRanger peaks
+
+```{r}
+set.seed(1)
+# create MOFA objectrun_mofa
+mofa = create_mofa(mome_atac_SCT, assays = c("RNA","ATAC_promoter", "ATAC_distal", "ATAC_genebody"))
+mofa
+
+# define model options
+model_opts = get_default_model_options(mofa)
+model_opts$num_factors = 25
+mofa = prepare_mofa(mofa,model_options = model_opts)
+
+# run mofa (SLOW!)
+mofa = run_mofa(mofa, outfile = "/local1/USERS/tomasgomes/multiome_analysis/tmp_mofa", 
+                use_basilisk = TRUE)
+
+saveRDS(mofa, file = "data/processed/multiome/MOFA_multiome_integATAC_SCT.RDS")
+```
+
+Plotting
+
+```{r}
+# variance explained
+plot_variance_explained(mofa, plot_total = TRUE)
+
+samples_metadata(mofa) = mome_atac_SCT@meta.data %>%
+  tibble::rownames_to_column("sample") %>%
+  as.data.table
+
+# correlated technical variables
+correlate_factors_with_covariates(mofa, covariates = c("nFeature_RNA","nFeature_ATAC",
+                                                       "nCount_RNA","nCount_ATAC", "animal"))
+
+# example factors
+plot_factor(mofa, factors=1, group_by = "animal", color_by = "animal")
+plot_factor(mofa, factors=11, group_by = "animal", color_by = "animal")
+
+# example factor weights
+plot_weights(mofa, view = "RNA", factors = 1, nfeatures = 20, text_size = 4)
+
+# select factors and run UMAP
+factors = 1:get_dimensions(mofa)[["K"]]
+factors = factors[c(1, 3:6, 8, 10, 12:get_dimensions(mofa)[["K"]])]
+mofa = run_umap(mofa, factors = factors, n_neighbors = 15,  min_dist = 0.30)
+
+# plots
+plot_dimred(mofa, method = "UMAP", color_by = "animal", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+plot_dimred(mofa, method = "UMAP", color_by = "nCount_RNA", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+plot_dimred(mofa, method = "UMAP", color_by = "seurat_clusters", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+
+# markers
+plot_dimred(mofa, method = "UMAP", color_by = "GAD2", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+#plot_dimred(mofa, method = "UMAP", color_by = "SLC17A6", label = TRUE, stroke=0.05, 
+#            dot_size = 1, legend = T)
+plot_dimred(mofa, method = "UMAP", color_by = "MEIS2", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+plot_dimred(mofa, method = "UMAP", color_by = "MEX3A", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+plot_dimred(mofa, method = "UMAP", color_by = "GLI2", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+```
+
+Multiome factor analysis - MACS peaks
+
+```{r}
+set.seed(1)
+# create MOFA object
+mofa_macs = create_mofa(mome_macs_SCT, 
+                        assays = c("RNA","ATAC_promoter", "ATAC_distal", "ATAC_genebody"))
+mofa_macs
+
+# define model options
+model_opts = get_default_model_options(mofa_macs)
+model_opts$num_factors = 25
+mofa_macs = prepare_mofa(mofa_macs, model_options = model_opts)
+
+# run mofa (SLOW!)
+mofa_macs = run_mofa(mofa_macs, outfile = "/local1/USERS/tomasgomes/multiome_analysis/tmp_mofa_macs", 
+                     use_basilisk = TRUE)
+
+saveRDS(mofa_macs, file = "data/processed/multiome/MOFA_multiome_integMACS_SCT.RDS")
+```
+
+Plotting
+
+```{r}
+# variance explained
+plot_variance_explained(mofa_macs, plot_total = TRUE)
+
+samples_metadata(mofa_macs) = mome_macs_SCT@meta.data %>%
+  tibble::rownames_to_column("sample") %>%
+  as.data.table
+
+# correlated technical variables
+correlate_factors_with_covariates(mofa_macs, 
+                                  covariates = c("nFeature_RNA","nFeature_ATAC",
+                                                 "nCount_RNA","nCount_ATAC", "animal"))
+
+# example factors
+plot_factor(mofa_macs, factors=1, group_by = "animal", color_by = "animal") 
+plot_factor(mofa_macs, factors=10, group_by = "animal", color_by = "animal")
+
+# example factor weights
+plot_weights(mofa_macs, view = "RNA", factors = 1, nfeatures = 20, text_size = 4)
+
+# select factors and run UMAP
+factors = 1:get_dimensions(mofa)[["K"]]
+factors = factors[c(3:6, 8, 11:get_dimensions(mofa_macs)[["K"]])]
+mofa_macs = run_umap(mofa_macs, factors = factors, n_neighbors = 15,  min_dist = 0.30)
+
+# plots
+plot_dimred(mofa_macs, method = "UMAP", color_by = "animal", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+plot_dimred(mofa_macs, method = "UMAP", color_by = "nCount_RNA", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+plot_dimred(mofa_macs, method = "UMAP", color_by = "seurat_clusters", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+
+# markers
+plot_dimred(mofa_macs, method = "UMAP", color_by = "GAD2", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+plot_dimred(mofa_macs, method = "UMAP", color_by = "SLC17A6", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+plot_dimred(mofa_macs, method = "UMAP", color_by = "MEIS2", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+plot_dimred(mofa_macs, method = "UMAP", color_by = "MEX3A", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+plot_dimred(mofa_macs, method = "UMAP", color_by = "GLI2", label = TRUE, stroke=0.05, 
+            dot_size = 1, legend = T)
+```
+
+Add MOFA projection multiome data
+
+```{r}
+mome_atac_SCT_mofa = add_mofa_factors_to_seurat(mofa, mome_atac_SCT, views = "all", factors = "all")
+DefaultAssay(mome_atac_SCT_mofa) = "RNA"
+mome_atac_SCT_mofa@reductions$MOFA@assay.used = "RNA"
+mome_atac_SCT_mofa@reductions$MOFAUMAP@assay.used = "RNA"
+
+mome_macs_SCT_mofa = add_mofa_factors_to_seurat(mofa_macs, mome_macs_SCT, views = "all", factors = "all")
+DefaultAssay(mome_macs_SCT_mofa) = "RNA"
+mome_macs_SCT_mofa@reductions$MOFA@assay.used = "RNA"
+mome_macs_SCT_mofa@reductions$MOFAUMAP@assay.used = "RNA"
+```
+
+Save data
+
+```{r}
+saveRDS(mome_atac_SCT_mofa, "data/processed/multiome/multiome_integATAC_SCT_annot.RDS")
+saveRDS(mome_macs_SCT_mofa, "data/processed/multiome/multiome_integMACS_SCT_annot.RDS")
+```
+
+
+
+
+
+

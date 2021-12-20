@@ -102,6 +102,12 @@ srat_list = list("paintedturtle" = turtle_all, "axolotl" = axolotl_all, "lizard"
                  "bengalesefinch" = bfinch_all, "zebrafish" = drerio_all)
 ```
 
+Save Seurat list
+
+```{r}
+saveRDS(srat_list, file = "data/processed/all_sp_sratList.RDS")
+```
+
 
 
 # Ortholog matching

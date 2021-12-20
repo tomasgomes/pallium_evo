@@ -1,34 +1,28 @@
 library(Seurat)
 library(parallel)
-numCores = 20
+numCores = 40
 
 pairwiseDESeurat = function(i, mat, ds){
   nn = paste0(mat[1,i],"..",mat[2,i])
   mk= FindMarkers(ds, ident.1 = mat[1,i], ident.2 = mat[2,i],logfc.threshold = 0.2, only.pos = F, 
-                  pseudocount.use = 0.1, assay = "SCT")
+                  pseudocount.use = 0.1, assay = "RNA")
   mk = mk[mk$p_val_adj<=0.05,]
   mk$cl = ifelse(mk$avg_log2FC>0, mat[1,i], mat[2,i])
   
   return(mk)
 }
 
-dataset = readRDS("data/expression/axolotl/palliumres07.RDS")
+dataset = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
 meta = read.csv("data/annotations/axolotl_all_umeta.csv", header = T, row.names = 1)
 
 dataset = AddMetaData(dataset, metadata = meta)
 
-# normalisation
-dataset = suppressWarnings(SCTransform(dataset, do.correct.umi = T, verbose = F, 
-                                       seed.use = 1, vars.to.regress = "nCount_RNA",
-                                       variable.features.rv.th = 1, return.only.var.genes = F,
-                                       variable.features.n = NULL))
-
 # pairwise DE
 avg_exp = list()
 mk_list = list()
-for(g in c("subclasses", "cellclusters")[1]){
+for(g in c("subclasses", "cellclusters")){
   dataset = SetIdent(dataset, value = g)
-  avg_exp[[g]] = AverageExpression(dataset, assays = "SCT")$SCT
+  avg_exp[[g]] = AverageExpression(dataset, assays = "RNA")$RNA
   
   freqcl = table(dataset@meta.data[,g])
   ucl = unique(dataset@meta.data[,g])

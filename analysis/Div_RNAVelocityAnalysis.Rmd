@@ -1,0 +1,1051 @@
+---
+title: "RNA Velocity Analysis - Div-seq"
+output: html_notebook
+---
+
+Preparation and analysis of data using RNA velocity
+
+
+
+# General setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(Matrix)
+library(mgcv)
+library(foreach)
+library(doParallel)
+library(parallel)
+```
+
+Set colours for cell types and regions
+
+```{r}
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+cols_cc = c(
+#epen
+"#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472",
+#gaba
+"#700209", "#75090e","#7a0f13", "#801517", "#851a1b", "#8a1f1f", "#902423", "#952927", "#9a2d2c","#a03230", "#a53634", "#aa3a39", "#b03f3d","#b54342", "#ba4846", "#c04c4b", "#c5504f", "#ca5554", "#d05959", "#d55e5e","#73050c", "#780c11","#8d2221", "#982b2a","#a23432", "#a83837", "#b2413f", "#b84544", "#bd4a49", "#c85352", #"#cd5756",
+#glut
+"#054674", "#134d7b","#1d5481", "#265a88", "#2e618e", "#73a4cb", "#366995", "#3e709c", "#4677a2","#4d7ea9", "#5586b0", "#5c8db7", "#6495bd","#6b9cc4", "#7bacd2", "#8ebfe4", "#96c7eb", "#9ecff2", "#18507e", "#18507e","#2a5e8b", "#497ba6","#5889b3", "#6fa0c8","#7fafd6", "#6091ba", "#5182ac", "#3a6c98", "#a6d7f9",
+#npc
+"#ffb120", "#feb72a","#fdbc34", "#fcc13d", "#fbc745", "#facc4e", "#f9d156", "#f8d65f", "#f8da68","#f7df70", "#f7e479", "#f7e882", "#f7ed8a", "#f7f193", "#eca319"
+)
+ccnames = unique(sort(meta$cellclusters))
+names(cols_cc) = c(ccnames[grepl("epen", ccnames)], ccnames[grepl("GABA", ccnames)],ccnames[grepl("glut", ccnames)],ccnames[grepl("npc", ccnames)])
+
+reg_cols = c("other/unknown_pred" = "#C7CCC7", 
+             "medial" = "#52168D", "medial_pred" = "#661CB0", 
+             "dorsal" = "#C56007", "dorsal_pred" = "#ED7307", 
+             "lateral" = "#118392", "lateral_pred" = "#16A3B6")
+reg_cols_simp = c("medial" = "#52168D", "dorsal" = "#C56007", "lateral" = "#118392")
+```
+
+
+
+# Div-seq analysis
+Load data
+
+```{r}
+dir = "results/RNAvelocity_Div/data/"
+meta_l = list()
+umap_l = list()
+abs_l = list()
+ld_l = list()
+g_l = list()
+exp_l = list()
+for(r in c("hippocampus", "lc", "eomes", "8620_ep", "111")){
+  meta_l[[r]] = read.csv(paste0(dir, "glut_div_", r, "_obs.csv"), header = T, row.names = 1)
+  umap_l[[r]] = read.csv(paste0(dir, "glut_div_", r, "_umap.csv"), header = T, row.names = 1)
+  g_l[[r]] = read.csv(paste0(dir, "glut_div_", r, "_var.csv"), header = T, row.names = 1)
+  exp_l[[r]] = read.csv(paste0(dir, "glut_div_", r, "_X.csv"), header = T, row.names = 1)
+  abs_l[[r]] = read.csv(paste0(dir, "glut_div_", r, "_abs_prob.csv"), header = T, row.names = 1)
+}
+
+exp_l[["all"]] = read.csv("data/processed/velocity_results/glut_reg/div_all_X.csv", 
+                          header = T, row.names = 1)
+```
+
+
+## Pseudotime
+Testing the changes to the pseudotime
+
+```{r}
+reg = "111"
+plot_df = cbind(umap_l[[reg]][rownames(abs_l[[reg]]),],
+                meta_l[[reg]][rownames(abs_l[[reg]]),c("latent_time", "pred_ctall")],
+                abs_l[[reg]])
+plot_df = plot_df[order(plot_df$latent_time),]
+plot_df$newpt2 = plot_df[,6]*(1-plot_df$epen_clus_4)
+plot_df$newpt3 = apply(plot_df[,6:7], 1, max)*(1-plot_df$epen_clus_4)
+
+ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = latent_time))+
+  geom_point(size = 2)+
+  scale_colour_viridis_c(option = "E")+
+  theme_classic()
+ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = newpt2))+
+  geom_point(size = 2)+
+  scale_colour_viridis_c(option = "E")+
+  theme_classic()
+ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = newpt3))+
+  geom_point(size = 2)+
+  scale_colour_viridis_c(option = "E")+
+  theme_classic()
+
+ggplot(plot_df, aes(x = latent_time, y = glut_SUBSET_1, colour = pred_ctall))+
+  geom_point(size = 2)+
+  theme_classic()
+
+ggplot(plot_df, aes(x = newpt3, y = glut_SUBSET_1, colour = pred_ctall))+
+  geom_point(size = 2)+
+  theme_classic()
+```
+
+Plot UMAP with fates
+
+```{r}
+umap_plt_list = list()
+for(n in names(umap_l)){
+  plot_df = cbind(umap_l[[n]][rownames(abs_l[[n]]),],
+                  meta_l[[n]][rownames(abs_l[[n]]),c("pred_ctall", "regions")],
+                  abs_l[[n]])
+  colnames(plot_df)[3] = "pred_ctall"
+  
+  for(cc in colnames(plot_df)[grepl("glut", colnames(plot_df))]){
+    plot_df[,paste0(cc, "_transf")] = plot_df[,cc]*(1-plot_df$epen_clus_4)
+  }
+  
+  plot_df$newpt =  apply(abs_l[[n]][,grepl("glut", colnames(abs_l[[n]]))], 1,
+                         max)*(1-abs_l[[n]]$epen_clus_4)
+  
+  plot_df = plot_df[,grepl("_transf", colnames(plot_df)) | 
+                      grepl("newpt", colnames(plot_df)) |
+                      grepl("UMAP", colnames(plot_df)) |
+                      grepl("UMAP", colnames(plot_df)) |
+                      grepl("pred_ctall", colnames(plot_df))]
+  colnames(plot_df)[grepl("_transf", colnames(plot_df))] = gsub("_transf", "", colnames(plot_df)[grepl("_transf", colnames(plot_df))])
+  
+  umap_plt_list[[n]] = list()
+  umap_plt_list[[n]][["pred_ctall"]] = ggplot(mapping = aes(x = UMAP_1, y = UMAP_2))+
+    geom_point(data = plot_df[order(plot_df$newpt, decreasing = T), ], 
+               mapping = aes(colour = pred_ctall), size = 0.3)+
+    scale_colour_manual(values = cols_cc[names(cols_cc) %in% plot_df$pred_ctall])+
+    theme_classic()+
+    theme(aspect.ratio = 1,
+          axis.text = element_blank(),
+          axis.title = element_blank(),
+          axis.ticks = element_blank(),
+          axis.line = element_blank())
+  
+  mean_df = data.frame("UMAP_1" = tapply(plot_df$UMAP_1, plot_df$pred_ctall, mean),
+                        "UMAP_2" = tapply(plot_df$UMAP_2, plot_df$pred_ctall, mean),
+                        "pred_ctall" = levels(factor(plot_df$pred_ctall)))
+  umap_plt_list[[n]][["pred_ctall_mean"]] = ggplot(mapping = aes(x = UMAP_1, y = UMAP_2))+
+    geom_point(data = plot_df[order(plot_df$newpt, decreasing = T), ], 
+               mapping = aes(colour = pred_ctall), size = 0.3)+
+    geom_text(data = mean_df, mapping = aes(label = pred_ctall), fontface = "bold")+
+    scale_colour_manual(values = cols_cc[names(cols_cc) %in% plot_df$pred_ctall])+
+    theme_classic()+
+    theme(aspect.ratio = 1, legend.position = "none",
+          axis.text = element_blank(),
+          axis.title = element_blank(),
+          axis.ticks = element_blank(),
+          axis.line = element_blank())
+  umap_plt_list[[n]][["region"]] = ggplot(mapping = aes(x = UMAP_1, y = UMAP_2))+
+    geom_point(data = plot_df[order(plot_df$newpt, decreasing = T), ], 
+               mapping = aes(colour = regions), size = 0.3)+
+    scale_colour_manual(values = reg_cols_simp)+
+    theme_classic()+
+    theme(aspect.ratio = 1, legend.position = "none",
+          axis.text = element_blank(),
+          axis.title = element_blank(),
+          axis.ticks = element_blank(),
+          axis.line = element_blank())
+  umap_plt_list[[n]][["newpt"]] = ggplot(mapping = aes(x = UMAP_1, y = UMAP_2))+
+    geom_point(data = plot_df[order(plot_df$newpt, decreasing = T), ], 
+               mapping = aes(colour = newpt), size = 0.3)+
+    scale_colour_viridis_c(option = "C")+
+    theme_classic()+
+    theme(aspect.ratio = 1,
+          axis.text = element_blank(),
+          axis.title = element_blank(),
+          axis.ticks = element_blank(),
+          axis.line = element_blank())
+  for(f in colnames(plot_df)[grepl("glut", colnames(plot_df))]){
+    umap_plt_list[[n]][[f]] = ggplot(mapping = aes(x = UMAP_1, y = UMAP_2))+
+      geom_point(data = plot_df[order(plot_df$newpt, decreasing = T), ], 
+                 mapping = aes_string(colour = f), size = 0.3)+
+      scale_colour_viridis_c(option = "C")+
+      theme_classic()+
+      theme(aspect.ratio = 1,
+            axis.text = element_blank(),
+            axis.title = element_blank(),
+            axis.ticks = element_blank(),
+            axis.line = element_blank())
+  }
+  
+  for(f in names(umap_plt_list[[n]])){
+    pdf(paste0("results/RNAvelocity_Div/UMAP_regions/UMAP_", n, "_", f, ".pdf"), useDingbats = F, 
+        height = 4, width = ifelse(f=="pred_ctall", 6, 5))
+    print(umap_plt_list[[n]][[f]])
+    dev.off()
+  }
+}
+```
+
+Make data frame with glutamatergic trajectories
+
+```{r}
+epfates = c("epen_clus_4")
+
+tmp = list()
+for(n in names(meta_l)){
+  meta_l[[n]]$reg_simp = gsub("_pred", "", meta_l[[n]]$regions)
+  fates = colnames(abs_l[[n]])
+  newpt =  apply(abs_l[[n]][,grepl("glut", colnames(abs_l[[n]]))], 1,
+                 max)*(1-abs_l[[n]]$epen_clus_4)
+  fates = fates[!fates %in% epfates]
+  for(f in fates){
+    print(f)
+    subabs = abs_l[[n]][,!(colnames(abs_l[[n]])==f |
+                                 colnames(abs_l[[n]]) %in% epfates)]
+    rem = if(!is.null(dim(subabs))){
+      apply(subabs, 1, function(x) any(x>=0.7))
+    } else{
+      apply(matrix(subabs), 1, function(x) any(x>=0.7))
+    }
+    tmp[[f]] = data.frame("cells" = rownames(meta_l[[n]]),
+                          "orig_pt" = meta_l[[n]]$latent_time,
+                          "newpt" = newpt,
+                          "orig_prob" = abs_l[[n]][,f],
+                          "reg" = meta_l[[n]]$regions,
+                          "pred_ctall" = meta_l[[n]]$pred_ctall,
+                          "fate" = f,
+                          "group" = n)
+    tmp[[f]] = tmp[[f]][!rem,]
+    tmp[[f]] = tmp[[f]][tmp[[f]]$orig_prob>=min(tmp[[f]]$orig_prob[tmp[[f]]$newpt==0]),]
+    tmp[[f]]$pt = scales::rescale(tmp[[f]]$orig_pt, c(0,1))
+    tmp[[f]]$prob = scales::rescale(tmp[[f]]$orig_prob, c(0,1))
+  }
+}
+div_dat_df = Reduce(rbind,tmp)
+
+# saving for gene plotting
+write.csv(div_dat_df, "results/RNAvelocity_Div/heatmap_gen/div_dat_df.csv", 
+          col.names = T, row.names = T, quote = F)
+```
+
+Cell type occupancy by bin, per lineage
+
+```{r}
+col_prop_list = list()
+smo_prop_list = list()
+ct_all = list()
+for(n in unique(div_dat_df$fate)){
+  # subset data
+  submeta = div_dat_df[div_dat_df$fate==n,]
+  
+  med_pt_cc = sort(tapply(submeta$newpt, submeta$pred_ctall, median))
+  med_prob_cc = tapply(submeta$prob, submeta$pred_ctall, median)[names(med_pt_cc)]
+  tmp = 0
+  keep = c()
+  for(i in 1:length(med_prob_cc)){
+    if(med_prob_cc[i]>=tmp){
+      keep = c(keep, names(med_prob_cc)[i])
+      tmp = med_prob_cc[i]
+    }
+  }
+  submeta = submeta[submeta$pred_ctall %in% keep, ]
+  
+  lt_bins = cut(submeta$newpt, 100) # 100 equally-sized bins
+  plot_df = data.frame(bins = lt_bins, 
+                       cst = as.character(submeta$pred_ctall))
+  tab_df = table(plot_df$bins,plot_df$cst)
+  
+  # remove cell types that are too rare (<5%)
+  tab_df = reshape2::melt(tab_df/rowSums(tab_df))
+  usecl = tapply(tab_df$value, tab_df$Var2, function(x) any(x>0.05))
+  plot_df = plot_df[plot_df$cst %in% names(usecl)[usecl],]
+  tab_df = table(plot_df$bins,plot_df$cst)
+  
+  # normalise by cell type abundance
+  prop_w = prop.table(table(plot_df$cst))
+  mean_w = tapply(submeta$prob, submeta$pred_ctall, mean)
+  tab_df = t(apply(tab_df, 1, function(x) x/prop_w[colnames(tab_df)]))
+  
+  # reshape
+  tab_df = reshape2::melt(tab_df/rowSums(tab_df))
+  tab_df$Var2 = as.character(tab_df$Var2)
+  
+  # prevent discontinuity by copying the previous column (likely not happening)
+  tab_df = tab_df[order(tab_df$Var1, decreasing = F),]
+  for(i in unique(tab_df$Var1)){
+    if(any(is.nan(tab_df$value[tab_df$Var1==i]))){
+      tab_df$value[tab_df$Var1==i] = prev
+    }
+    prev = tab_df$value[tab_df$Var1==i]
+  }
+  
+  col_prop_list[[n]] = ggplot(tab_df, aes(x = Var1, y = value, fill = Var2))+
+    geom_col()+
+    scale_y_continuous(expand = c(0,0))+
+    scale_fill_manual(values = cols_cc[names(cols_cc) %in% tab_df$Var2])+
+    labs(x = "Bins", y = "Proportion", fill = "Cell type")+
+    theme_classic()+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 6.5, colour = "black"),
+          axis.ticks.x = element_blank(),
+          axis.line = element_blank(),
+          axis.title = element_text(size = 7),
+          legend.text = element_text(size = 6),
+          legend.title = element_text(size = 7),
+          legend.key.size = unit(0.4, "cm"))
+  
+  # smoothen the proportions (and force constrain to 0-1)
+  tab_df2 = tab_df
+  tab_df2$value2 = tab_df2$value
+  for(i in unique(tab_df2$Var2)){
+    fff = loess(value~as.numeric(Var1), data = tab_df2[tab_df2$Var2==i,], 
+                span = 0.5)
+    pred = predict(fff)
+    pred[pred>1] = 1
+    pred[pred<0] = 0
+    tab_df2$value2[tab_df2$Var2==i] = pred
+  }
+  
+  # force constrain each interval to 0-1 by doing proportion
+  for(i in unique(tab_df2$Var1)){
+    tab_df2$value2[tab_df2$Var1==i] = tab_df2$value2[tab_df2$Var1==i]/sum(tab_df2$value2[tab_df2$Var1==i])
+  }
+  
+  tab_df2$major = unlist(lapply(strsplit(tab_df2$Var2, "_"), function(x) x[1]))
+  res = list()
+  for(nnn in unique(tab_df2$Var1)){
+    ss=tapply(tab_df2[tab_df2$Var1==nnn,"value2"], tab_df2[tab_df2$Var1==nnn,"major"], sum)
+    res[[nnn]] = which.max(ss)
+  }
+  ct_all[[n]] = unlist(lapply(res, names))
+  
+  smo_prop_list[[n]] = ggplot(tab_df2, aes(x = Var1, y = value2, group = Var2, fill = Var2))+
+    geom_area()+
+    scale_y_continuous(expand = c(0,0))+
+    scale_fill_manual(values = cols_cc[names(cols_cc) %in% tab_df2$Var2])+
+    labs(x = "Bins", y = "Proportion", fill = "Cell type")+
+    theme_classic()+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 6.5, colour = "black"),
+          axis.ticks.x = element_blank(),
+          axis.line = element_blank(),
+          axis.title = element_text(size = 7),
+          legend.text = element_text(size = 6),
+          legend.title = element_text(size = 7),
+          legend.key.size = unit(0.4, "cm"))
+}
+
+
+for(n in names(col_prop_list)){
+pdf(paste0("results/RNAvelocity_Div/prop_bars/prop_celltypes_traj_", n, ".pdf"), 
+    height = 2.6, width = 5)
+  print(col_prop_list[[n]])
+  dev.off()
+}
+
+for(n in names(smo_prop_list)){
+pdf(paste0("results/RNAvelocity_Div/proportions/prop_celltypes_traj_", n, "_smooth.pdf"), 
+    height = 2.6, width = 5)
+  print(smo_prop_list[[n]])
+  dev.off()
+}
+```
+
+Cell type occupancy by bin, per region
+
+```{r}
+smo_prop_list = list()
+res_all = list() # determine max ct at each step
+for(n in unique(div_dat_df$reg)){
+  # subset region
+  submeta = div_dat_df[div_dat_df$reg==n,]
+  lt_bins = cut(submeta$newpt, 100) #100 equally sized bins
+  plot_df = data.frame(bins = lt_bins, 
+                       cst = as.character(submeta$pred_ctall))
+  tab_df = table(plot_df$bins,plot_df$cst)
+  
+  # remove cell types that are too rare (<5%)
+  tab_df = reshape2::melt(tab_df/rowSums(tab_df))
+  usecl = tapply(tab_df$value, tab_df$Var2, function(x) any(x>0.05))
+  plot_df = plot_df[plot_df$cst %in% names(usecl)[usecl],]
+  tab_df = table(plot_df$bins,plot_df$cst)
+  
+  # normalise by cell type abundance
+  #med_w = prop.table(table(plot_df$cst))
+  #tab_df = t(apply(tab_df, 1, function(x) x/med_w[colnames(tab_df)]))
+  # normalise by major cell type abundance
+  med_w = prop.table(table(unlist(lapply(strsplit(plot_df$cst, "_"), function(x) x[1]))))
+  orcol = colnames(tab_df)
+  nn = unlist(lapply(strsplit(colnames(tab_df), "_"), function(x) x[1]))
+  tab_df = t(apply(tab_df, 1, function(x) x/med_w[nn]))
+  colnames(tab_df) = orcol
+  
+  # reshape
+  tab_df = reshape2::melt(tab_df/rowSums(tab_df))
+  tab_df$Var2 = as.character(tab_df$Var2)
+  
+  # prevent discontinuity by copying the previous column (likely not happening)
+  tab_df = tab_df[order(tab_df$Var1, decreasing = F),]
+  for(i in unique(tab_df$Var1)){
+    if(any(is.nan(tab_df$value[tab_df$Var1==i]))){
+      tab_df$value[tab_df$Var1==i] = prev
+    }
+    prev = tab_df$value[tab_df$Var1==i]
+  }
+  
+  # smoothen the proportions (and force constrain to 0-1)
+  tab_df2 = tab_df
+  tab_df2$value2 = tab_df2$value
+  for(i in unique(tab_df2$Var2)){
+    fff = loess(value~as.numeric(Var1), data = tab_df2[tab_df2$Var2==i,], 
+                span = 0.5)
+    pred = predict(fff)
+    pred[pred>1] = 1
+    pred[pred<0] = 0
+    tab_df2$value2[tab_df2$Var2==i] = pred
+  }
+  
+  # force constrain each interval to 0-1 by doing proportion
+  for(i in unique(tab_df2$Var1)){
+    tab_df2$value2[tab_df2$Var1==i] = tab_df2$value2[tab_df2$Var1==i]/sum(tab_df2$value2[tab_df2$Var1==i])
+  }
+  
+  tab_df2$major = unlist(lapply(strsplit(tab_df2$Var2, "_"), function(x) x[1]))
+  res = list()
+  for(nnn in unique(tab_df2$Var1)){
+    ss=tapply(tab_df2[tab_df2$Var1==nnn,"value2"], tab_df2[tab_df2$Var1==nnn,"major"], sum)
+    res[[nnn]] = which.max(ss)
+  }
+  res_all[[n]] = unlist(lapply(res, names))
+  
+  smo_prop_list[[n]] = ggplot(tab_df2, aes(x = Var1, y = value2, group = Var2, fill = Var2))+
+    geom_area()+
+    scale_y_continuous(expand = c(0,0))+
+    scale_fill_manual(values = cols_cc[names(cols_cc) %in% tab_df2$Var2])+
+    labs(x = "Bins", y = "Proportion", fill = "Cell type")+
+    theme_classic()+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 6.5, colour = "black"),
+          axis.ticks.x = element_blank(),
+          axis.line = element_blank(),
+          axis.title = element_text(size = 7),
+          legend.text = element_text(size = 6),
+          legend.title = element_text(size = 7),
+          legend.key.size = unit(0.4, "cm"))
+}
+
+for(n in names(smo_prop_list)){
+pdf(paste0("results/RNAvelocity_Div/proportions/prop_celltypes_traj_region_", n, "_smooth.pdf"), 
+    height = 2.6, width = 5)
+  print(smo_prop_list[[n]])
+  dev.off()
+}
+```
+
+Cell type occupancy by bin, per group
+
+```{r}
+smo_prop_list = list()
+res_all = list() # determine max ct at each step
+for(n in unique(div_dat_df$group)){
+  # subset region
+  submeta = div_dat_df[div_dat_df$group==n,]
+  lt_bins = cut(submeta$newpt, 100) #100 equally sized bins
+  plot_df = data.frame(bins = lt_bins, 
+                       cst = as.character(submeta$pred_ctall))
+  tab_df = table(plot_df$bins,plot_df$cst)
+  
+  # remove cell types that are too rare (<5%)
+  tab_df = reshape2::melt(tab_df/rowSums(tab_df))
+  usecl = tapply(tab_df$value, tab_df$Var2, function(x) any(x>0.05))
+  plot_df = plot_df[plot_df$cst %in% names(usecl)[usecl],]
+  tab_df = table(plot_df$bins,plot_df$cst)
+  
+  # normalise by cell type abundance
+  #med_w = prop.table(table(plot_df$cst))
+  #tab_df = t(apply(tab_df, 1, function(x) x/med_w[colnames(tab_df)]))
+  # normalise by major cell type abundance
+  med_w = prop.table(table(unlist(lapply(strsplit(plot_df$cst, "_"), function(x) x[1]))))
+  orcol = colnames(tab_df)
+  nn = unlist(lapply(strsplit(colnames(tab_df), "_"), function(x) x[1]))
+  tab_df = t(apply(tab_df, 1, function(x) x/med_w[nn]))
+  colnames(tab_df) = orcol
+  
+  # reshape
+  tab_df = reshape2::melt(tab_df/rowSums(tab_df))
+  tab_df$Var2 = as.character(tab_df$Var2)
+  
+  # prevent discontinuity by copying the previous column (likely not happening)
+  tab_df = tab_df[order(tab_df$Var1, decreasing = F),]
+  for(i in unique(tab_df$Var1)){
+    if(any(is.nan(tab_df$value[tab_df$Var1==i]))){
+      tab_df$value[tab_df$Var1==i] = prev
+    }
+    prev = tab_df$value[tab_df$Var1==i]
+  }
+  
+  # smoothen the proportions (and force constrain to 0-1)
+  tab_df2 = tab_df
+  tab_df2$value2 = tab_df2$value
+  for(i in unique(tab_df2$Var2)){
+    fff = loess(value~as.numeric(Var1), data = tab_df2[tab_df2$Var2==i,], 
+                span = 0.5)
+    pred = predict(fff)
+    pred[pred>1] = 1
+    pred[pred<0] = 0
+    tab_df2$value2[tab_df2$Var2==i] = pred
+  }
+  
+  # force constrain each interval to 0-1 by doing proportion
+  for(i in unique(tab_df2$Var1)){
+    tab_df2$value2[tab_df2$Var1==i] = tab_df2$value2[tab_df2$Var1==i]/sum(tab_df2$value2[tab_df2$Var1==i])
+  }
+  
+  tab_df2$major = unlist(lapply(strsplit(tab_df2$Var2, "_"), function(x) x[1]))
+  res = list()
+  for(nnn in unique(tab_df2$Var1)){
+    ss=tapply(tab_df2[tab_df2$Var1==nnn,"value2"], tab_df2[tab_df2$Var1==nnn,"major"], sum)
+    res[[nnn]] = which.max(ss)
+  }
+  res_all[[n]] = unlist(lapply(res, names))
+  
+  smo_prop_list[[n]] = ggplot(tab_df2, aes(x = Var1, y = value2, group = Var2, fill = Var2))+
+    geom_area()+
+    scale_y_continuous(expand = c(0,0))+
+    scale_fill_manual(values = cols_cc[names(cols_cc) %in% tab_df2$Var2])+
+    labs(x = "Bins", y = "Proportion", fill = "Cell type")+
+    theme_classic()+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 6.5, colour = "black"),
+          axis.ticks.x = element_blank(),
+          axis.line = element_blank(),
+          axis.title = element_text(size = 7),
+          legend.text = element_text(size = 6),
+          legend.title = element_text(size = 7),
+          legend.key.size = unit(0.4, "cm"))
+}
+
+for(n in names(smo_prop_list)){
+pdf(paste0("results/RNAvelocity_Div/proportions/prop_celltypes_traj_group_", n, "_smooth.pdf"), 
+    height = 2.6, width = 5)
+  print(smo_prop_list[[n]])
+  dev.off()
+}
+```
+
+
+## Variable genes
+Find all variable genes in all trajectories
+
+```{r}
+registerDoParallel(50)
+
+fitExp = function(g, mod_df) {
+  res = list()
+  cells = mod_df$cells
+  mod_df$y = scale(exp_l$all[cells,g])
+  
+  m = gam(y~fate*splines::ns(newpt, df = 5)+0, weights = mod_df$prob, data = mod_df)
+  p = mgcv::predict.gam(m, mod_df, type = "link", se.fit = TRUE)
+  fits_df = data.frame("fit" = p$fit, "up_se" = p$fit+(2*p$se.fit), "lo_se" = p$fit-(2*p$se.fit))
+  
+  bin_df = data.frame("newpt" = rep(seq(0,1,length.out = 100), length(unique(unique(mod_df$fate)))),
+                      "fate" = rep(unique(mod_df$fate), each = 100))
+  p = predict(m, bin_df, type = "link", se.fit = TRUE)
+  bin_df$fit = p$fit
+  bin_df$up_se = p$fit+(2*p$se.fit)
+  bin_df$lo_se = p$fit-(2*p$se.fit)
+  
+  res[["all_terms"]] = list("fits" = fits_df, "binned_fits" = bin_df, 
+                            "pvals" = summary(m)$pTerms.pv)
+  return(res)
+}
+
+ff = "results/RNAvelocity_Div/SS_data_glut_fit_exp_everything.RDS"
+if(!file.exists(ff)){
+  all_fit_exp = foreach(i=colnames(exp_l$all)) %dopar% {
+    fitExp(i, div_dat_df)
+  }
+  names(all_fit_exp) = colnames(exp_l$all)
+  saveRDS(all_fit_exp, file = ff)
+} else{
+  all_fit_exp = readRDS(ff)
+}
+```
+
+Find variable genes per group and trajectory
+
+```{r}
+registerDoParallel(32)
+
+fitExpTraj = function(g, mod_df, group_col) {
+  res = list()
+  res[["per_group"]] = list()
+  for(gr in unique(mod_df[,group_col])){
+    sub_mod_df = mod_df[mod_df[,group_col]==gr,]
+    sub_mod_df$y = scale(exp_l$all[sub_mod_df$cells,g])
+    sub_mod_df[,"fate"] = as.character(sub_mod_df[,"fate"])
+    
+    m = gam(y~fate*splines::ns(newpt, df = 5)+0, weights = sub_mod_df$prob, data = sub_mod_df)
+    p = mgcv::predict.gam(m, sub_mod_df, type = "link", se.fit = TRUE)
+    fits_df = data.frame("fit" = p$fit, "up_se" = p$fit+(2*p$se.fit), 
+                         "lo_se" = p$fit-(2*p$se.fit))
+    
+    bin_df = data.frame("newpt" = rep(seq(0,1,length.out = 100),
+                                      length(unique(unique(sub_mod_df$fate)))),
+                        "fate" = rep(unique(sub_mod_df$fate), each = 100))
+    p = predict(m, bin_df, type = "link", se.fit = TRUE)
+    bin_df$fit = p$fit
+    bin_df$up_se = p$fit+(2*p$se.fit)
+    bin_df$lo_se = p$fit-(2*p$se.fit)
+    
+    res[["per_group"]][[gr]] = list("fits" = fits_df, "binned_fits" = bin_df, 
+                                    "pvals" = summary(m)$pTerms.pv)
+  }
+
+  res[["per_fate"]] = list()
+  for(f in unique(mod_df[,"fate"])){
+    sub_mod_df = mod_df[mod_df[,"fate"]==f,]
+    sub_mod_df$y = scale(exp_l$all[sub_mod_df$cells,g])
+    sub_mod_df[,"fate"] = as.character(sub_mod_df[,"fate"])
+    
+    m = gam(y~splines::ns(newpt, df = 5)+0, weights = sub_mod_df$prob, data = sub_mod_df)
+    p = mgcv::predict.gam(m, sub_mod_df, type = "link", se.fit = TRUE)
+    fits_df = data.frame("fit" = p$fit, "up_se" = p$fit+(2*p$se.fit), 
+                         "lo_se" = p$fit-(2*p$se.fit))
+    
+    bin_df = data.frame("newpt" = seq(0,1,length.out = 100))
+    p = predict(m, bin_df, type = "link", se.fit = TRUE)
+    bin_df$fit = p$fit
+    bin_df$up_se = p$fit+(2*p$se.fit)
+    bin_df$lo_se = p$fit-(2*p$se.fit)
+    
+    res[["per_fate"]][[f]] = list("fits" = fits_df, "binned_fits" = bin_df, 
+                                  "pvals" = summary(m)$pTerms.pv)
+  }
+
+  return(res)
+}
+
+ff = "results/RNAvelocity_Div/SS_data_glut_fit_exp_individual.RDS"
+if(!file.exists(ff)){
+  indall_fit_exp = foreach(i=colnames(exp_l$all)) %dopar% {
+    fitExpTraj(i, div_dat_df, "group")
+  }
+  names(ind_fit_exp) = colnames(exp_l$all)
+  saveRDS(indall_fit_exp, file = ff)
+} else{
+  indall_fit_exp = readRDS(ff)
+}
+```
+
+Find variable genes per group and trajectory, overall scale
+
+```{r}
+registerDoParallel(32)
+
+fitExpTraj = function(g, mod_df, group_col) {
+  res = list()
+  res[["per_group"]] = list()
+  
+  mod_df$y = scale(exp_l$all[mod_df$cells,g])
+  for(gr in unique(mod_df[,group_col])){
+    sub_mod_df = mod_df[mod_df[,group_col]==gr,]
+    sub_mod_df[,"fate"] = as.character(sub_mod_df[,"fate"])
+    
+    m = gam(y~fate*splines::ns(newpt, df = 5)+0, weights = sub_mod_df$prob, data = sub_mod_df)
+    p = mgcv::predict.gam(m, sub_mod_df, type = "link", se.fit = TRUE)
+    fits_df = data.frame("fit" = p$fit, "up_se" = p$fit+(2*p$se.fit), 
+                         "lo_se" = p$fit-(2*p$se.fit))
+    
+    bin_df = data.frame("newpt" = rep(seq(0,1,length.out = 100),
+                                      length(unique(unique(sub_mod_df$fate)))),
+                        "fate" = rep(unique(sub_mod_df$fate), each = 100))
+    p = predict(m, bin_df, type = "link", se.fit = TRUE)
+    bin_df$fit = p$fit
+    bin_df$up_se = p$fit+(2*p$se.fit)
+    bin_df$lo_se = p$fit-(2*p$se.fit)
+    
+    res[["per_group"]][[gr]] = list("fits" = fits_df, "binned_fits" = bin_df, 
+                                    "pvals" = summary(m)$pTerms.pv)
+  }
+
+  res[["per_fate"]] = list()
+  for(f in unique(mod_df[,"fate"])){
+    sub_mod_df = mod_df[mod_df[,"fate"]==f,]
+    sub_mod_df[,"fate"] = as.character(sub_mod_df[,"fate"])
+    
+    m = gam(y~splines::ns(newpt, df = 5)+0, weights = sub_mod_df$prob, data = sub_mod_df)
+    p = mgcv::predict.gam(m, sub_mod_df, type = "link", se.fit = TRUE)
+    fits_df = data.frame("fit" = p$fit, "up_se" = p$fit+(2*p$se.fit), 
+                         "lo_se" = p$fit-(2*p$se.fit))
+    
+    bin_df = data.frame("newpt" = seq(0,1,length.out = 100))
+    p = predict(m, bin_df, type = "link", se.fit = TRUE)
+    bin_df$fit = p$fit
+    bin_df$up_se = p$fit+(2*p$se.fit)
+    bin_df$lo_se = p$fit-(2*p$se.fit)
+    
+    res[["per_fate"]][[f]] = list("fits" = fits_df, "binned_fits" = bin_df, 
+                                  "pvals" = summary(m)$pTerms.pv)
+  }
+
+  return(res)
+}
+
+ff = "results/RNAvelocity_Div/SS_data_glut_fit_exp_individual_sc.RDS"
+if(!file.exists(ff)){
+  ind_fit_exp = foreach(i=colnames(exp_l$all)) %dopar% {
+    fitExpTraj(i, div_dat_df, "group")
+  }
+  names(ind_fit_exp) = colnames(exp_l$all)
+  saveRDS(ind_fit_exp, file = ff)
+} else{
+  ind_fit_exp = readRDS(ff)
+}
+```
+
+
+## Variability per region
+Load lineage-specific drivers
+
+```{r}
+dir = "results/RNAvelocity_Div/drivers/"
+ld_sp_l = list()
+for(r in c("hippocampus", "lc", "eomes", "8620_ep", "111")){
+  for(l in c(unique(div_dat_df$fate[div_dat_df$group==r]), "epen_clus_4")){
+    ld_sp_l[[paste0(l, "..", r)]] = read.csv(paste0(dir, "glut_div_", r, "_", l, "_lineageDrivers.csv"), 
+                                             header = T, row.names = 1)
+    ld_sp_l[[paste0(l, "..", r)]]$gene = rownames(ld_sp_l[[paste0(l, "..", r)]])
+    ld_sp_l[[paste0(l, "..", r)]] = ld_sp_l[[paste0(l, "..", r)]][!startsWith(ld_sp_l[[paste0(l, "..", r)]]$gene, "AMEX") &
+                                                                  !startsWith(ld_sp_l[[paste0(l, "..", r)]]$gene, "LOC") &
+                                                                  !grepl("..", ld_sp_l[[paste0(l, "..", r)]]$gene, fixed = T),]
+  }
+}
+ld_sp_l$epen_clus_4 = Reduce(rbind, ld_sp_l[grepl("epen_clus_4", names(ld_sp_l))])
+ld_sp_l = ld_sp_l[!grepl("epen_clus_4..", names(ld_sp_l), fixed = T)]
+ld_sp_l$epen_clus_4 = ld_sp_l$epen_clus_4[order(ld_sp_l$epen_clus_4[,3], decreasing = T),]
+ld_sp_l$epen_clus_4 = ld_sp_l$epen_clus_4[!duplicated(ld_sp_l$epen_clus_4$gene),]
+ld_sp_filt = lapply(ld_sp_l, function(x) x[abs(x[,1])>=0.3 & x[,3]<=0.05,])
+
+top100 = lapply(ld_sp_filt, function(x) x[x[,1]>=0.3,"gene"][order(x[x[,1]>=0.3,1], decreasing = T)][1:100])
+bottom100 = lapply(ld_sp_filt, function(x) x[x[,1]<=(-0.3),"gene"][order(x[x[,1]<=(-0.3),1], decreasing = F)][1:100])
+
+all_lin_g = unique(unlist(lapply(ld_sp_filt, function(x) x$gene)))
+```
+
+Region and lineage pvalues
+
+```{r}
+reg_var_pval = list()
+fate_var_pval = list()
+reg_dif_pval = list()
+fate_range = list()
+for(g in names(ind_fit_exp)){
+  reg_var_pval[[g]] = unlist(lapply(ind_fit_exp[[g]]$per_group, function(x) x$pvals[2]))
+  names(reg_var_pval[[g]]) = names(ind_fit_exp[[g]]$per_group)
+  reg_dif_pval[[g]] = unlist(lapply(ind_fit_exp[[g]]$per_group, function(x) x$pvals[3]))
+  names(reg_dif_pval[[g]]) = names(ind_fit_exp[[g]]$per_group)
+  
+  fate_var_pval[[g]] = unlist(lapply(ind_fit_exp[[g]]$per_fate, function(x) x$pvals[1]))
+  names(fate_var_pval[[g]]) = names(ind_fit_exp[[g]]$per_fate)
+  
+  fate_range[[g]] = unlist(lapply(ind_fit_exp[[g]]$per_fate, function(x) diff(range(x$fits$fit))))
+}
+reg_var_pval = data.frame(row.names = names(reg_var_pval),
+                          Reduce(rbind, reg_var_pval))
+fate_var_pval = data.frame(row.names = names(fate_var_pval),
+                           Reduce(rbind, fate_var_pval))
+reg_dif_pval = data.frame(row.names = names(reg_dif_pval),
+                          Reduce(rbind, reg_dif_pval))
+fate_range = data.frame(row.names = names(fate_range),
+                        Reduce(rbind, fate_range))
+
+reg_var_qval = data.frame(lapply(reg_var_pval, p.adjust, method = "fdr"),
+                          row.names = rownames(reg_var_pval))
+fate_var_qval = data.frame(lapply(fate_var_pval, p.adjust, method = "fdr"),
+                           row.names = rownames(fate_var_pval))
+reg_dif_qval = data.frame(lapply(reg_dif_pval, p.adjust, method = "fdr"),
+                          row.names = rownames(reg_dif_pval))
+```
+
+Get significant genes
+
+```{r}
+gr_groups = tapply(div_dat_df$fate, div_dat_df$group, unique)
+
+df_sig_l = list()
+for(n in names(gr_groups)){
+  df_sig = data.frame("reg_dif" = reg_dif_qval[,grepl(n, colnames(reg_dif_qval))],
+                      row.names = rownames(reg_dif_qval))
+  for(f in gr_groups[[n]]){
+    df_sig[,f] = fate_var_qval[rownames(df_sig),f]
+    df_sig[,paste0(f,"_isLin")] = rownames(df_sig) %in% ld_sp_filt[[paste0(f, "..", n)]]$gene
+    df_sig[,paste0(f,"_range")] = fate_range[,f]
+  }
+  df_sig_l[[n]] = df_sig
+}
+
+df_sig_filt = list()
+for(n in names(df_sig_l)){
+  df_sig_filt[[n]] = df_sig_l[[n]][df_sig_l[[n]][,3] | df_sig_l[[n]][,6],]
+  
+  write.csv(df_sig_filt[[n]], 
+            file = paste0("results/RNAvelocity_Div/heatmap_gen/diff_genes_", n, ".csv"),
+            col.names = T, row.names = T, quote = F)
+}
+```
+
+List genes per group
+
+```{r}
+reg_g_l = list()
+for(n in names(df_sig_filt)){
+  reg_g_l[[n]] = list()
+  reg_diff = df_sig_filt[[n]]$reg_dif<=0.01
+  is_ep = rownames(df_sig_filt[[n]]) %in% top100$epen_clus_4
+  
+  # pan-region - don't differ between lineages
+  cond_r = df_sig_filt[[n]][,paste0(gr_groups[[n]][1],"_range")]<=df_sig_filt[[n]][,paste0(gr_groups[[n]][2],"_range")]*1.2 & 
+    df_sig_filt[[n]][,paste0(gr_groups[[n]][2],"_range")]<=df_sig_filt[[n]][,paste0(gr_groups[[n]][1],"_range")]*1.2
+  cond_lin = rowSums(cbind(df_sig_filt[[n]][,3], df_sig_filt[[n]][,6]))==2
+  
+  reg_g_l[[n]]$pan = sort(rownames(df_sig_filt[[n]])[!reg_diff | is_ep | (cond_lin & cond_r)])
+  
+  # per lineage - differ between lineages; are lineage genes; unique or w/ higher range
+  for(f in gr_groups[[n]]){
+    notf = gr_groups[[n]][gr_groups[[n]]!=f]
+    
+    cond1a = df_sig_filt[[n]][,paste0(f,"_isLin")]
+    cond1b = df_sig_filt[[n]][,paste0(notf,"_isLin")]
+    cond1 = cond1a & !cond1b
+    
+    cond2 = df_sig_filt[[n]][,paste0(f,"_range")]>df_sig_filt[[n]][,paste0(notf,"_range")]*1.2
+    
+    reg_g_l[[n]][[f]] = sort(rownames(df_sig_filt[[n]])[reg_diff & cond1a & 
+                                                          (cond1 | cond2) & !is_ep])
+  }
+}
+sapply(reg_g_l, function(x) lapply(x, length))
+
+saveRDS(reg_g_l, file = "results/RNAvelocity_Div/heatmap_gen/genes_fates.RDS")
+```
+
+Make heatmaps
+
+```{r}
+reg_binned_fits = list()
+for(n in names(reg_g_l)){
+  binned_fits = list()
+  for(g in names(ind_fit_exp)){
+    plot_df = ind_fit_exp[[g]]$per_group[[n]]$binned_fits
+    dat = data.frame(lapply(unique(plot_df$fate), function(x) plot_df$fit[plot_df$fate==x]))
+    colnames(dat) = unique(plot_df$fate)
+    binned_fits[[g]] = dat
+  }
+  reg_binned_fits[[n]] = binned_fits
+  
+  for(nn in names(reg_g_l[[n]])){
+    mean_cor_g = lapply(reg_g_l[[n]][[nn]], function(x){
+      if(nn=="pan"){
+        return(apply(binned_fits[[x]], 1, mean))
+      } else{
+        return(binned_fits[[x]][,nn])
+      }})
+    names(mean_cor_g) = reg_g_l[[n]][[nn]]
+    
+    mean_cor_g = data.frame(Reduce(rbind, mean_cor_g))
+    rownames(mean_cor_g) = reg_g_l[[n]][[nn]]
+    
+    max_dat = apply(apply(mean_cor_g, 1, scales::rescale, to = c(0,1)), 2, function(x) which.max(x))
+    min_dat = apply(apply(mean_cor_g, 1, scales::rescale, to = c(0,1)), 2, function(x) sum(x>.9))
+    sc_dat = order(max_dat, min_dat, decreasing = c(F, F))
+    
+    dat_norm = t(apply(mean_cor_g[sc_dat,], 1, scales::rescale, to = c(0,1)))
+    
+    dir = "results/RNAvelocity_Div/heatmap_gen/"
+    pdf(paste0(dir, "premade_plots/glut_", n, "_", nn, "_heatmap.pdf"), 
+        height = 2.25, width = 2.5, useDingbats = F)
+    pheatmap::pheatmap(dat_norm, clustering_method = "ward.D", color = viridis::magma(100), 
+                       border_color = NA, cluster_cols = F, cluster_rows = F,
+                       show_colnames = F, show_rownames = F, angle_col = 0, fontsize = 6)
+    dev.off()
+    
+    write.csv(dat_norm, file = paste0(dir, "heatmap_dat_", n, "_", nn, ".csv"),
+              col.names = T, row.names = T, quote = F)
+  }
+}
+```
+
+Gene timings
+
+```{r}
+max_l = list()
+for(n in names(reg_binned_fits)){
+  g = rownames(df_sig_filt[[n]])
+  max_g = lapply(g, function(x) apply(reg_binned_fits[[n]][[x]], 2, 
+                                      function(x) which.max(scales::rescale(x, to = c(0,1)))))
+  max_g = Reduce(rbind, max_g)
+  rownames(max_g) = g
+  colnames(max_g) = paste0("max_", colnames(max_g))
+  
+  max_l[[n]] = cbind(df_sig_filt[[n]], max_g[rownames(df_sig_filt[[n]]),])
+  max_l[[n]]$gene = rownames(max_l[[n]])
+  colnames(max_l[[n]])[1] = paste0(n, "_", colnames(max_l[[n]])[1])
+}
+all_genes_variable = Reduce(function(x,y){merge(x,y, by = "gene", all = T)}, max_l)
+
+write.csv(all_genes_variable, 
+          file = "results/RNAvelocity_Div/heatmap_gen/all_genes_variable.csv", 
+          col.names = T, row.names = T, quote = F)
+```
+
+
+## Comapre with SS
+Gene tables
+
+```{r}
+div_genes_var = read.csv("results/RNAvelocity_Div/heatmap_gen/all_genes_variable.csv",
+                         header = T, row.names = 1)
+sst_genes_var = read.csv("results/RNAvelocity/glut_corr/heatmap_gen/all_genes_variable.csv",
+                         header = T, row.names = 1)
+
+gplots::venn(list("div" = unique(div_genes_var$gene), "ss" = unique(sst_genes_var$gene)))
+
+plt_l = list()
+max_df_l = list()
+for(f in unique(div_dat_df$fate)){
+  dat_both = merge(sst_genes_var[,c("gene", paste0("max_", f))],
+                   div_genes_var[,c("gene", paste0("max_", f))], by = 1)
+  dat_both = dat_both[complete.cases(dat_both),]
+  
+  max_df_l[[f]] = dat_both
+  
+  plt_l[[f]] = ggplot(dat_both, aes_string(x = paste0("max_", f, ".x"), 
+                                        y = paste0("max_", f, ".y")))+
+    geom_point()+
+    geom_abline(slope = 1, intercept = 0)+
+    labs(x = "max time SS", y = "max time Div", title = f, 
+         subtitle = round(cor(dat_both[,paste0("max_", f, ".x")],
+                              dat_both[,paste0("max_", f, ".y")]), 3))+
+    theme_classic()+
+    theme(aspect.ratio = 1)
+}
+```
+
+Venn for gene lists
+
+```{r}
+div_genes_h = readRDS(file = "results/RNAvelocity_Div/heatmap_gen/genes_fates.RDS")
+ss_genes_h = readRDS(file = "results/RNAvelocity/glut_corr/heatmap_gen/genes_fates.RDS")
+
+venn_l = list()
+perc_mat = matrix(0, nrow = 10, ncol = 10)
+rownames(perc_mat) = colnames(perc_mat) = as.vector(sapply(ss_genes_h, names)[2:3,])
+for(n in names(ss_genes_h)){
+  gl = names(ss_genes_h[[n]])[grepl("glut", names(ss_genes_h[[n]]))]
+  for(f in gl){
+    g1 = c(div_genes_h[[n]][[f]], div_genes_h[[n]][["pan"]])
+    g2 = c(ss_genes_h[[n]][[f]], ss_genes_h[[n]][["pan"]])
+    venn_l[[f]] = ggvenn::ggvenn(list("div" = g1, "ss" = g2))
+    pdf(paste0("results/RNAvelocity_Div/comp_SS_div/venn_genes_pan_", f, ".pdf"), 
+        height = 4, width = 5)
+    print(venn_l[[f]])
+    dev.off()
+  }
+  pdf(paste0("results/RNAvelocity_Div/comp_SS_div/venn_genes_", n, ".pdf"), 
+      height = 4, width = 5)
+  plt = ggvenn::ggvenn(list("div" = unique(unlist(div_genes_h$`111`)), 
+                            "ss" = unique(unlist(ss_genes_h$`111`))))
+  print(plt)
+  dev.off()
+}
+
+pdf(paste0("results/RNAvelocity_Div/comp_SS_div/venn_genes_all.pdf"), 
+      height = 4, width = 5)
+plt = ggvenn::ggvenn(list("div" = unique(unlist(div_genes_h)), 
+                          "ss" = unique(unlist(ss_genes_h))))
+print(plt)
+dev.off()
+```
+
+Compare lineage driver correlations
+
+```{r}
+# SS drivers
+dir = "results/RNAvelocity/glut_corr/"
+ld_ss_l = list()
+for(r in c("hippocampus", "lc", "eomes", "8620_ep", "111")){
+  for(l in c(unique(div_dat_df$fate[div_dat_df$group==r]), "epen_clus_4")){
+    ld_ss_l[[paste0(l, "..", r)]] = read.csv(paste0(dir, "glutNoEp_ss_", r, "_", l,
+                                                     "_lineageDrivers.csv"), 
+                                             header = T, row.names = 1)
+    ld_ss_l[[paste0(l, "..", r)]]$gene = rownames(ld_ss_l[[paste0(l, "..", r)]])
+  }
+}
+
+# div drivers
+dir = "results/RNAvelocity_Div/drivers/"
+ld_div_l = list()
+for(r in c("hippocampus", "lc", "eomes", "8620_ep", "111")){
+  for(l in c(unique(div_dat_df$fate[div_dat_df$group==r]), "epen_clus_4")){
+    ld_div_l[[paste0(l, "..", r)]] = read.csv(paste0(dir, "glut_div_", r, "_", l,
+                                                     "_lineageDrivers.csv"), 
+                                             header = T, row.names = 1)
+    ld_div_l[[paste0(l, "..", r)]]$gene = rownames(ld_div_l[[paste0(l, "..", r)]])
+  }
+}
+
+corr_dat_l = list()
+for(n in names(ld_div_l)[!grepl("epen", names(ld_div_l))]){
+  common_genes = intersect(ld_ss_l[[n]]$gene, ld_div_l[[n]]$gene)
+  corr_dat_l[[n]] = cbind(ld_ss_l[[n]][common_genes,c(6,1,3)], 
+                          ld_div_l[[n]][common_genes,c(1,3)])
+  colnames(corr_dat_l[[n]]) = c("gene", "corr_ss", "qval_ss", "corr_div", "qval_div")
+  
+  corr_dat_l[[n]]$sig_both = corr_dat_l[[n]]$qval_ss<=0.05 & corr_dat_l[[n]]$qval_div<=0.05
+}
+
+for(n in names(corr_dat_l)){
+  plt = ggplot(corr_dat_l[[n]], aes(x = corr_ss, y = corr_div, alpha = sig_both))+
+    geom_point(size = 0.4)+
+    geom_hline(yintercept = 0)+geom_vline(xintercept = 0)+
+    labs(x = "Correlation (SS)", y = "Correlation (Div)")+
+    theme_classic()+
+    theme(aspect.ratio = 1,
+          axis.text = element_text(size = 6, colour = "black"),
+          axis.title = element_text(size = 7, colour = "black"),
+          legend.position = "none")
+  pdf(paste0("results/RNAvelocity_Div/comp_SS_div/corr_lineage_", n, ".pdf"), 
+      height = 3, width = 3)
+  print(plt)
+  dev.off()
+}
+```
+
+
+
+
+
+
+
+

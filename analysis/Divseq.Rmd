@@ -719,6 +719,222 @@ dev.off()
 
 
 
+# DE 1 wpi vs other time points
+Load data
+
+```{r}
+div_srat = readRDS("data/expression/axolotl_reclust/Edu_1_2_4_6_8_12_fil_highvarfeat.RDS")
+meta_div_pred = read.csv("results/Div-seq/divseq_predicted_metadata.csv", 
+                         header = T, row.names = 1)
+div_srat = AddMetaData(div_srat, metadata = meta_div_pred)
+
+div_srat$majorct = sapply(strsplit(div_srat$pred_ctall, "_"), function(x) x[1])
+div_srat$majorct[div_srat$pred_ctall %in% c("epen_clus_3", "epen_clus_4")] = "epenAct"
+div_srat$majorct[div_srat$pred_ctall %in% c("epen_clus_1", "epen_clus_14",
+                                          "epen_clus_7", "epen_clus_13")] = "epenNeu"
+div_srat$majorct[div_srat$pred_ctall %in% c("epen_clus_0", "epen_clus_2", "epen_clus_5",
+                                          "epen_clus_6","epen_clus_8", "epen_clus_9",
+                                          "epen_clus_10","epen_clus_11", "epen_clus_12")] = "epenQui"
+```
+
+DE 1 wpi vs each time point
+
+```{r}
+rest = unique(div_srat$sample)[unique(div_srat$sample)!="1_wpi_pos"]
+
+ct_mk_l = list()
+for(ct in unique(div_srat$pred_ctall)){
+  sub_dat = div_srat[,div_srat$pred_ctall==ct]
+  for(tp in rest){
+    cond = sub_dat$sample %in% c(tp, "1_wpi_pos")
+    if(sum(cond)>9){
+      subsub_dat = sub_dat[,cond]
+      if(length(unique(subsub_dat$sample))>1){
+        ct_mk_l[[paste0(ct, "_", tp)]] = presto::wilcoxauc(subsub_dat, group_by = "sample")
+      }
+    }
+  }
+}
+saveRDS(ct_mk_l, file = "results/Div-seq/rest_1wpi_celltype_DE.RDS")
+
+mct_mk_l = list()
+for(ct in unique(div_srat$majorct)){
+  sub_dat = div_srat[,div_srat$majorct==ct]
+  for(tp in rest){
+    cond = sub_dat$sample %in% c(tp, "1_wpi_pos")
+    if(sum(cond)>9){
+      subsub_dat = sub_dat[,cond]
+      if(length(unique(subsub_dat$sample))>1){
+        mct_mk_l[[paste0(ct, "_", tp)]] = presto::wilcoxauc(subsub_dat, group_by = "sample")
+      }
+    }
+  }
+}
+saveRDS(mct_mk_l, file = "results/Div-seq/rest_1wpi_majorct_DE.RDS")
+```
+
+Filter the DE genes to those significant and meaningful
+
+```{r}
+ct_mk_l_filt = list()
+for(n in names(ct_mk_l)){
+  ct_mk_l_filt[[n]] = ct_mk_l[[n]][ct_mk_l[[n]]$padj<=0.05 & ct_mk_l[[n]]$logFC>=0.2,]
+  ct_mk_l_filt[[n]] = ct_mk_l_filt[[n]][!startsWith(ct_mk_l_filt[[n]]$feature, "AMEX") &
+                                        !startsWith(ct_mk_l_filt[[n]]$feature, "LOC") &
+                                        !grepl("..", ct_mk_l_filt[[n]]$feature, fixed = T),]
+}
+
+mct_mk_l_filt = list()
+for(n in names(mct_mk_l)){
+  mct_mk_l_filt[[n]] = mct_mk_l[[n]][mct_mk_l[[n]]$padj<=0.05 & mct_mk_l[[n]]$logFC>=0.2,]
+  mct_mk_l_filt[[n]] = mct_mk_l_filt[[n]][!startsWith(mct_mk_l_filt[[n]]$feature, "AMEX") &
+                                        !startsWith(mct_mk_l_filt[[n]]$feature, "LOC") &
+                                        !grepl("..", mct_mk_l_filt[[n]]$feature, fixed = T),]
+}
+```
+
+Get GO Terms, without repeated genes
+
+```{r}
+bg = rownames(div_srat)[rowSums(div_srat@assays$RNA@data)>0]
+bg = bg[!startsWith(bg, "AMEX") & !startsWith(bg, "LOC") & !grepl("..", bg, fixed = T)]
+
+go_mct_l2 = list()
+for(ct in names(mct_mk_l_filt)){
+  for(g in unique(mct_mk_l_filt[[ct]]$group)){
+    id = paste0(ct, "..", g)
+    genes = mct_mk_l_filt[[ct]]$feature[mct_mk_l_filt[[ct]]$group==g]
+
+    if(length(genes)>0){
+      go_mct_l2[[id]] = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP",
+                                         custom_bg = bg)$result
+    }
+  }
+}
+```
+
+Plotting
+
+```{r, fig.height=3, fig.width=3}
+for(n in names(go_mct_l2)){
+  plot_df = head(go_mct_l2[[n]], 10)
+  plot_df$term_name = factor(plot_df$term_name, levels = rev(plot_df$term_name))
+  m = -log10(plot_df$p_value)+(-log10(plot_df$p_value)*0.05)
+  plt = ggplot(plot_df, aes(x = -log10(p_value), y = term_name))+
+    geom_col()+
+    ggtitle(n)+
+    scale_x_continuous(expand = c(0,0), limits = c(0, m))+
+    theme_bw()+
+    theme(axis.text = element_text(colour = "black", size = 7))
+  print(plt)
+}
+```
+
+
+```{r}
+#View(go_mct_l2$epenAct_12_wpi..12_wpi)
+gostres = gprofiler2::gconvert(query = c("GO:0051674"), 
+                               target = "HGNC", organism = "hsapiens")$target
+loc_genes = lapply(mct_mk_l_filt[grepl("epenAct", names(mct_mk_l_filt))], 
+                   function(x) gostres[gostres %in% x$feature[x$group=="1_wpi_pos"]])
+loc_genes = unique(unlist(loc_genes))
+
+res_mat = matrix(0, nrow = length(loc_genes), ncol = sum(grepl("epenAct", names(mct_mk_l))))
+rownames(res_mat) = loc_genes
+colnames(res_mat) = names(mct_mk_l)[grepl("epenAct", names(mct_mk_l))]
+for(n in names(mct_mk_l)[grepl("epenAct", names(mct_mk_l))]){
+  fc = mct_mk_l[[n]][mct_mk_l[[n]]$group=="1_wpi_pos", ]
+  res_mat[,n] = fc[match(loc_genes, fc$feature),"logFC"]
+}
+
+annot_df = data.frame(row.names = rownames(res_mat),
+                      "cor" = apply(res_mat, 1, function(x) cor(x, 1:5)),
+                      "abscor" = abs(apply(res_mat, 1, function(x) cor(x, 1:5))))
+pheatmap::pheatmap(res_mat, cluster_cols = F, clustering_method = "ward.D", 
+                   treeheight_row = 40, fontsize = 7, annotation_row = annot_df)
+boxplot(sort(annot_df$cor))
+```
+
+
+
+```{r}
+#sub_dat = div_srat[,div_srat$majorct=="epenAct"]
+sub_dat = div_srat[,grepl("epen", div_srat$majorct)]
+sub_dat = NormalizeData(sub_dat)
+sub_dat = FindVariableFeatures(sub_dat, nfeatures = 10000)
+sub_dat = ScaleData(sub_dat, vars.to.regress = c("nCount_RNA", "percent.mt", "batch"))
+sub_dat = RunPCA(sub_dat, features = rownames(sub_dat), verbose = F)
+
+DimPlot(sub_dat, dims = 1:2, reduction = "pca", group.by = "sample")
+
+g = rownames(sub_dat@assays$RNA@counts)
+g = g[!startsWith(g, "AMEX") & !startsWith(g, "LOC") & !grepl("..", g, fixed = T)]
+
+library(fastTopics)
+fit = fit_topic_model(Matrix::t(sub_dat@assays$RNA@counts[g,]), k = 10)
+fit7 = fit_topic_model(Matrix::t(sub_dat@assays$RNA@counts[g,]), k = 7)
+fit4 = fit_topic_model(Matrix::t(sub_dat@assays$RNA@counts[g,]), k = 4)
+
+topic_colors = rainbow(10)
+structure_plot(fit, colors = topic_colors, topics = 1:10, gap = 25,
+               grouping = factor(sub_dat$pred_ctall))
+structure_plot(fit, colors = topic_colors, topics = 1:10, gap = 25,
+               grouping = factor(sub_dat$sample))
+structure_plot(fit, colors = topic_colors, topics = 1:10, gap = 25,
+               grouping = factor(sub_dat$batch))
+
+dfa_out = fastTopics::de_analysis(fit4, Matrix::t(sub_dat@assays$RNA@counts[rownames(fit4$F),]))
+volcano_plot(dfa_out,k = 4,labels = rownames(fit4$F))
+
+tp = factor(sub_dat$sample, levels = c("1_wpi_pos", "2_wpi", "4_wpi", "6_wpi", "8_wpi", "12_wpi"))
+pca_plot(fit,fill = tp) +
+  scale_fill_manual(values = RColorBrewer::brewer.pal(7, "BuPu")[-1])
+
+#pca = prcomp(fit4$L)$x
+pca = prcomp(fit$L)$x
+df = data.frame(pc = pca[,1][pca[,2]>0], tp = tp[pca[,2]>0])
+boxplot(pc~tp, df)
+cond = pca[,1]>(-0.25)
+cor_pc1 = t(cor(pca[,2][cond], as.matrix(Matrix::t(sub_dat@assays$RNA@counts[rownames(fit$F),cond]))))
+cor_pc1 = cor_pc1[!is.na(cor_pc1),,drop = F]
+cor_filt = cor_pc1[abs(cor_pc1)>=0.25,,drop = F]
+
+View(cor_filt)
+```
+
+
+```{r}
+bg = rownames(fit$F)
+genes = rownames(cor_filt)[cor_filt[,1]>0]
+go_cor_pos = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP", custom_bg = bg)$result
+plot_df = head(go_cor_pos, 10)
+plot_df$term_name = factor(plot_df$term_name, levels = rev(plot_df$term_name))
+m = -log10(plot_df$p_value)+(-log10(plot_df$p_value)*0.05)
+plt = ggplot(plot_df, aes(x = -log10(p_value), y = term_name))+
+  geom_col()+
+  ggtitle("positively cor")+
+  scale_x_continuous(expand = c(0,0), limits = c(0, m))+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7))
+
+
+genes = rownames(cor_filt)[cor_filt[,1]<0]
+go_cor_neg = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP", custom_bg = bg)$result
+plot_df = head(go_cor_neg, 10)
+plot_df$term_name = factor(plot_df$term_name, levels = rev(plot_df$term_name))
+m = -log10(plot_df$p_value)+(-log10(plot_df$p_value)*0.05)
+plt = ggplot(plot_df, aes(x = -log10(p_value), y = term_name))+
+  geom_col()+
+  ggtitle("negatively cor")+
+  scale_x_continuous(expand = c(0,0), limits = c(0, m))+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 7))
+```
+
+
+
+
+
 # Integrating SS and 1 wpi neg
 Load data
 
@@ -907,7 +1123,7 @@ Get GO Terms, without repeated genes
 ```{r}
 genes_comm = c()
 for(ct in names(ct_mk_l_filt)){
-  if(any(n_de[ct,]>=100)){
+  if(any(n_de[ct,]>=30)){
     g = ct_mk_l_filt[[ct]]$feature
     genes_comm = c(genes_comm, g)
   }
@@ -916,13 +1132,16 @@ common = names(table(genes_comm)[table(genes_comm)>=4])
 
 go_ct_l2 = list()
 for(ct in names(ct_mk_l_filt)){
+  bg = rownames(ax_neg_srat)[rowSums(ax_neg_srat[,ax_neg_srat$ctlabels==ct]@assays$RNA@data)>0]
+  bg = bg[!startsWith(bg, "AMEX") & !startsWith(bg, "LOC") & !grepl("..", bg, fixed = T)]
   for(g in colnames(n_de)){
-    if(n_de[ct,g]>=100){
+    if(n_de[ct,g]>=30){
       id = paste0(ct, "..", g)
       genes = ct_mk_l_filt[[ct]]$feature[ct_mk_l_filt[[ct]]$group==g]
       #
       genes = genes[!(genes %in% common)]
-      go_ct_l2[[id]] = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP")$result
+      go_ct_l2[[id]] = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP",
+                                        custom_bg = bg)$result
     }
   }
 }
@@ -962,4 +1181,341 @@ saveRDS(ax_neg_srat, file = "data/processed/SS_1wpiNeg_srat.RDS")
 ```
 
 
+
+# Integrating SS and 1 wpi (pos and neg)
+Load data
+
+```{r}
+ax_srat = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+ax_srat = AddMetaData(ax_srat, metadata = meta)
+meta_regs = read.csv("data/processed/multiome/WP_region_predictions.csv", 
+                    header = T, row.names = 1)
+newcellnames = rownames(meta_regs)
+newcellnames = gsub("-a1-1", "-1_1", newcellnames)
+newcellnames = gsub("-a1-2", "-1_2", newcellnames)
+newcellnames = gsub("-a3-1", "-1_3", newcellnames)
+newcellnames = gsub("-a3-2", "-1_4", newcellnames)
+rownames(meta_regs) = newcellnames
+ax_srat = AddMetaData(ax_srat, metadata = meta_regs)
+ax_srat$regions_all = ax_srat$pred_regions_top
+ax_srat$regions_all[is.na(ax_srat$regions_all)] = ax_srat$regions[is.na(ax_srat$regions_all)]
+
+neg_srat = readRDS("data/expression/axolotl_reclust/divseq_1wpi_neg.RDS")
+reg_pred = read.csv("results/Div-seq/preds_lr_regions_neg_all.csv", header = T, row.names = 1)
+ct_pred = read.csv("results/Div-seq/preds_rfc_CT_neg_all.csv", header = T, row.names = 1)
+
+neg_srat$pred_regs = reg_pred[colnames(neg_srat),"pred_lr"]
+neg_srat$pred_ctall = ct_pred[colnames(neg_srat),"pred_rfc"]
+
+div_srat = readRDS("data/expression/axolotl_reclust/Edu_1_2_4_6_8_12_fil_highvarfeat.RDS")
+meta_div_pred = read.csv("results/Div-seq/divseq_predicted_metadata.csv", 
+                         header = T, row.names = 1)
+div_srat = AddMetaData(div_srat, metadata = meta_div_pred)
+div_srat = div_srat[,div_srat$sample=="1_wpi_pos"]
+```
+
+Merge datasets
+
+```{r}
+# filter metadata
+ax_srat@meta.data = ax_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "chem", "high_level_anno", "cellclusters", "regions_all")]
+colnames(ax_srat@meta.data)[4] = "sample"
+neg_srat@meta.data = neg_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "sample", "seurat_clusters", "pred_ctall", "pred_regs"), drop = F]
+div_srat@meta.data = div_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "sample", "seurat_clusters", "pred_ctall", "pred_regs"), drop = F]
+
+ax_1wpi_srat = merge(ax_srat, list(div_srat, neg_srat))
+```
+
+Joint processing
+
+```{r}
+ax_1wpi_srat$sample_dat = ax_1wpi_srat$sample
+ax_1wpi_srat$sample_dat[grepl("wpi", ax_1wpi_srat$sample_dat)] = "div"
+ax_1wpi_srat = NormalizeData(ax_1wpi_srat)
+ax_1wpi_srat = FindVariableFeatures(ax_1wpi_srat, nfeatures = 10000)
+ax_1wpi_srat = ScaleData(ax_1wpi_srat, vars.to.regress = c("nCount_RNA", "percent.mt", "sample_dat"))
+ax_1wpi_srat = RunPCA(ax_1wpi_srat, verbose = F)
+ElbowPlot(ax_1wpi_srat, ndims = 50)
+```
+
+Run UMAP
+
+```{r}
+ax_1wpi_srat = RunUMAP(ax_1wpi_srat, dims = 1:20, verbose = F)
+UMAPPlot(ax_1wpi_srat, group.by = "sample_dat")
+UMAPPlot(ax_1wpi_srat, group.by = "cellclusters")
+```
+
+Integrate with Harmony based on multiome/v3.1/div-seq
+
+```{r}
+ax_1wpi_srat@reductions$harmony = NULL
+ax_1wpi_srat@reductions$umap_harmony = NULL
+# Run Harmony
+ax_1wpi_srat = harmony::RunHarmony(ax_1wpi_srat, group.by.vars = "sample_dat", tau = 30, 
+                                  plot_convergence = F, assay.use = "RNA")
+
+# Run UMAP on Harmony dimentions
+ax_1wpi_srat = RunUMAP(ax_1wpi_srat, reduction = "harmony", 
+                      dims = 1:15, reduction.name = "umap_harmony")
+```
+
+Check integration
+
+```{r}
+ax_1wpi_srat$sample_simp = ax_1wpi_srat$sample
+ax_1wpi_srat$sample_simp[!grepl("wpi", ax_1wpi_srat$sample_simp)] = "SS"
+ax_1wpi_srat$ctlabels = ax_1wpi_srat$cellclusters
+ax_1wpi_srat$ctlabels[is.na(ax_1wpi_srat$ctlabels)] = ax_1wpi_srat$pred_ctall[is.na(ax_1wpi_srat$ctlabels)]
+ax_1wpi_srat$reglabels = ax_1wpi_srat$regions_all
+ax_1wpi_srat$reglabels[is.na(ax_1wpi_srat$reglabels)] = ax_1wpi_srat$pred_regs[is.na(ax_1wpi_srat$reglabels)]
+
+DimPlot(ax_1wpi_srat, group.by = "ctlabels", reduction = "umap_harmony", 
+        label = T, split.by = "sample_simp")+NoLegend()
+DimPlot(ax_1wpi_srat, group.by = "sample_simp", reduction = "umap_harmony")
+```
+
+Clustering
+
+```{r}
+ax_1wpi_srat = FindNeighbors(ax_1wpi_srat, reduction = "harmony", 
+                             dims = 1:15, graph.name = "integNeg")
+ax_1wpi_srat = FindClusters(ax_1wpi_srat, resolution = c(0.8, 1, 1.5, 2, 2.5, 3, 5, 7, 10), 
+                            graph.name = "integNeg", algorithm = 2, verbose = F)
+
+DimPlot(ax_1wpi_srat, group.by = "integNeg_res.7", 
+        reduction = "umap_harmony", label = T)+NoLegend()
+```
+
+Save data
+
+```{r}
+saveRDS(ax_1wpi_srat, file = "data/processed/SS_1wpi_srat.RDS")
+```
+
+DE between conditions
+
+```{r}
+ax_1wpi_srat$ss_div = ax_1wpi_srat$sample
+ax_1wpi_srat$ss_div[!grepl("wpi", ax_1wpi_srat$ss_div)] = "SS"
+ax_1wpi_srat$ss_div[grepl("wpi", ax_1wpi_srat$ss_div)] = "div"
+
+mk_cl = presto::wilcoxauc(ax_1wpi_srat, group_by = "integNeg_res.7", pseudocount.use = 0.1)
+saveRDS(mk_cl, file = "results/Div-seq/SS_1wpi_overall_DE.RDS")
+
+mk_overall = presto::wilcoxauc(ax_1wpi_srat, group_by = "ss_div", pseudocount.use = 0.1)
+saveRDS(mk_overall, file = "results/Div-seq/SS_1wpi_overall_DE.RDS")
+
+# DE per cell type
+ct_mk_l = list()
+for(ct in unique(ax_1wpi_srat$ctlabels)){
+  sub_dat = ax_1wpi_srat[,ax_1wpi_srat$ctlabels==ct]
+  if(length(unique(sub_dat$sample_simp))>1){
+    ct_mk_l[[ct]] = presto::wilcoxauc(sub_dat, 
+                                      group_by = "ss_div", pseudocount.use = 0.1)
+  }
+}
+saveRDS(ct_mk_l, file = "results/Div-seq/SS_1wpi_celltype_DE.RDS")
+
+# DE per cluster
+cl_mk_l = list()
+for(cl in unique(ax_1wpi_srat$integNeg_res.7)){
+    sub_dat = ax_1wpi_srat[,ax_1wpi_srat$integNeg_res.7==cl]
+  if(length(unique(sub_dat$sample_simp))>1){
+    cl_mk_l[[cl]] = presto::wilcoxauc(sub_dat, 
+                                      group_by = "ss_div", pseudocount.use = 0.1)
+  }
+}
+saveRDS(cl_mk_l, file = "results/Div-seq/SS_1wpi_cluster_DE.RDS")
+```
+
+Filter the DE genes to those significant and meaningful
+
+```{r}
+ct_mk_l_filt = list()
+for(n in names(ct_mk_l)){
+  ct_mk_l_filt[[n]] = ct_mk_l[[n]][ct_mk_l[[n]]$padj<=0.05 & ct_mk_l[[n]]$logFC>=0.2,]
+  ct_mk_l_filt[[n]] = ct_mk_l_filt[[n]][!startsWith(ct_mk_l_filt[[n]]$feature, "AMEX") &
+                                        !startsWith(ct_mk_l_filt[[n]]$feature, "LOC") &
+                                        !grepl("..", ct_mk_l_filt[[n]]$feature, fixed = T),]
+}
+```
+
+Count DE genes per cell type and condition
+
+```{r}
+n_de = matrix(0, ncol = 2, nrow = length(ct_mk_l_filt))
+colnames(n_de) = c("SS", "div")
+rownames(n_de) = names(ct_mk_l_filt)
+for(n in names(ct_mk_l_filt)){
+  tab = table(ct_mk_l_filt[[n]]$group)
+  n_de[n, "SS"] = tab["SS"]
+  n_de[n, "div"] = tab["div"]
+}
+n_de[is.na(n_de)] = 0
+```
+
+Get GO Terms, without repeated genes
+
+```{r}
+genes_comm = c()
+for(ct in names(ct_mk_l_filt)){
+  if(any(n_de[ct,]>=30)){
+    g = ct_mk_l_filt[[ct]]$feature
+    genes_comm = c(genes_comm, g)
+  }
+}
+common = names(table(genes_comm)[table(genes_comm)>5])
+
+bg = rownames(ax_1wpi_srat)[rowSums(ax_1wpi_srat@assays$RNA@data)>0]
+bg = bg[!startsWith(bg, "AMEX") & !startsWith(bg, "LOC") & !grepl("..", bg, fixed = T)]
+
+go_ct_l2 = list()
+for(ct in names(ct_mk_l_filt)){
+  for(g in colnames(n_de)){
+    if(n_de[ct,g]>=30){
+      id = paste0(ct, "..", g)
+      genes = ct_mk_l_filt[[ct]]$feature[ct_mk_l_filt[[ct]]$group==g]
+      #
+      genes = genes[!(genes %in% common)]
+      if(length(genes)>0){
+        go_ct_l2[[id]] = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP",
+                                          custom_bg = bg)$result
+      }
+    }
+  }
+}
+```
+
+Plotting
+
+```{r, fig.height=1.5, fig.width=3}
+for(n in names(go_ct_l2)){
+  plot_df = go_ct_l2[[n]]
+  plot_df$term_name = factor(plot_df$term_name, levels = rev(plot_df$term_name))
+  m = -log10(plot_df$p_value)+(-log10(plot_df$p_value)*0.05)
+  plt = ggplot(plot_df, aes(x = -log10(p_value), y = term_name))+
+    geom_col()+
+    ggtitle(n)+
+    scale_x_continuous(expand = c(0,0), limits = c(0, m))+
+    theme_bw()+
+    theme(axis.text = element_text(colour = "black", size = 7))
+  print(plt)
+}
+```
+
+DE by major cell type
+
+```{r}
+ax_1wpi_srat$majorct = sapply(strsplit(ax_1wpi_srat$ctlabels, "_"), function(x) x[1])
+ax_1wpi_srat$majorct[ax_1wpi_srat$ctlabels %in% c("epen_clus_3", "epen_clus_4")] = "epenAct"
+ax_1wpi_srat$majorct[ax_1wpi_srat$ctlabels %in% c("epen_clus_1", "epen_clus_14",
+                                                  "epen_clus_7", "epen_clus_13")] = "epenNeu"
+ax_1wpi_srat$majorct[ax_1wpi_srat$ctlabels %in% c("epen_clus_0", "epen_clus_2", "epen_clus_5",
+                                                  "epen_clus_6","epen_clus_8", "epen_clus_9",
+                                                  "epen_clus_10","epen_clus_11", 
+                                                  "epen_clus_12")] = "epenQui"
+
+# DE per cell type
+mct_mk_l = list()
+for(ct in unique(ax_1wpi_srat$majorct)){
+  sub_dat = ax_1wpi_srat[,ax_1wpi_srat$majorct==ct]
+  if(length(unique(sub_dat$sample_simp))>1){
+    mct_mk_l[[ct]] = presto::wilcoxauc(sub_dat, 
+                                      group_by = "ss_div", pseudocount.use = 0.1)
+  }
+}
+saveRDS(mct_mk_l, file = "results/Div-seq/SS_1wpi_majorct_DE.RDS")
+```
+
+Filter the DE genes to those significant and meaningful
+
+```{r}
+mct_mk_l_filt = list()
+for(n in names(mct_mk_l)){
+  mct_mk_l_filt[[n]] = mct_mk_l[[n]][mct_mk_l[[n]]$padj<=0.05 & mct_mk_l[[n]]$logFC>=0.2,]
+  mct_mk_l_filt[[n]] = mct_mk_l_filt[[n]][!startsWith(mct_mk_l_filt[[n]]$feature, "AMEX") &
+                                        !startsWith(mct_mk_l_filt[[n]]$feature, "LOC") &
+                                        !grepl("..", mct_mk_l_filt[[n]]$feature, fixed = T),]
+}
+```
+
+Count DE genes per cell type and condition
+
+```{r}
+n_de = matrix(0, ncol = 2, nrow = length(mct_mk_l_filt))
+colnames(n_de) = c("SS", "div")
+rownames(n_de) = names(mct_mk_l_filt)
+for(n in names(mct_mk_l_filt)){
+  tab = table(mct_mk_l_filt[[n]]$group)
+  n_de[n, "SS"] = tab["SS"]
+  n_de[n, "div"] = tab["div"]
+}
+n_de[is.na(n_de)] = 0
+```
+
+Get GO Terms, without repeated genes
+
+```{r}
+genes_comm = c()
+for(ct in names(mct_mk_l_filt)){
+  if(any(n_de[ct,]>=30)){
+    g = mct_mk_l_filt[[ct]]$feature
+    genes_comm = c(genes_comm, g)
+  }
+}
+common = names(table(genes_comm)[table(genes_comm)>30])
+
+bg = rownames(ax_1wpi_srat)[rowSums(ax_1wpi_srat@assays$RNA@data)>0]
+bg = bg[!startsWith(bg, "AMEX") & !startsWith(bg, "LOC") & !grepl("..", bg, fixed = T)]
+
+go_mct_l2 = list()
+for(ct in names(mct_mk_l_filt)){
+  for(g in colnames(n_de)){
+    if(n_de[ct,g]>=30){
+      id = paste0(ct, "..", g)
+      genes = mct_mk_l_filt[[ct]]$feature[mct_mk_l_filt[[ct]]$group==g]
+      #
+      genes = genes[!(genes %in% common)]
+      if(length(genes)>0){
+        go_mct_l2[[id]] = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP",
+                                           custom_bg = bg)$result
+      }
+    }
+  }
+}
+```
+
+Plotting
+
+```{r, fig.height=3, fig.width=3}
+for(n in names(go_mct_l2)){
+  plot_df = go_mct_l2[[n]]
+  plot_df$term_name = factor(plot_df$term_name, levels = rev(plot_df$term_name))
+  m = -log10(plot_df$p_value)+(-log10(plot_df$p_value)*0.05)
+  plt = ggplot(plot_df, aes(x = -log10(p_value), y = term_name))+
+    geom_col()+
+    ggtitle(n)+
+    scale_x_continuous(expand = c(0,0), limits = c(0, m))+
+    theme_bw()+
+    theme(axis.text = element_text(colour = "black", size = 7))
+  print(plt)
+}
+```
+
+
+
+```{r, fig.height=5, fig.width=9}
+sub_dat = ax_1wpi_srat[,ax_1wpi_srat$ss_div=="div" &
+                         (grepl("microg", ax_1wpi_srat$ctlabels) |
+                          grepl("olig", ax_1wpi_srat$ctlabels) |
+                          grepl("epen", ax_1wpi_srat$ctlabels) |
+                          grepl("endo", ax_1wpi_srat$ctlabels))]
+g = c("C1QB", "TGFBI", "KAZALD1", "Actg1", "Xbp1", "Sulf2", "Runx1", "Tnc", "Cxcr4", "Hbegf",
+      "Serpine1", "Tnfrsf21", "Tnfrsf12a", "Cdkn1b", "Hmox1")
+g = toupper(g)
+VlnPlot(sub_dat, features = g, group.by = "ctlabels")+NoLegend()
+```
 

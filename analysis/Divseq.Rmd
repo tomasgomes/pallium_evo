@@ -10,7 +10,8 @@ Setup chunk
 
 ```{r, setup, include=FALSE}
 knitr::opts_chunk$set(fig.width = 8)
-knitr::opts_knit$set(root.dir = normalizePath(".."))
+#knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$set(root.dir = "/links/groups/treutlein/USERS/tomasgomes/projects/pallium_evo")
 knitr::opts_knit$get("root.dir")
 ```
 
@@ -933,12 +934,11 @@ plt = ggplot(plot_df, aes(x = -log10(p_value), y = term_name))+
 
 
 
-
-
-# Integrating SS and 1 wpi neg
+# Integrating SS and all wpi (pos) - ependymal only
 Load data
 
 ```{r}
+#steady-state
 ax_srat = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
 meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
                 header = T, row.names = 1)
@@ -955,567 +955,946 @@ ax_srat = AddMetaData(ax_srat, metadata = meta_regs)
 ax_srat$regions_all = ax_srat$pred_regions_top
 ax_srat$regions_all[is.na(ax_srat$regions_all)] = ax_srat$regions[is.na(ax_srat$regions_all)]
 
-neg_srat = readRDS("data/expression/axolotl_reclust/divseq_1wpi_neg.RDS")
-reg_pred = read.csv("results/Div-seq/preds_lr_regions_neg_all.csv", header = T, row.names = 1)
-ct_pred = read.csv("results/Div-seq/preds_rfc_CT_neg_all.csv", header = T, row.names = 1)
-
-neg_srat$pred_regs = reg_pred[colnames(neg_srat),"pred_lr"]
-neg_srat$pred_ctall = ct_pred[colnames(neg_srat),"pred_rfc"]
-```
-
-Merge datasets
-
-```{r}
-# filter metadata
-ax_srat@meta.data = ax_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "chem", "high_level_anno", "cellclusters", "regions_all")]
-colnames(ax_srat@meta.data)[4] = "sample"
-neg_srat@meta.data = neg_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "sample", "seurat_clusters", "pred_ctall", "pred_regs"), drop = F]
-
-ax_neg_srat = merge(ax_srat, neg_srat)
-```
-
-Joint processing
-
-```{r}
-ax_neg_srat$sample_dat = ax_neg_srat$sample
-ax_neg_srat$sample_dat[grepl("wpi", ax_neg_srat$sample_dat)] = "div"
-ax_neg_srat = NormalizeData(ax_neg_srat)
-ax_neg_srat = FindVariableFeatures(ax_neg_srat, nfeatures = 10000)
-ax_neg_srat = ScaleData(ax_neg_srat, vars.to.regress = c("nCount_RNA", "percent.mt", "sample_dat"))
-ax_neg_srat = RunPCA(ax_neg_srat, verbose = F)
-ElbowPlot(ax_neg_srat, ndims = 50)
-```
-
-Run UMAP
-
-```{r}
-ax_neg_srat = RunUMAP(ax_neg_srat, dims = 1:20, verbose = F)
-UMAPPlot(ax_neg_srat, group.by = "sample_dat")
-UMAPPlot(ax_neg_srat, group.by = "cellclusters")
-```
-
-Integrate with Harmony based on multiome/v3.1/div-seq
-
-```{r}
-ax_neg_srat@reductions$harmony = NULL
-ax_neg_srat@reductions$umap_harmony = NULL
-# Run Harmony
-ax_neg_srat = harmony::RunHarmony(ax_neg_srat, group.by.vars = "sample_dat", tau = 30, 
-                                  plot_convergence = F, assay.use = "RNA")
-
-# Run UMAP on Harmony dimentions
-ax_neg_srat = RunUMAP(ax_neg_srat, reduction = "harmony", 
-                      dims = 1:15, reduction.name = "umap_harmony")
-```
-
-Check integration
-
-```{r}
-ax_neg_srat$sample_simp = ax_neg_srat$sample
-ax_neg_srat$sample_simp[ax_neg_srat$sample_simp!="1_wpi_neg"] = "SS"
-ax_neg_srat$ctlabels = ax_neg_srat$cellclusters
-ax_neg_srat$ctlabels[is.na(ax_neg_srat$ctlabels)] = ax_neg_srat$pred_ctall[is.na(ax_neg_srat$ctlabels)]
-ax_neg_srat$reglabels = ax_neg_srat$regions_all
-ax_neg_srat$reglabels[is.na(ax_neg_srat$reglabels)] = ax_neg_srat$pred_regs[is.na(ax_neg_srat$reglabels)]
-DimPlot(ax_neg_srat, group.by = "sample_dat", reduction = "umap_harmony")
-DimPlot(ax_neg_srat, group.by = "ctlabels", reduction = "umap_harmony")
-plt1 = DimPlot(ax_neg_srat, group.by = "ctlabels", reduction = "umap_harmony", 
-               label = T, split.by = "sample_dat")
-plt2 = DimPlot(ax_neg_srat, group.by = "ctlabels", reduction = "umap_harmony", 
-               label = T, split.by = "sample")
-plt3 = DimPlot(ax_neg_srat, group.by = "sample_dat", reduction = "umap_harmony", label = T)
-plt4 = DimPlot(ax_neg_srat, group.by = "reglabels", reduction = "umap_harmony", label = T)
-plt5 = DimPlot(ax_neg_srat, group.by = "ctlabels", reduction = "umap_harmony", 
-               label = T, split.by = "reglabels")
-
-DimPlot(ax_neg_srat, group.by = "ctlabels", reduction = "umap_harmony", 
-        label = T, split.by = "sample_simp")+NoLegend()
-DimPlot(ax_neg_srat, group.by = "sample_simp", reduction = "umap_harmony")
-```
-
-Clustering
-
-```{r}
-ax_neg_srat = FindNeighbors(ax_neg_srat, reduction = "harmony", 
-                            dims = 1:15, graph.name = "integNeg")
-ax_neg_srat = FindClusters(ax_neg_srat, resolution = c(0.8, 1, 1.5, 2, 2.5, 3, 5, 10), 
-                           graph.name = "integNeg", algorithm = 2, verbose = F)
-
-DimPlot(ax_neg_srat, group.by = "integNeg_res.10", 
-        reduction = "umap_harmony", label = T)+NoLegend()
-```
-
-DE between protocols
-
-```{r}
-mk_overall = presto::wilcoxauc(ax_neg_srat, group_by = "sample_simp", pseudocount.use = 0.1)
-saveRDS(mk_overall, file = "results/Div-seq/SS_1wpineg_overall_DE.RDS")
-
-# DE per cell type
-ct_mk_l = list()
-for(ct in unique(ax_neg_srat$ctlabels)){
-  sub_dat = ax_neg_srat[,ax_neg_srat$ctlabels==ct]
-  if(length(unique(sub_dat$sample_simp))>1){
-    ct_mk_l[[ct]] = presto::wilcoxauc(sub_dat, 
-                                      group_by = "sample_simp", pseudocount.use = 0.1)
-  }
-}
-saveRDS(ct_mk_l, file = "results/Div-seq/SS_1wpineg_celltype_DE.RDS")
-
-# DE per cluster
-cl_mk_l = list()
-for(cl in unique(ax_neg_srat$integNeg_res.10)){
-    sub_dat = ax_neg_srat[,ax_neg_srat$integNeg_res.10==cl]
-  if(length(unique(sub_dat$sample_simp))>1){
-    cl_mk_l[[cl]] = presto::wilcoxauc(sub_dat, 
-                                      group_by = "sample_simp", pseudocount.use = 0.1)
-  }
-}
-saveRDS(cl_mk_l, file = "results/Div-seq/SS_1wpineg_cluster_DE.RDS")
-```
-
-Filter the DE genes to those significant and meaningful
-
-```{r}
-ct_mk_l_filt = list()
-for(n in names(ct_mk_l)){
-  ct_mk_l_filt[[n]] = ct_mk_l[[n]][ct_mk_l[[n]]$padj<=0.05 & ct_mk_l[[n]]$logFC>=0.3,]
-  ct_mk_l_filt[[n]] = ct_mk_l_filt[[n]][!startsWith(ct_mk_l_filt[[n]]$feature, "AMEX") &
-                                        !startsWith(ct_mk_l_filt[[n]]$feature, "LOC") &
-                                        !grepl("..", ct_mk_l_filt[[n]]$feature, fixed = T),]
-}
-
-cl_mk_l_filt = list()
-for(n in names(cl_mk_l)){
-  cl_mk_l_filt[[n]] = cl_mk_l[[n]][cl_mk_l[[n]]$padj<=0.05 & cl_mk_l[[n]]$logFC>=0.3,]
-  cl_mk_l_filt[[n]] = cl_mk_l_filt[[n]][!startsWith(cl_mk_l_filt[[n]]$feature, "AMEX") &
-                                      !startsWith(cl_mk_l_filt[[n]]$feature, "LOC") &
-                                      !grepl("..", cl_mk_l_filt[[n]]$feature, fixed = T),]
-}
-```
-
-Count DE genes per cell type and condition
-
-```{r}
-n_de = matrix(0, ncol = 2, nrow = length(ct_mk_l_filt))
-colnames(n_de) = c("SS", "1_wpi_neg")
-rownames(n_de) = names(ct_mk_l_filt)
-for(n in names(ct_mk_l_filt)){
-  tab = table(ct_mk_l_filt[[n]]$group)
-  n_de[n, "SS"] = tab["SS"]
-  n_de[n, "1_wpi_neg"] = tab["1_wpi_neg"]
-}
-n_de[is.na(n_de)] = 0
-
-n_de_cl = matrix(0, ncol = 2, nrow = length(cl_mk_l_filt))
-colnames(n_de_cl) = c("SS", "1_wpi_neg")
-rownames(n_de_cl) = names(cl_mk_l_filt)
-for(n in names(cl_mk_l_filt)){
-  tab = table(cl_mk_l_filt[[n]]$group)
-  n_de_cl[n, "SS"] = tab["SS"]
-  n_de_cl[n, "1_wpi_neg"] = tab["1_wpi_neg"]
-}
-n_de_cl[is.na(n_de_cl)] = 0
-```
-
-Get GO Terms, without repeated genes
-
-```{r}
-genes_comm = c()
-for(ct in names(ct_mk_l_filt)){
-  if(any(n_de[ct,]>=30)){
-    g = ct_mk_l_filt[[ct]]$feature
-    genes_comm = c(genes_comm, g)
-  }
-}
-common = names(table(genes_comm)[table(genes_comm)>=4])
-
-go_ct_l2 = list()
-for(ct in names(ct_mk_l_filt)){
-  bg = rownames(ax_neg_srat)[rowSums(ax_neg_srat[,ax_neg_srat$ctlabels==ct]@assays$RNA@data)>0]
-  bg = bg[!startsWith(bg, "AMEX") & !startsWith(bg, "LOC") & !grepl("..", bg, fixed = T)]
-  for(g in colnames(n_de)){
-    if(n_de[ct,g]>=30){
-      id = paste0(ct, "..", g)
-      genes = ct_mk_l_filt[[ct]]$feature[ct_mk_l_filt[[ct]]$group==g]
-      #
-      genes = genes[!(genes %in% common)]
-      go_ct_l2[[id]] = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP",
-                                        custom_bg = bg)$result
-    }
-  }
-}
-```
-
-Compare clusters and conditions and cell types
-
-```{r}
-df_ctcl = data.frame(table(ax_neg_srat$ctlabels, ax_neg_srat$integNeg_res.10))
-pheatmap::pheatmap(table(ax_neg_srat$ctlabels, ax_neg_srat$integNeg_res.10), 
-                   fontsize = 6.5, clustering_method = "ward.D", scale = "row")
-
-df_clct = data.frame(table(ax_neg_srat$integNeg_res.10, ax_neg_srat$sample_simp))
-tab_s = prop.table(table(ax_neg_srat$integNeg_res.10, ax_neg_srat$sample_simp), margin = 2)
-pheatmap::pheatmap(tab_s, fontsize = 6.5, clustering_method = "ward.D")
-pheatmap::pheatmap(tab_s[tab_s[,1]>tab_s[,2]*1.1,], fontsize = 6.5, clustering_method = "ward.D")
-```
-Count number of DE genes - plot
-
-```{r}
-plot_df = reshape2::melt(n_de)
-ord = rowSums(n_de)
-plot_df$Var1 = factor(plot_df$Var1, levels = rownames(n_de)[order(ord, decreasing = T)])
-
-ggplot(plot_df, aes(x = Var1, y = value, fill = Var2))+
-  geom_col()+
-  scale_y_continuous(expand = c(0,0), limits = c(0, max(ord)+max(ord)*0.05))+
-  labs(x = "Cell Types", y = "# DE genes")+
-  theme_bw()+
-  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
-```
-
-Save data
-
-```{r}
-saveRDS(ax_neg_srat, file = "data/processed/SS_1wpiNeg_srat.RDS")
-```
-
-
-
-# Integrating SS and 1 wpi (pos and neg)
-Load data
-
-```{r}
-ax_srat = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
-meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
-                header = T, row.names = 1)
-ax_srat = AddMetaData(ax_srat, metadata = meta)
-meta_regs = read.csv("data/processed/multiome/WP_region_predictions.csv", 
-                    header = T, row.names = 1)
-newcellnames = rownames(meta_regs)
-newcellnames = gsub("-a1-1", "-1_1", newcellnames)
-newcellnames = gsub("-a1-2", "-1_2", newcellnames)
-newcellnames = gsub("-a3-1", "-1_3", newcellnames)
-newcellnames = gsub("-a3-2", "-1_4", newcellnames)
-rownames(meta_regs) = newcellnames
-ax_srat = AddMetaData(ax_srat, metadata = meta_regs)
-ax_srat$regions_all = ax_srat$pred_regions_top
-ax_srat$regions_all[is.na(ax_srat$regions_all)] = ax_srat$regions[is.na(ax_srat$regions_all)]
-
-neg_srat = readRDS("data/expression/axolotl_reclust/divseq_1wpi_neg.RDS")
-reg_pred = read.csv("results/Div-seq/preds_lr_regions_neg_all.csv", header = T, row.names = 1)
-ct_pred = read.csv("results/Div-seq/preds_rfc_CT_neg_all.csv", header = T, row.names = 1)
-
-neg_srat$pred_regs = reg_pred[colnames(neg_srat),"pred_lr"]
-neg_srat$pred_ctall = ct_pred[colnames(neg_srat),"pred_rfc"]
-
+# div-seq
 div_srat = readRDS("data/expression/axolotl_reclust/Edu_1_2_4_6_8_12_fil_highvarfeat.RDS")
 meta_div_pred = read.csv("results/Div-seq/divseq_predicted_metadata.csv", 
                          header = T, row.names = 1)
 div_srat = AddMetaData(div_srat, metadata = meta_div_pred)
-div_srat = div_srat[,div_srat$sample=="1_wpi_pos"]
 ```
 
 Merge datasets
 
 ```{r}
 # filter metadata
-ax_srat@meta.data = ax_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "chem", "high_level_anno", "cellclusters", "regions_all")]
+ax_srat@meta.data = ax_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "chem", "high_level_anno", "cellclusters", "regions_all", "chem")]
 colnames(ax_srat@meta.data)[4] = "sample"
-neg_srat@meta.data = neg_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "sample", "seurat_clusters", "pred_ctall", "pred_regs"), drop = F]
-div_srat@meta.data = div_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "sample", "seurat_clusters", "pred_ctall", "pred_regs"), drop = F]
+colnames(ax_srat@meta.data)[8] = "batch"
+div_srat@meta.data = div_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "sample", "seurat_clusters", "pred_ctall", "pred_regs", "batch"), drop = F]
 
-ax_1wpi_srat = merge(ax_srat, list(div_srat, neg_srat))
+ax_1wpi_srat = merge(ax_srat, div_srat)
+ep_wpi_srat = ax_1wpi_srat[,grepl("epen_", ax_1wpi_srat$pred_ctall) |
+                             grepl("epen_", ax_1wpi_srat$cellclusters)]
 ```
 
 Joint processing
 
 ```{r}
-ax_1wpi_srat$sample_dat = ax_1wpi_srat$sample
-ax_1wpi_srat$sample_dat[grepl("wpi", ax_1wpi_srat$sample_dat)] = "div"
-ax_1wpi_srat = NormalizeData(ax_1wpi_srat)
-ax_1wpi_srat = FindVariableFeatures(ax_1wpi_srat, nfeatures = 10000)
-ax_1wpi_srat = ScaleData(ax_1wpi_srat, vars.to.regress = c("nCount_RNA", "percent.mt", "sample_dat"))
-ax_1wpi_srat = RunPCA(ax_1wpi_srat, verbose = F)
-ElbowPlot(ax_1wpi_srat, ndims = 50)
+ep_wpi_srat$sample_dat = ep_wpi_srat$sample
+ep_wpi_srat$sample_dat[grepl("wpi", ep_wpi_srat$sample_dat)] = "div"
+ep_wpi_srat = NormalizeData(ep_wpi_srat)
+ep_wpi_srat = FindVariableFeatures(ep_wpi_srat, nfeatures = 10000)
+ep_wpi_srat = ScaleData(ep_wpi_srat, 
+                         vars.to.regress = c("nCount_RNA", "percent.mt", "batch"))
+ep_wpi_srat = RunPCA(ep_wpi_srat, verbose = F)
+ElbowPlot(ep_wpi_srat, ndims = 50)
 ```
 
 Run UMAP
 
 ```{r}
-ax_1wpi_srat = RunUMAP(ax_1wpi_srat, dims = 1:20, verbose = F)
-UMAPPlot(ax_1wpi_srat, group.by = "sample_dat")
-UMAPPlot(ax_1wpi_srat, group.by = "cellclusters")
+ep_wpi_srat = RunUMAP(ep_wpi_srat, dims = 1:15, verbose = F)
+UMAPPlot(ep_wpi_srat, group.by = "sample_dat")
+UMAPPlot(ep_wpi_srat, group.by = "cellclusters")
 ```
 
 Integrate with Harmony based on multiome/v3.1/div-seq
 
 ```{r}
-ax_1wpi_srat@reductions$harmony = NULL
-ax_1wpi_srat@reductions$umap_harmony = NULL
+ep_wpi_srat@reductions$harmony = NULL
+ep_wpi_srat@reductions$umap_harmony = NULL
 # Run Harmony
-ax_1wpi_srat = harmony::RunHarmony(ax_1wpi_srat, group.by.vars = "sample_dat", tau = 30, 
-                                  plot_convergence = F, assay.use = "RNA")
+ep_wpi_srat = harmony::RunHarmony(ep_wpi_srat, group.by.vars = "batch", 
+                                   tau = 30, sigma = 0.1,
+                                   plot_convergence = F, assay.use = "RNA", verbose = F)
 
 # Run UMAP on Harmony dimentions
-ax_1wpi_srat = RunUMAP(ax_1wpi_srat, reduction = "harmony", 
-                      dims = 1:15, reduction.name = "umap_harmony")
+ep_wpi_srat = RunUMAP(ep_wpi_srat, reduction = "harmony", 
+                      dims = 1:30, reduction.name = "umap_harmony", verbose = F)
 ```
 
 Check integration
 
 ```{r}
-ax_1wpi_srat$sample_simp = ax_1wpi_srat$sample
-ax_1wpi_srat$sample_simp[!grepl("wpi", ax_1wpi_srat$sample_simp)] = "SS"
-ax_1wpi_srat$ctlabels = ax_1wpi_srat$cellclusters
-ax_1wpi_srat$ctlabels[is.na(ax_1wpi_srat$ctlabels)] = ax_1wpi_srat$pred_ctall[is.na(ax_1wpi_srat$ctlabels)]
-ax_1wpi_srat$reglabels = ax_1wpi_srat$regions_all
-ax_1wpi_srat$reglabels[is.na(ax_1wpi_srat$reglabels)] = ax_1wpi_srat$pred_regs[is.na(ax_1wpi_srat$reglabels)]
+ep_wpi_srat$sample_simp = ep_wpi_srat$sample
+ep_wpi_srat$sample_simp[!grepl("wpi", ep_wpi_srat$sample_simp)] = "SS"
+ep_wpi_srat$sample_simp[ep_wpi_srat$sample_simp=="1_wpi_pos"] = "1_wpi"
+ep_wpi_srat$sample_simp[ep_wpi_srat$sample_simp=="1_wpi_neg"] = "1_wpi"
+xxx = factor(ep_wpi_srat$sample_simp, levels = c("SS", paste0(c(1,2,4,6,8,12), "_wpi")))
+ep_wpi_srat$sample_simp = xxx
 
-DimPlot(ax_1wpi_srat, group.by = "ctlabels", reduction = "umap_harmony", 
+ep_wpi_srat$ctlabels = ep_wpi_srat$cellclusters
+ep_wpi_srat$ctlabels[is.na(ep_wpi_srat$ctlabels)] = ep_wpi_srat$pred_ctall[is.na(ep_wpi_srat$ctlabels)]
+ep_wpi_srat$reglabels = ep_wpi_srat$regions_all
+ep_wpi_srat$reglabels[is.na(ep_wpi_srat$reglabels)] = ep_wpi_srat$pred_regs[is.na(ep_wpi_srat$reglabels)]
+
+DimPlot(ep_wpi_srat, group.by = "ctlabels", reduction = "umap_harmony", 
         label = T, split.by = "sample_simp")+NoLegend()
-DimPlot(ax_1wpi_srat, group.by = "sample_simp", reduction = "umap_harmony")
+DimPlot(ep_wpi_srat, group.by = "sample_simp", reduction = "umap_harmony", label=T)
 ```
 
 Clustering
 
 ```{r}
-ax_1wpi_srat = FindNeighbors(ax_1wpi_srat, reduction = "harmony", 
-                             dims = 1:15, graph.name = "integNeg")
-ax_1wpi_srat = FindClusters(ax_1wpi_srat, resolution = c(0.8, 1, 1.5, 2, 2.5, 3, 5, 7, 10), 
-                            graph.name = "integNeg", algorithm = 2, verbose = F)
+ep_wpi_srat = FindNeighbors(ep_wpi_srat, reduction = "harmony", 
+                            dims = 1:30, graph.name = "integEp")
+ep_wpi_srat = FindClusters(ep_wpi_srat, resolution = c(0.8, 1, 1.2, 1.5, 2, 2.5, 3, 5), 
+                           graph.name = "integEp", algorithm = 2, verbose = F)
 
-DimPlot(ax_1wpi_srat, group.by = "integNeg_res.7", 
+DimPlot(ep_wpi_srat, group.by = "integEp_res.1.5", 
+        reduction = "umap_harmony", label = T)+NoLegend()
+DimPlot(ep_wpi_srat, group.by = "ctlabels", 
+        reduction = "umap_harmony", label = T)+NoLegend()
+
+ep_wpi_srat = CellCycleScoring(ep_wpi_srat, 
+                               g2m.features = cc.genes$g2m.genes, s.features = cc.genes$s.genes)
+
+DimPlot(ep_wpi_srat, group.by = "Phase", 
         reduction = "umap_harmony", label = T)+NoLegend()
 ```
 
-Save data
+Plot UMAPs
 
-```{r}
-saveRDS(ax_1wpi_srat, file = "data/processed/SS_1wpi_srat.RDS")
+```{r, fig.height=2.5, fig.width=2.5}
+ep_wpi_srat$ep_type = ep_wpi_srat$ctlabels
+ep_wpi_srat$ep_type[ep_wpi_srat$ep_type %in% c("epen_clus_4", "epen_clus_3")] = "active ependymal"
+ep_wpi_srat$ep_type[ep_wpi_srat$ep_type %in% c("epen_clus_1", "epen_clus_7",
+                                               "epen_clus_14", "epen_clus_13")] = "pro-neuronal ependymal"
+ep_wpi_srat$ep_type[ep_wpi_srat$ep_type %in% c("epen_clus_0", "epen_clus_2", "epen_clus_12",
+                                                 "epen_clus_8", "epen_clus_6", "epen_clus_5",
+                                                 "epen_clus_9", "epen_clus_10", "epen_clus_11")] = "quiescent ependymal"
+
+col_list = list(ctlabels = cols_cc, 
+                ep_type = unname(cols_cc[grepl("epen", names(cols_cc))][c(1,15,8)]),
+                Phase = MetBrewer::met.brewer(name="Egypt", n=3, type = "discrete"),
+                integEp_res.1.5 = MetBrewer::met.brewer(name="Klimt",
+                                                      n=length(unique(ep_wpi_srat@meta.data$integEp_res.1.5)),
+                                                      type = "continuous"),
+                reglabels = reg_cols)
+csfunc = colorRampPalette(c("#df16df", "#ffd9f9"))
+col_list$sample_simp = c("gray80", csfunc(6))
+names(col_list$sample_simp) = c("SS", paste0(c(1,2,4,6,8,12), "_wpi"))
+
+plt_umap_l = list()
+for(v in c("integEp_res.1.5", "ctlabels", "ep_type", "Phase", "sample_simp", "reglabels")){
+  pal_plt = col_list[[v]]
+  
+  plot_df = Embeddings(ep_wpi_srat, reduction = "umap_harmony")
+  plot_df = merge(plot_df, ep_wpi_srat@meta.data, by = 0)
+  plot_df = plot_df[order(plot_df$sample_simp, decreasing = F),]
+  
+  lab_df = plot_df[,c("umap_harmony_1","umap_harmony_2",v)]
+  c1 = tapply(lab_df$umap_harmony_1, lab_df[,v], median)
+  c2 = tapply(lab_df$umap_harmony_2, lab_df[,v], median)
+  lab_df = data.frame(c1, c2, names(c1))
+  colnames(lab_df) = c("umap_harmony_1","umap_harmony_2",v)
+  
+  plt_umap_l[[v]] = ggplot() + 
+    geom_point(data = plot_df, 
+               mapping = aes_string(x = "umap_harmony_1", y = "umap_harmony_2", colour = v),
+               size = 0.7)+
+    geom_label(data = lab_df, 
+               mapping = aes_string(x = "umap_harmony_1", y = "umap_harmony_2", label = v),
+               size = 2.7, label.padding = unit(0.1, "lines"))+
+    scale_colour_manual(values = pal_plt)+
+    theme_void()+
+    theme(plot.title = element_blank(),
+          legend.position = "none",
+          aspect.ratio = 1, 
+          axis.title = element_blank(), 
+          axis.ticks = element_blank(), 
+          axis.text = element_blank(), 
+          axis.line = element_blank())
+}
+
+for(n in names(plt_umap_l)){
+  pdf(paste0("results/Div-seq/ep_wpi_srat_", n, ".pdf"), height = 4, width = 4)
+  print(plt_umap_l[[n]])
+  dev.off()
+}
+
+pdf(paste0("results/Div-seq/ep_wpi_srat_", v, "_legend.pdf"), height = 1, width = 0.7)
+cowplot::plot_grid(cowplot::get_legend(plt))
+dev.off()
 ```
 
-DE between conditions
+Check differences in proportions
 
 ```{r}
-ax_1wpi_srat$ss_div = ax_1wpi_srat$sample
-ax_1wpi_srat$ss_div[!grepl("wpi", ax_1wpi_srat$ss_div)] = "SS"
-ax_1wpi_srat$ss_div[grepl("wpi", ax_1wpi_srat$ss_div)] = "div"
+cl = "integEp_res.1.5"
+dat = prop.table(table(ep_wpi_srat@meta.data[,cl], ep_wpi_srat$ep_type), margin = 1)
+dat2 = prop.table(table(ep_wpi_srat@meta.data[,cl], ep_wpi_srat$reglabels), margin = 1)
 
-mk_cl = presto::wilcoxauc(ax_1wpi_srat, group_by = "integNeg_res.7", pseudocount.use = 0.1)
-saveRDS(mk_cl, file = "results/Div-seq/SS_1wpi_overall_DE.RDS")
+annot = data.frame("top_cl" = apply(dat, 1, function(x) colnames(dat)[which.max(x)]),
+                   "top_reg" = apply(dat2, 1, function(x) colnames(dat2)[which.max(x)]))
 
-mk_overall = presto::wilcoxauc(ax_1wpi_srat, group_by = "ss_div", pseudocount.use = 0.1)
-saveRDS(mk_overall, file = "results/Div-seq/SS_1wpi_overall_DE.RDS")
+cols = unname(cols_cc[grepl("epen", names(cols_cc))][c(1,15,8)])
+names(cols) = c("active ependymal", "quiescent ependymal", "pro-neuronal ependymal")
+cols = list("top_cl" =  cols,
+            "top_reg" = reg_cols_simp)
+xxx = as.character(ep_wpi_srat$sample_simp)
+xxx[ep_wpi_srat$sample=="1_wpi_neg"] = "1_wpi_neg"
+dat = prop.table(table(xxx, ep_wpi_srat@meta.data[,cl]), margin = 2)
+colpal = viridis::magma(100)
+dat[dat<=0.03] = 0
 
-# DE per cell type
-ct_mk_l = list()
-for(ct in unique(ax_1wpi_srat$ctlabels)){
-  sub_dat = ax_1wpi_srat[,ax_1wpi_srat$ctlabels==ct]
-  if(length(unique(sub_dat$sample_simp))>1){
-    ct_mk_l[[ct]] = presto::wilcoxauc(sub_dat, 
-                                      group_by = "ss_div", pseudocount.use = 0.1)
+plt_dat = dat[c(1,3:6,2,7),]
+plt_dat = apply(plt_dat, 2, function(x) x/table(ep_wpi_srat$sample_simp)[rownames(plt_dat)])
+
+pdf(paste0("results/Div-seq/ep_wpi_srat_clusterProport.pdf"), height = 2.25, width = 5.25)
+pheatmap::pheatmap(plt_dat, clustering_method = "ward.D", annotation_col = annot, 
+                   color = colpal, fontsize = 7, 
+                   annotation_colors = cols, cluster_rows = F, treeheight_col = 0)
+dev.off()
+```
+
+Get markers
+
+```{r}
+# all clusters
+mk_cl = presto::wilcoxauc(ep_wpi_srat, group_by = "integEp_res.1.5")
+saveRDS(mk_cl, file = "results/Div-seq/ep_wpi_srat_res1_DE.RDS")
+
+mk_cl = mk_cl[!startsWith(mk_cl$feature, "AMEX") &
+                !startsWith(mk_cl$feature, "LOC") &
+                !grepl("..", mk_cl$feature, fixed = T),]
+mk_cl$group = factor(mk_cl$group)
+bg_g = unique(mk_cl$feature)
+mk_cl = mk_cl[mk_cl$padj<=0.05 & mk_cl$logFC>=0.3,]
+
+write.csv(mk_cl, file = "results/Div-seq/ep_wpi_srat_res1_DE.csv", quote = F, row.names = T)
+
+# pro-neuronal ependymal only
+mk_proneu = presto::wilcoxauc(ep_wpi_srat[,ep_wpi_srat$integEp_res.1 %in% c(5,6,12,15)],
+                              group_by = "integEp_res.1")
+mk_proneu = mk_proneu[!startsWith(mk_proneu$feature, "AMEX") &
+                !startsWith(mk_proneu$feature, "LOC") &
+                !grepl("..", mk_proneu$feature, fixed = T),]
+mk_proneu$group = factor(mk_proneu$group)
+mk_proneu = mk_proneu[mk_proneu$padj<=0.05,]
+mk_proneu = mk_proneu[mk_proneu$pct_in-mk_proneu$pct_out>=20 & mk_proneu$logFC>=0.3,]
+saveRDS(mk_proneu, file = "results/Div-seq/ep_wpi_srat_proneuro_DE.RDS")
+
+# timepoint
+ep_wpi_srat$sample_coarse = as.character(ep_wpi_srat$sample_simp)
+ep_wpi_srat$sample_coarse[ep_wpi_srat$sample_coarse %in% c("4_wpi", "6_wpi")] = "mid_wpi"
+ep_wpi_srat$sample_coarse[ep_wpi_srat$sample_coarse %in% c("8_wpi", "12_wpi")] = "late_wpi"
+mk_wpi = presto::wilcoxauc(ep_wpi_srat, group_by = "sample_coarse")
+mk_wpi = mk_wpi[!startsWith(mk_wpi$feature, "AMEX") &
+                !startsWith(mk_wpi$feature, "LOC") &
+                !grepl("..", mk_wpi$feature, fixed = T),]
+mk_wpi$group = factor(mk_wpi$group)
+mk_wpi = mk_wpi[mk_wpi$padj<=0.05 & mk_wpi$logFC>=0.3,]
+saveRDS(mk_wpi, file = "results/Div-seq/ep_wpi_srat_time_DE.RDS")
+
+# SS vs 1wpi per cluster
+ss1wpi_de = list()
+for(cl in unique(ep_wpi_srat$integEp_res.1.5)){
+  sub_dat = ep_wpi_srat[,ep_wpi_srat$sample_simp %in% c("SS", "1_wpi")]
+  sub_dat = sub_dat[,sub_dat$integEp_res.1.5==cl]
+  if(sum(table(sub_dat$sample_simp)>0)==2){
+    mk_sub = presto::wilcoxauc(sub_dat, group_by = "sample_simp")
+    mk_sub = mk_sub[!startsWith(mk_sub$feature, "AMEX") &
+                    !startsWith(mk_sub$feature, "LOC") &
+                    !grepl("..", mk_sub$feature, fixed = T),]
+    mk_sub$group = factor(mk_sub$group)
+    ss1wpi_de[[cl]] = mk_sub[mk_sub$padj<=0.05,]
   }
 }
-saveRDS(ct_mk_l, file = "results/Div-seq/SS_1wpi_celltype_DE.RDS")
-
-# DE per cluster
-cl_mk_l = list()
-for(cl in unique(ax_1wpi_srat$integNeg_res.7)){
-    sub_dat = ax_1wpi_srat[,ax_1wpi_srat$integNeg_res.7==cl]
-  if(length(unique(sub_dat$sample_simp))>1){
-    cl_mk_l[[cl]] = presto::wilcoxauc(sub_dat, 
-                                      group_by = "ss_div", pseudocount.use = 0.1)
-  }
-}
-saveRDS(cl_mk_l, file = "results/Div-seq/SS_1wpi_cluster_DE.RDS")
+saveRDS(ss1wpi_de, file = "results/Div-seq/ep_wpi_srat_ss1wpicl_DE.RDS")
 ```
 
-Filter the DE genes to those significant and meaningful
+Dotplots and heatmaps
 
 ```{r}
-ct_mk_l_filt = list()
-for(n in names(ct_mk_l)){
-  ct_mk_l_filt[[n]] = ct_mk_l[[n]][ct_mk_l[[n]]$padj<=0.05 & ct_mk_l[[n]]$logFC>=0.2,]
-  ct_mk_l_filt[[n]] = ct_mk_l_filt[[n]][!startsWith(ct_mk_l_filt[[n]]$feature, "AMEX") &
-                                        !startsWith(ct_mk_l_filt[[n]]$feature, "LOC") &
-                                        !grepl("..", ct_mk_l_filt[[n]]$feature, fixed = T),]
-}
+df = mk_cl %>% 
+  group_by(group) %>% 
+  top_n(5, wt = logFC)
+
+g = unique(df$feature)
+
+avg = AverageExpression(ep_wpi_srat, features = g, group.by = "integEp_res.1.5")$RNA
+hc = hclust(dist(t(avg)), method = "ward.D")
+hc = hc$labels[hc$order]
+
+ep_wpi_srat$integEp_res.1.5 = factor(ep_wpi_srat$integEp_res.1.5, levels = hc)
+mk_cl$group = factor(mk_cl$group, levels = hc)
+
+df = mk_cl %>% 
+  group_by(group) %>% 
+  top_n(5, wt = logFC)
+
+g = unique(df$feature[order(df$group)])
+
+DotPlot(ep_wpi_srat, features = rev(g), group.by = "integEp_res.1.5", 
+        dot.scale = 3,dot.min = 0.1)+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7),
+        axis.text.y = element_text(size = 7))
+
+mks = c("RUNX1", "KAZALD1", "COL7A1", "ANXA2", "PLAT", "ERBB3", "DNAH1", "TUBB4B", "WNT8B")
+avg = AverageExpression(ep_wpi_srat, features = mks, group.by = "integEp_res.1.5")$RNA
+
+colpal = viridis::magma(100)
+plot_dat = scale(t(avg))
+
+pdf(paste0("results/Div-seq/ep_wpi_srat_mkheat.pdf"), height = 2.25, width = 5.25)
+pheatmap::pheatmap(plot_dat, clustering_method = "ward.D", 
+                   color = colpal, fontsize = 7, treeheight_row = F, treeheight_col = F)
+dev.off()
+
+
+FeaturePlot(ep_wpi_srat, reduction = "umap_harmony", features = mks, order = F)
+
+
+avg = AverageExpression(ep_wpi_srat, features = mks, group.by = "integEp_res.1.5")$RNA
+hc_cl = hclust(dist(scale(t(avg))), method = "ward.D")
+hc_cl = hc_cl$labels[hc_cl$order]
+hc_g = hclust(dist(avg), method = "ward.D")
+hc_g = hc_g$labels[hc_g$order]
+
+ep_wpi_srat$integEp_res.1.5 = factor(ep_wpi_srat$integEp_res.1.5, 
+                                     levels = c(1,17,22,13,4,14,6,15,9,12,11,
+                                                0,2,8,20,21,18,7,19,5,10,16,3))
+dotplt = DotPlot(ep_wpi_srat, features = hc_g, group.by = "integEp_res.1.5", 
+        dot.scale = 3, dot.min = 0.05)+
+  scale_colour_viridis_c(option = 1, end = 0.9)+
+  coord_flip()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7),
+        axis.text.y = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 6))
+
+pdf(paste0("results/Div-seq/ep_wpi_srat_mkdot.pdf"), height = 1.6, width = 4.4)
+print(dotplt)
+dev.off()
+pdf(paste0("results/Div-seq/ep_wpi_srat_mkdot_legend.pdf"), height = 2.7, width = 0.9)
+print(cowplot::plot_grid(cowplot::get_legend(dotplt)))
+dev.off()
+ep_wpi_srat$integEp_res.1.5 = factor(ep_wpi_srat$integEp_res.1.5, levels = rev(hc_cl))
+dotplt = DotPlot(ep_wpi_srat, features = hc_g, group.by = "integEp_res.1.5", 
+        dot.scale = 3, dot.min = 0.05)+
+  scale_colour_viridis_c(option = 1, end = 0.9)+
+  coord_flip()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7),
+        axis.text.y = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 6))
+pdf(paste0("results/Div-seq/ep_wpi_srat_mkdot_clust.pdf"), height = 1.6, width = 4.4)
+print(dotplt)
+dev.off()
 ```
 
-Count DE genes per cell type and condition
+GO Terms
 
 ```{r}
-n_de = matrix(0, ncol = 2, nrow = length(ct_mk_l_filt))
-colnames(n_de) = c("SS", "div")
-rownames(n_de) = names(ct_mk_l_filt)
-for(n in names(ct_mk_l_filt)){
-  tab = table(ct_mk_l_filt[[n]]$group)
-  n_de[n, "SS"] = tab["SS"]
-  n_de[n, "div"] = tab["div"]
+go_l = list()
+for(cl in unique(mk_cl$group)){
+  g = mk_cl$feature[mk_cl$logFC>0.3 & mk_cl$group==cl]
+  go_l[[paste0("cl", cl)]] = gprofiler2::gost(g, custom_bg = bg_g, sources = "GO",
+                                              correction_method = "fdr")
 }
-n_de[is.na(n_de)] = 0
+saveRDS(go_l, file = "results/Div-seq/ep_wpi_srat_goDE.RDS")
 ```
 
-Get GO Terms, without repeated genes
+Plot top 10 GO Terms (clustered by similarity)
 
 ```{r}
-genes_comm = c()
-for(ct in names(ct_mk_l_filt)){
-  if(any(n_de[ct,]>=30)){
-    g = ct_mk_l_filt[[ct]]$feature
-    genes_comm = c(genes_comm, g)
-  }
-}
-common = names(table(genes_comm)[table(genes_comm)>5])
+library(GOSemSim)
+hsGO <- godata('org.Hs.eg.db', ont="BP")
 
-bg = rownames(ax_1wpi_srat)[rowSums(ax_1wpi_srat@assays$RNA@data)>0]
-bg = bg[!startsWith(bg, "AMEX") & !startsWith(bg, "LOC") & !grepl("..", bg, fixed = T)]
-
-go_ct_l2 = list()
-for(ct in names(ct_mk_l_filt)){
-  for(g in colnames(n_de)){
-    if(n_de[ct,g]>=30){
-      id = paste0(ct, "..", g)
-      genes = ct_mk_l_filt[[ct]]$feature[ct_mk_l_filt[[ct]]$group==g]
-      #
-      genes = genes[!(genes %in% common)]
-      if(length(genes)>0){
-        go_ct_l2[[id]] = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP",
-                                          custom_bg = bg)$result
+top_go_l = list()
+for(n in names(go_l)){
+  cond = grepl("BP", go_l[[n]]$result$source) & go_l[[n]]$result$p_value<=0.01
+  match = mgoSim(go_l[[n]]$result$term_id[cond], go_l[[n]]$result$term_id[cond], 
+                 semData=hsGO, measure="Wang", combine=NULL)
+  #pheatmap::pheatmap(match, clustering_method = "ward.D")
+  if(!is.na(match)){
+    if(dim(match)[1]>1){
+      hc = hclust(dist(match), method = "ward.D")
+      cut_18 = cutree(hc, ifelse(ncol(match)>10, 10, ncol(match)))
+      t_l = c()
+      for(i in unique(cut_18)){
+        tt = names(cut_18)[cut_18==i]
+        sub_res = go_l[[n]]$result[go_l[[n]]$result$term_id %in% tt & 
+                                     go_l[[n]]$result$intersection_size>10,]
+        sub_res = sub_res[order(sub_res$recall, decreasing = T),]
+        t_l = c(t_l, sub_res$term_name[1])
       }
+      
+      top_go_l[[n]] = go_l[[n]]$result[go_l[[n]]$result$term_name %in% t_l,]
     }
   }
 }
-```
+write.csv(top_go_l$cl21[,1:13], file = "results/Div-seq/cluster21_summarised_GO.csv", 
+          row.names = F, col.names = T, quote = F)
 
-Plotting
-
-```{r, fig.height=1.5, fig.width=3}
-for(n in names(go_ct_l2)){
-  plot_df = go_ct_l2[[n]]
+breakStr = function(s, n = 20) {
+  x = gsub(paste0('(.{1,',as.character(n),'})(\\s|$)'), '\\1\n', s)
+  x = substr(x, 1, nchar(x)-1)
+  return(x)
+}
+plt_go_l = list()
+for(n in names(top_go_l)){
+  plot_df = top_go_l[[n]][,c("term_name", "p_value")]
+  plot_df$term_name = breakStr(plot_df$term_name, 25)
+  plot_df = plot_df[order(plot_df$p_value, decreasing = F),]
   plot_df$term_name = factor(plot_df$term_name, levels = rev(plot_df$term_name))
-  m = -log10(plot_df$p_value)+(-log10(plot_df$p_value)*0.05)
-  plt = ggplot(plot_df, aes(x = -log10(p_value), y = term_name))+
+  
+  mval = max(-log10(plot_df$p_value))
+  plt_go_l[[n]] = ggplot(plot_df, aes(x = -log10(p_value), y = term_name))+
     geom_col()+
-    ggtitle(n)+
-    scale_x_continuous(expand = c(0,0), limits = c(0, m))+
+    scale_x_continuous(expand = c(0,0), limits = c(0, mval+mval*0.05))+
     theme_bw()+
-    theme(axis.text = element_text(colour = "black", size = 7))
-  print(plt)
+    theme(axis.text = element_text(colour = "black"))
+  
+  pdf(paste0("results/Div-seq/ep_wpi_srat_GO/ep_wpi_srat_", n, "_GO.pdf"), 
+      height = 3.5, width = 4.5)
+  print(plt_go_l[[n]])
+  dev.off()
 }
 ```
 
-DE by major cell type
+List genes per GO Term
 
 ```{r}
-ax_1wpi_srat$majorct = sapply(strsplit(ax_1wpi_srat$ctlabels, "_"), function(x) x[1])
-ax_1wpi_srat$majorct[ax_1wpi_srat$ctlabels %in% c("epen_clus_3", "epen_clus_4")] = "epenAct"
-ax_1wpi_srat$majorct[ax_1wpi_srat$ctlabels %in% c("epen_clus_1", "epen_clus_14",
-                                                  "epen_clus_7", "epen_clus_13")] = "epenNeu"
-ax_1wpi_srat$majorct[ax_1wpi_srat$ctlabels %in% c("epen_clus_0", "epen_clus_2", "epen_clus_5",
-                                                  "epen_clus_6","epen_clus_8", "epen_clus_9",
-                                                  "epen_clus_10","epen_clus_11", 
-                                                  "epen_clus_12")] = "epenQui"
-
-# DE per cell type
-mct_mk_l = list()
-for(ct in unique(ax_1wpi_srat$majorct)){
-  sub_dat = ax_1wpi_srat[,ax_1wpi_srat$majorct==ct]
-  if(length(unique(sub_dat$sample_simp))>1){
-    mct_mk_l[[ct]] = presto::wilcoxauc(sub_dat, 
-                                      group_by = "ss_div", pseudocount.use = 0.1)
+gene_term_cl = list()
+for(n in names(top_go_l)){
+  go_id = unique(top_go_l[[n]]$term_id)
+  gene_term = gprofiler2::gconvert(query = go_id, organism = "hsapiens",
+                                   target = "HGNC", filter_na = TRUE)[,c("input", "target")]
+  
+  if(!is.null(gene_term)){
+    cl = gsub("cl", "", n)
+    g = mk_cl$feature[mk_cl$group==cl]
+    gene_term_cl[[n]] = gene_term[gene_term[,"target"] %in% g,]
+    gene_term_cl[[n]] = merge(gene_term_cl[[n]], top_go_l[[n]][,c("term_id", "term_name")],
+                              by = 1)
+    
+    #gg = mk_cl[mk_cl$group==cl,c("feature", "logFC")]
+    gg = mk_cl[,c("feature", "logFC")]
+    gene_term_cl[[n]] = merge(gene_term_cl[[n]], gg, by.x = 2, by.y = 1)
   }
 }
-saveRDS(mct_mk_l, file = "results/Div-seq/SS_1wpi_majorct_DE.RDS")
+saveRDS(gene_term_cl, file = "results/Div-seq/gene_term_cl_ep_wpi.RDS")
 ```
 
-Filter the DE genes to those significant and meaningful
+Groups of terms and genes per time point
 
 ```{r}
-mct_mk_l_filt = list()
-for(n in names(mct_mk_l)){
-  mct_mk_l_filt[[n]] = mct_mk_l[[n]][mct_mk_l[[n]]$padj<=0.05 & mct_mk_l[[n]]$logFC>=0.2,]
-  mct_mk_l_filt[[n]] = mct_mk_l_filt[[n]][!startsWith(mct_mk_l_filt[[n]]$feature, "AMEX") &
-                                        !startsWith(mct_mk_l_filt[[n]]$feature, "LOC") &
-                                        !grepl("..", mct_mk_l_filt[[n]]$feature, fixed = T),]
+terms = c("collagen fibril organization", "wound healing", "cilium assembly", 
+          "nuclear chromosome segregation", "positive regulation of cell adhesion",
+          "neurotransmitter transport")
+
+allt = Reduce(rbind, gene_term_cl)
+g = unique(allt[allt$term_name %in% terms,c(1,3:4)])
+g = g[order(g$logFC, decreasing = T),]
+g = g[!duplicated(g$target),]
+
+mean_exp = AverageExpression(ep_wpi_srat, group.by = "sample_simp", 
+                             features = unique(g$target))$RNA
+g$entropy = apply(mean_exp, 1, entropy::entropy)[g$target]
+
+df = g %>% 
+  group_by(term_name) %>% 
+  top_n(10, wt = -entropy)
+
+mean_exp = AverageExpression(ep_wpi_srat, group.by = "sample_simp", features = df$target)$RNA
+mean_exp = t(scale(t(mean_exp)))
+hc = hclust(dist(mean_exp), method = "ward.D")
+#mean_exp[mean_exp>2.5] = 2.5
+#mean_exp[mean_exp<(-2.5)] = -2.5
+mean_exp = reshape2::melt(mean_exp)
+plot_df = merge(mean_exp, df, by = 1)
+plot_df$Var1 = factor(plot_df$Var1, levels = hc$labels[hc$order])
+plot_df$Var2 = factor(plot_df$Var2, levels = rev(levels(plot_df$Var2))[c(7,1:6)])
+
+breakStr = function(s, n = 20) {
+  x = gsub(paste0('(.{1,',as.character(n),'})(\\s|$)'), '\\1\n', s)
+  x = substr(x, 1, nchar(x)-1)
+  return(x)
 }
+plot_df$term_name = breakStr(plot_df$term_name, 27)
+plot_df$term_name = factor(plot_df$term_name, levels = breakStr(terms[c(2,1,5,4,3,6)], 27))
+
+
+plt = ggplot()+
+  facet_grid(~term_name,scales = "free", space = "free_x")+
+  geom_tile(data = plot_df, mapping = aes(x = Var1, y = Var2, fill = value))+
+  labs(fill = "scaled mean\nexpression")+
+  guides(fill = guide_colourbar(title.position = "top"))+
+  scale_fill_viridis_c(option = "A")+
+  theme_classic()+
+  theme(axis.text = element_text(size = 7, colour = "black"),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        axis.title = element_blank(),
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 6),
+        strip.text = element_text(size = 7),
+        legend.position = "right")
+
+pdf("results/Div-seq/genes_GO_time_ep_wpi.pdf", height = 2, width = 10)
+print(plt)
+dev.off()
 ```
 
-Count DE genes per cell type and condition
+
+
+# Mapping Div-seq to SS UMAP
+Load data
 
 ```{r}
-n_de = matrix(0, ncol = 2, nrow = length(mct_mk_l_filt))
-colnames(n_de) = c("SS", "div")
-rownames(n_de) = names(mct_mk_l_filt)
-for(n in names(mct_mk_l_filt)){
-  tab = table(mct_mk_l_filt[[n]]$group)
-  n_de[n, "SS"] = tab["SS"]
-  n_de[n, "div"] = tab["div"]
-}
-n_de[is.na(n_de)] = 0
+# SS datasets
+multi_neuro_glut <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/multi_neuronal_glut_subset.RDS")
+multi_neuro_gaba <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/multi_neuronal_gaba_subset.RDS")
+multi_neuro_npc <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multi_neuronal_npc_subset.RDS")
+
+# region data
+meta_regs = read.csv("data/processed/multiome/WP_region_predictions.csv", 
+                     header = T, row.names = 1)
+newcellnames = rownames(meta_regs)
+newcellnames = gsub("-a1-1", "-1_1", newcellnames)
+newcellnames = gsub("-a1-2", "-1_2", newcellnames)
+newcellnames = gsub("-a3-1", "-1_3", newcellnames)
+newcellnames = gsub("-a3-2", "-1_4", newcellnames)
+rownames(meta_regs) = newcellnames
+multi_neuro_glut = AddMetaData(multi_neuro_glut, meta_regs)
+multi_neuro_glut$region_all = multi_neuro_glut$region
+multi_neuro_glut$region_all[is.na(multi_neuro_glut$region_all)] = multi_neuro_glut$pred_regions_top[is.na(multi_neuro_glut$region_all)]
+multi_neuro_gaba = AddMetaData(multi_neuro_gaba, meta_regs)
+multi_neuro_gaba$region_all = multi_neuro_gaba$region
+multi_neuro_gaba$region_all[is.na(multi_neuro_gaba$region_all)] = multi_neuro_gaba$pred_regions_top[is.na(multi_neuro_gaba$region_all)]
+multi_neuro_npc = AddMetaData(multi_neuro_npc, meta_regs)
+multi_neuro_npc$region_all = multi_neuro_npc$region
+multi_neuro_npc$region_all[is.na(multi_neuro_npc$region_all)] = multi_neuro_npc$pred_regions_top[is.na(multi_neuro_npc$region_all)]
+
+# div-seq
+div_srat = readRDS("data/expression/axolotl_reclust/Edu_1_2_4_6_8_12_fil_highvarfeat.RDS")
+meta_div_pred = read.csv("results/Div-seq/divseq_predicted_metadata.csv", 
+                         header = T, row.names = 1)
+div_srat = AddMetaData(div_srat, metadata = meta_div_pred)
 ```
 
-Get GO Terms, without repeated genes
+Filter dataset
 
 ```{r}
-genes_comm = c()
-for(ct in names(mct_mk_l_filt)){
-  if(any(n_de[ct,]>=30)){
-    g = mct_mk_l_filt[[ct]]$feature
-    genes_comm = c(genes_comm, g)
-  }
-}
-common = names(table(genes_comm)[table(genes_comm)>30])
+# filter metadata
+div_srat@meta.data = div_srat@meta.data[,c("nCount_RNA", "nFeature_RNA", "percent.mt", "sample", "seurat_clusters", "pred_ctall", "pred_regs", "batch"), drop = F]
 
-bg = rownames(ax_1wpi_srat)[rowSums(ax_1wpi_srat@assays$RNA@data)>0]
-bg = bg[!startsWith(bg, "AMEX") & !startsWith(bg, "LOC") & !grepl("..", bg, fixed = T)]
-
-go_mct_l2 = list()
-for(ct in names(mct_mk_l_filt)){
-  for(g in colnames(n_de)){
-    if(n_de[ct,g]>=30){
-      id = paste0(ct, "..", g)
-      genes = mct_mk_l_filt[[ct]]$feature[mct_mk_l_filt[[ct]]$group==g]
-      #
-      genes = genes[!(genes %in% common)]
-      if(length(genes)>0){
-        go_mct_l2[[id]] = gprofiler2::gost(genes, ordered_query = F, sources="GO:BP",
-                                           custom_bg = bg)$result
-      }
-    }
-  }
-}
-```
-
-Plotting
-
-```{r, fig.height=3, fig.width=3}
-for(n in names(go_mct_l2)){
-  plot_df = go_mct_l2[[n]]
-  plot_df$term_name = factor(plot_df$term_name, levels = rev(plot_df$term_name))
-  m = -log10(plot_df$p_value)+(-log10(plot_df$p_value)*0.05)
-  plt = ggplot(plot_df, aes(x = -log10(p_value), y = term_name))+
-    geom_col()+
-    ggtitle(n)+
-    scale_x_continuous(expand = c(0,0), limits = c(0, m))+
-    theme_bw()+
-    theme(axis.text = element_text(colour = "black", size = 7))
-  print(plt)
-}
+glut_wpi_srat = div_srat[,grepl("glut_", div_srat$pred_ctall)]
+gaba_wpi_srat = div_srat[,grepl("GABA_", div_srat$pred_ctall)]
+npc_wpi_srat = div_srat[,grepl("npc_", div_srat$pred_ctall)]
 ```
 
 
+## Glutamatergic
+Re-run UMAP to have model
 
-```{r, fig.height=5, fig.width=9}
-sub_dat = ax_1wpi_srat[,ax_1wpi_srat$ss_div=="div" &
-                         (grepl("microg", ax_1wpi_srat$ctlabels) |
-                          grepl("olig", ax_1wpi_srat$ctlabels) |
-                          grepl("epen", ax_1wpi_srat$ctlabels) |
-                          grepl("endo", ax_1wpi_srat$ctlabels))]
-g = c("C1QB", "TGFBI", "KAZALD1", "Actg1", "Xbp1", "Sulf2", "Runx1", "Tnc", "Cxcr4", "Hbegf",
-      "Serpine1", "Tnfrsf21", "Tnfrsf12a", "Cdkn1b", "Hmox1")
-g = toupper(g)
-VlnPlot(sub_dat, features = g, group.by = "ctlabels")+NoLegend()
+```{r}
+multi_neuro_glut = RunUMAP(multi_neuro_glut, dims = 1:30, reduction = "harmony", 
+                           reduction.name = 'umap_harmony', return.model = T)
 ```
 
+Joint processing of Div-seq glut
+
+```{r}
+glut_wpi_srat = NormalizeData(glut_wpi_srat)
+glut_wpi_srat = FindVariableFeatures(glut_wpi_srat, nfeatures = 10000)
+glut_wpi_srat = ScaleData(glut_wpi_srat, 
+                          vars.to.regress = c("nCount_RNA", "percent.mt", "batch"))
+glut_wpi_srat = RunPCA(glut_wpi_srat, verbose = F)
+
+glut_wpi_srat@reductions$harmony = NULL
+glut_wpi_srat@reductions$umap_harmony = NULL
+# Run Harmony
+glut_wpi_srat = harmony::RunHarmony(glut_wpi_srat, group.by.vars = "batch", tau = 30, sigma = 0.1,
+                                    plot_convergence = F, assay.use = "RNA", verbose = F)
+```
+
+### Mapping with Seurat
+Apply Seurat mapping pipeline
+
+```{r}
+glut_anchors = FindTransferAnchors(reference = multi_neuro_glut, query = glut_wpi_srat,
+                                   dims = 1:30, reference.reduction = "harmony")
+
+glut_query = TransferData(anchorset = glut_anchors, reference = multi_neuro_glut, dims = 1:30,
+                          weight.reduction = glut_wpi_srat@reductions$harmony,
+                          query = glut_wpi_srat, 
+                          refdata = list(glut_cluster = "glut_cluster"))
+glut_query = IntegrateEmbeddings(anchorset = glut_anchors, reference = multi_neuro_glut,
+                                 weight.reduction = glut_wpi_srat@reductions$harmony,
+                                 query = glut_query, new.reduction.name = "ref.pca")
+glut_query = ProjectUMAP(query = glut_query, query.reduction = "ref.pca", 
+                         reference = multi_neuro_glut, reference.dims = 1:30,
+                         reference.reduction = "harmony", reduction.model = "umap_harmony")
+```
+
+Plot UMAPs (bad)
+
+```{r}
+xxx = prop.table(table(glut_query$pred_ctall, glut_query$predicted.glut_cluster),
+                 margin = 1)
+pheatmap::pheatmap(xxx, clustering_method = "ward.D", 
+                   treeheight_row = 20, treeheight_col = 20)
+
+csfunc = colorRampPalette(c("#df16df", "#ffd9f9"))
+cols_tp = c("gray80", csfunc(6))
+names(cols_tp) = c("SS", paste0(c(1,2,4,6,8,12), "_wpi"))
+cols_tp = cols_tp[c(2:7,1)]
+
+
+ref_df = data.frame(Embeddings(multi_neuro_glut, reduction = "umap_harmony"))
+ref_df$ct = multi_neuro_glut@meta.data[rownames(ref_df),"glut_cluster"]
+ref_df$cond = "SS"
+ref_df$region = multi_neuro_glut$region_all
+
+q_df = data.frame(Embeddings(glut_query, reduction = "ref.umap"))
+colnames(q_df) = c("UMAP_1", "UMAP_2")
+q_df$ct = glut_query@meta.data[rownames(q_df),"pred_ctall"]
+q_df$cond = glut_query$sample
+q_df$cond[q_df$cond=="1_wpi_pos"] = "1_wpi"
+q_df$region = glut_query$pred_regs
+q_df = q_df[sample(1:nrow(q_df), nrow(q_df), replace = F),]
+
+plot_df = rbind(ref_df, q_df)
+plot_df$cond = factor(plot_df$cond, levels = names(cols_tp))
+
+ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = cond))+
+  geom_point(size = 0.8)+
+  scale_colour_manual(values = cols_tp)+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = ct))+
+  geom_point(size = 0.8)+
+  scale_colour_manual(values = cols_cc[unique(plot_df$ct)])+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+ggplot()+
+  geom_point(data = plot_df[plot_df$cond=="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, colour = region),
+             size = 0.7, shape = 19)+
+  geom_point(data = plot_df[plot_df$cond!="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, fill = region),
+             size = 1, shape = 21, colour = "grey55", alpha = 0.7)+
+  scale_colour_manual(values = reg_cols_simp)+
+  scale_fill_manual(values = reg_cols_simp)+
+  theme_void()+
+  theme(aspect.ratio = 1)
+```
+
+### Mapping with correlation
+Match each cell to the UMAP coordinates of the msot similar cell
+
+```{r}
+# colours
+csfunc = colorRampPalette(c("#df16df", "#ffd9f9"))
+cols_tp = c("gray90", csfunc(6))
+names(cols_tp) = c("SS", paste0(c(1,2,4,6,8,12), "_wpi"))
+cols_tp = cols_tp[c(2:7,1)]
+
+# get correlations
+feat = intersect(multi_neuro_glut@assays$RNA@var.features,
+                 glut_query@assays$RNA@var.features)
+cor_cells = cor(as.matrix(multi_neuro_glut@assays$RNA@data[feat,]), 
+                as.matrix(glut_query@assays$RNA@data[feat,]), method = "sp")
+saveRDS(cor_cells, file = "results/Div-seq/cor_cells_mapping_glut.RDS")
+
+# assign max cell
+max_vals = apply(cor_cells, 2, max)
+max_id = apply(cor_cells, 2, which.max)
+match_cells = colnames(multi_neuro_glut)[max_id]
+
+# prepare data
+ref_df = data.frame(Embeddings(multi_neuro_glut, reduction = "umap_harmony"))
+ref_df$ct = multi_neuro_glut@meta.data[rownames(ref_df),"glut_cluster"]
+ref_df$cond = "SS"
+ref_df$region = multi_neuro_glut$region_all
+
+q_df = data.frame(ref_df[match_cells,1:2],
+                  row.names = colnames(glut_query))
+q_df$ct = glut_query@meta.data[rownames(q_df),"pred_ctall"]
+q_df$cond = glut_query$sample
+q_df$cond[q_df$cond=="1_wpi_pos"] = "1_wpi"
+q_df$region = glut_query$pred_regs
+q_df = q_df[sample(1:nrow(q_df), nrow(q_df), replace = F),]
+
+plot_df = rbind(ref_df, q_df)
+plot_df$cond = factor(plot_df$cond, levels = names(cols_tp))
+
+# plotting
+plt_cond = ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = cond))+
+  geom_point(size = 0.4)+
+  scale_colour_manual(values = cols_tp)+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = ct))+
+  geom_point(size = 0.8)+
+  scale_colour_manual(values = cols_cc[unique(plot_df$ct)])+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+
+lab_df = data.frame("UMAP_1" = tapply(q_df$UMAP_1, q_df$ct, median),
+                    "UMAP_2" = tapply(q_df$UMAP_2, q_df$ct, median))
+lab_df$ct = rownames(lab_df)
+tabct = table(q_df$ct)
+topct = names(sort(tabct, decreasing = T))[1:5]
+
+ggplot()+
+  geom_point(data = plot_df[plot_df$cond=="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2),
+             size = 0.6, shape = 19, colour = "grey85")+
+  geom_point(data = plot_df[plot_df$cond!="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, colour = ct),
+             size = 0.7, shape = 20, alpha = 0.7)+
+  geom_label(data = lab_df[topct,], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, label = ct),
+             size = 2, label.padding = unit(0.05,"cm"))+
+  scale_colour_manual(values = cols_cc[unique(plot_df$ct)])+
+  theme_void()+
+  theme(aspect.ratio = 1,
+        legend.position = "none")
+
+ggplot()+
+  geom_point(data = plot_df[plot_df$cond=="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, colour = region),
+             size = 0.7, shape = 19)+
+  geom_point(data = plot_df[plot_df$cond!="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, fill = region),
+             size = 1, shape = 21, colour = "grey55", alpha = 0.7)+
+  scale_colour_manual(values = reg_cols_simp)+
+  scale_fill_manual(values = reg_cols_simp)+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+pdf("results/Div-seq/UMAP_mappings/glut_SS_Div_mapping_UMAP.pdf", 
+    height = 3.5, width = 4)
+print(plt_cond)
+dev.off()
+```
+
+
+## GABAergic
+Joint processing of Div-seq glut
+
+```{r}
+gaba_wpi_srat = NormalizeData(gaba_wpi_srat)
+gaba_wpi_srat = FindVariableFeatures(gaba_wpi_srat, nfeatures = 10000)
+gaba_wpi_srat = ScaleData(gaba_wpi_srat, 
+                          vars.to.regress = c("nCount_RNA", "percent.mt", "batch"))
+gaba_wpi_srat = RunPCA(gaba_wpi_srat, verbose = F)
+
+gaba_wpi_srat@reductions$harmony = NULL
+gaba_wpi_srat@reductions$umap_harmony = NULL
+# Run Harmony
+gaba_wpi_srat = harmony::RunHarmony(gaba_wpi_srat, group.by.vars = "batch", 
+                                    tau = 30, sigma = 0.1,
+                                    plot_convergence = F, assay.use = "RNA", verbose = F)
+```
+
+### Mapping with correlation
+Match each cell to the UMAP coordinates of the most similar cell
+
+```{r}
+# colours
+csfunc = colorRampPalette(c("#df16df", "#ffd9f9"))
+cols_tp = c("gray90", csfunc(6))
+names(cols_tp) = c("SS", paste0(c(1,2,4,6,8,12), "_wpi"))
+cols_tp = cols_tp[c(2:7,1)]
+
+# get correlations
+feat = intersect(multi_neuro_gaba@assays$RNA@var.features,
+                 gaba_wpi_srat@assays$RNA@var.features)
+cor_gaba = cor(as.matrix(multi_neuro_gaba@assays$RNA@data[feat,]), 
+               as.matrix(gaba_wpi_srat@assays$RNA@data[feat,]), method = "sp")
+saveRDS(cor_gaba, file = "results/Div-seq/cor_cells_mapping_gaba.RDS")
+
+# assign max cell
+max_vals = apply(cor_gaba, 2, max)
+max_id = apply(cor_gaba, 2, which.max)
+match_cells = colnames(multi_neuro_gaba)[max_id]
+
+# prepare data
+ref_df = data.frame(Embeddings(multi_neuro_gaba, reduction = "umap_harmony"))
+ref_df$ct = multi_neuro_gaba@meta.data[rownames(ref_df),"gaba_cluster"]
+ref_df$cond = "SS"
+ref_df$region = multi_neuro_gaba$region_all
+
+q_df = data.frame(ref_df[match_cells,1:2],
+                  row.names = colnames(gaba_wpi_srat))
+q_df$ct = gaba_wpi_srat@meta.data[rownames(q_df),"pred_ctall"]
+q_df$cond = gaba_wpi_srat$sample
+q_df$cond[q_df$cond=="1_wpi_pos"] = "1_wpi"
+q_df$region = gaba_wpi_srat$pred_regs
+q_df = q_df[sample(1:nrow(q_df), nrow(q_df), replace = F),]
+
+plot_df = rbind(ref_df, q_df)
+plot_df$cond = factor(plot_df$cond, levels = names(cols_tp))
+
+# plotting
+plt_cond = ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = cond))+
+  geom_point(size = 0.4)+
+  scale_colour_manual(values = cols_tp)+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = ct))+
+  geom_point(size = 0.8)+
+  scale_colour_manual(values = cols_cc[unique(plot_df$ct)])+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+
+lab_df = data.frame("UMAP_1" = tapply(q_df$UMAP_1, q_df$ct, median),
+                    "UMAP_2" = tapply(q_df$UMAP_2, q_df$ct, median))
+lab_df$ct = rownames(lab_df)
+tabct = table(q_df$ct)
+topct = names(sort(tabct, decreasing = T))[1:5]
+
+ggplot()+
+  geom_point(data = plot_df[plot_df$cond=="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2),
+             size = 0.6, shape = 19, colour = "grey85")+
+  geom_point(data = plot_df[plot_df$cond!="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, colour = ct),
+             size = 0.7, shape = 20, alpha = 0.7)+
+  geom_label(data = lab_df[topct,], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, label = ct),
+             size = 2, label.padding = unit(0.05,"cm"))+
+  scale_colour_manual(values = cols_cc[unique(plot_df$ct)])+
+  theme_void()+
+  theme(aspect.ratio = 1,
+        legend.position = "none")
+
+ggplot()+
+  geom_point(data = plot_df[plot_df$cond=="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, colour = region),
+             size = 0.7, shape = 19)+
+  geom_point(data = plot_df[plot_df$cond!="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, fill = region),
+             size = 1, shape = 21, colour = "grey55", alpha = 0.7)+
+  scale_colour_manual(values = reg_cols_simp)+
+  scale_fill_manual(values = reg_cols_simp)+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+pdf("results/Div-seq/UMAP_mappings/gaba_SS_Div_mapping_UMAP.pdf", 
+    height = 3.5, width = 4)
+print(plt_cond)
+dev.off()
+```
+
+
+## NPCs
+Joint processing of Div-seq glut
+
+```{r}
+npc_wpi_srat = NormalizeData(npc_wpi_srat)
+npc_wpi_srat = FindVariableFeatures(npc_wpi_srat, nfeatures = 10000)
+npc_wpi_srat = ScaleData(npc_wpi_srat, 
+                         vars.to.regress = c("nCount_RNA", "percent.mt", "batch"))
+npc_wpi_srat = RunPCA(npc_wpi_srat, verbose = F)
+
+npc_wpi_srat@reductions$harmony = NULL
+npc_wpi_srat@reductions$umap_harmony = NULL
+# Run Harmony
+npc_wpi_srat = harmony::RunHarmony(npc_wpi_srat, group.by.vars = "batch", 
+                                   tau = 30, sigma = 0.1,
+                                   plot_convergence = F, assay.use = "RNA", verbose = F)
+```
+
+### Mapping with correlation
+Match each cell to the UMAP coordinates of the most similar cell
+
+```{r}
+# colours
+csfunc = colorRampPalette(c("#df16df", "#ffd9f9"))
+cols_tp = c("gray90", csfunc(6))
+names(cols_tp) = c("SS", paste0(c(1,2,4,6,8,12), "_wpi"))
+cols_tp = cols_tp[c(2:7,1)]
+
+# get correlations
+feat = intersect(multi_neuro_npc@assays$RNA@var.features,
+                 npc_wpi_srat@assays$RNA@var.features)
+cor_npc = cor(as.matrix(multi_neuro_npc@assays$RNA@data[feat,]), 
+              as.matrix(npc_wpi_srat@assays$RNA@data[feat,]), method = "sp")
+saveRDS(cor_npc, file = "results/Div-seq/cor_cells_mapping_npc.RDS")
+
+# assign max cell
+max_vals = apply(cor_npc, 2, max)
+max_id = apply(cor_npc, 2, which.max)
+match_cells = colnames(multi_neuro_npc)[max_id]
+
+# prepare data
+ref_df = data.frame(Embeddings(multi_neuro_npc, reduction = "umap_harmony"))
+ref_df$ct = multi_neuro_npc@meta.data[rownames(ref_df),"npc_cluster"]
+ref_df$cond = "SS"
+ref_df$region = multi_neuro_npc$region_all
+
+q_df = data.frame(ref_df[match_cells,1:2],
+                  row.names = colnames(npc_wpi_srat))
+q_df$ct = npc_wpi_srat@meta.data[rownames(q_df),"pred_ctall"]
+q_df$cond = npc_wpi_srat$sample
+q_df$cond[q_df$cond=="1_wpi_pos"] = "1_wpi"
+q_df$region = npc_wpi_srat$pred_regs
+q_df = q_df[sample(1:nrow(q_df), nrow(q_df), replace = F),]
+
+plot_df = rbind(ref_df, q_df)
+plot_df$cond = factor(plot_df$cond, levels = names(cols_tp))
+
+# plotting
+plt_cond = ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = cond))+
+  geom_point(size = 0.4)+
+  scale_colour_manual(values = cols_tp)+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2, colour = ct))+
+  geom_point(size = 0.8)+
+  scale_colour_manual(values = cols_cc[unique(plot_df$ct)])+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+
+lab_df = data.frame("UMAP_1" = tapply(q_df$UMAP_1, q_df$ct, median),
+                    "UMAP_2" = tapply(q_df$UMAP_2, q_df$ct, median))
+lab_df$ct = rownames(lab_df)
+tabct = table(q_df$ct)
+topct = names(sort(tabct, decreasing = T))[1:5]
+
+ggplot()+
+  geom_point(data = plot_df[plot_df$cond=="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2),
+             size = 0.6, shape = 19, colour = "grey85")+
+  geom_point(data = plot_df[plot_df$cond!="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, colour = ct),
+             size = 0.7, shape = 20, alpha = 0.7)+
+  geom_label(data = lab_df[topct,], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, label = ct),
+             size = 2, label.padding = unit(0.05,"cm"))+
+  scale_colour_manual(values = cols_cc[unique(plot_df$ct)])+
+  theme_void()+
+  theme(aspect.ratio = 1,
+        legend.position = "none")
+
+ggplot()+
+  geom_point(data = plot_df[plot_df$cond=="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, colour = region),
+             size = 0.7, shape = 19)+
+  geom_point(data = plot_df[plot_df$cond!="SS",], 
+             mapping = aes(x = UMAP_1, y = UMAP_2, fill = region),
+             size = 1, shape = 21, colour = "grey55", alpha = 0.7)+
+  scale_colour_manual(values = reg_cols_simp)+
+  scale_fill_manual(values = reg_cols_simp)+
+  theme_void()+
+  theme(aspect.ratio = 1)
+
+pdf("results/Div-seq/UMAP_mappings/npc_SS_Div_mapping_UMAP.pdf", 
+    height = 3.5, width = 4)
+print(plt_cond)
+dev.off()
+```

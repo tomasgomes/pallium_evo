@@ -959,7 +959,7 @@ pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
 m = if(gg=="subclasses") subcl_m_list else celcl_m_list
 ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="Glutamatergic" &
                                                                    meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23"]),
-               "mouse" = unique(meta_sp_l$mouse$cellclusters[grepl("TEGLU", meta_sp_l$mouse$cellclusters)]))
+               "mouse" = unique(meta_sp_l$mouse$cellclusters[grepl("TEGLU", meta_sp_l$mouse$cellclusters) | grepl("DGG", meta_sp_l$mouse$cellclusters)]))
 
 ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
@@ -997,8 +997,9 @@ br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
 cols = cols[!(br>max(cort$r) | br<min(cort$r))]
 
 # add order to mouse cells
-mouse_ord = paste0("TEGLU", c(18,19,5,13,14,21,24,23, 15,17,16, 20,3,2, 7,8,10,11,
-                              4,9,1,6, 12,22))
+mouse_ord = c(paste0("TEGLU", c(18,19,5,13,14,21,24,23)), "DGGRC2", "DGGRC1", 
+              paste0("TEGLU", c(15,17,16, 20,3,2, 7,8,10,11,
+                              4,9,1,6, 12,22)))
 plot_df$Var2 = factor(plot_df$Var2, levels = mouse_ord)
 
 # order the axolotl clusters
@@ -1038,7 +1039,7 @@ corplot = ggplot()+
         aspect.ratio = 28/24)
 
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_Glutamatergic_ord2.pdf", 
-    height = 5.5, width = 6)
+    height = 5.5, width = 6.5)
 print(corplot)
 dev.off()
 ```
@@ -1054,7 +1055,7 @@ pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
 m = if(gg=="subclasses") subcl_m_list else celcl_m_list
 ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="Glutamatergic" &
                                                                    meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23"]),
-               "mouse" = unique(meta_sp_l$mouse$cellclusters[grepl("TEGLU", meta_sp_l$mouse$cellclusters)]))
+               "mouse" = unique(meta_sp_l$mouse$cellclusters[grepl("TEGLU", meta_sp_l$mouse$cellclusters) | grepl("DGG", meta_sp_l$mouse$cellclusters)]))
 
 ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                        gene_filter = tfs,
@@ -1093,8 +1094,9 @@ br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
 cols = cols[!(br>max(cort$r) | br<min(cort$r))]
 
 # add order to mouse cells
-mouse_ord = paste0("TEGLU", c(18,19,5,13,14,21,24,23, 15,17,16, 20,3,2, 7,8,10,11,
-                              4,9,1,6, 12,22))
+mouse_ord = c(paste0("TEGLU", c(18,19,5,13,14,21,24,23)), "DGGRC2", "DGGRC1", 
+              paste0("TEGLU", c(15,17,16, 20,3,2, 7,8,10,11,
+                              4,9,1,6, 12,22)))
 plot_df$Var2 = factor(plot_df$Var2, levels = mouse_ord)
 
 corplot = ggplot()+
@@ -1120,7 +1122,7 @@ corplot = ggplot()+
         aspect.ratio = 28/24)
 
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_Glutamatergic_TF.pdf", 
-    height = 5.5, width = 6)
+    height = 5.5, width = 6.5)
 print(corplot)
 dev.off()
 ```
@@ -1154,7 +1156,27 @@ ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolo
 ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, gene_filter = tfs,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
 
-pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GABAergicTE_TF.pdf", height = 5, width = 6.5)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GABAergicTE_TF.pdf", 
+    height = 5, width = 6.5)
+plotCorr(ccc1, "axolotl", "mouse")
+dev.off()
+```
+
+All GABAergic more specific with mouse, TFs only
+
+```{r}
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolotl$subclasses=="GABAergic"]),
+               "mouse" = unique(meta_sp_l$mouse$cellclusters[meta_sp_l$mouse$classes=="GABAergic"]))
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, 
+                       gene_filter = tfs, sp_pair = c("axolotl", "mouse"), 
+                       ct_sets = ct_sets, norm_all = F)
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GABAergic_TF.pdf", 
+    height = 6, width = 15)
 plotCorr(ccc1, "axolotl", "mouse")
 dev.off()
 ```

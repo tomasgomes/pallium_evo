@@ -72,6 +72,58 @@ for(n in colnames(visD@meta.data)[19:112]){
 dev.off()
 ```
 
+Differential NB abundance
+
+```{r}
+visD$score_GABA_npc = rowMeans(visD@meta.data[,c("npc_SUBSET_8","npc_SUBSET_5","npc_SUBSET_6",
+                                                "npc_SUBSET_10","npc_SUBSET_12")])
+visD$score_glut_npc = rowMeans(visD@meta.data[,c("npc_SUBSET_7","npc_SUBSET_0","npc_SUBSET_4",
+                                                "npc_SUBSET_11","npc_SUBSET_13","npc_SUBSET_2",
+                                                "npc_SUBSET_9","npc_SUBSET_3","npc_SUBSET_1")])
+visD$diff_npc = scales::rescale(visD$score_GABA_npc, 
+                                to = c(0,1))-scales::rescale(visD$score_glut_npc, to = c(0,1))
+
+plotSpatialScores = function(obj, ct_use, img_name, labfill = ""){
+
+  # setup plotting data
+  plot_df = obj@meta.data[,ct_use, drop = F]
+
+  coordinates = Seurat::GetTissueCoordinates(obj@images[[img_name]])
+  data = cbind(coordinates, plot_df[rownames(x = coordinates),])
+  colnames(data)[3] = ct_use
+  
+  cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                            RColorBrewer::brewer.pal(9, "Reds")))(101)
+  br = seq(-max(abs(data[,ct_use])), max(abs(data[,ct_use])), length.out = 101)
+  cols = cols[!(br>max(data[,ct_use]) | br<min(data[,ct_use]))]
+  
+  plot = ggplot(data = data, aes_string(x = colnames(x = data)[2], 
+                                        y = colnames(x = data)[1]))+
+    Seurat:::geom_spatial(data = data, mapping = aes_string(fill = ct_use[1]),
+                          point.size.factor = 2.5, 
+                          image = obj@images[[img_name]], image.alpha = 0.3, 
+                          shape = 21, crop = T, stroke = .25, colour = "grey30")+
+    scale_fill_gradientn(breaks = signif(c(min(data[,ct_use])+0.005, 0,
+                                           max(data[,ct_use])-0.005),2),
+                         values = scales::rescale(c(min(br), 0, max(br))),
+                         colours = cols) +
+      labs(fill = labfill)+
+      theme_classic()+
+      theme(aspect.ratio = 1,
+            axis.title = element_blank(),
+            axis.ticks = element_blank(),
+            axis.line = element_blank(),
+            axis.text = element_blank())
+  return(plot)
+}
+
+plt = plotSpatialScores(obj = visD, ct_use = "diff_npc", img_name = "slice2", 
+                        labfill = "Mean GABA NB score - Mean Glut NB score")
+pdf("../pallium_evo/results/cell2loc/diff_NB_scores.pdf", height = 3, width = 8)
+print(plt)
+dev.off()
+```
+
 Combine scores
 
 ```{r}

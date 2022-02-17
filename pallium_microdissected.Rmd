@@ -1,0 +1,411 @@
+title: "reseq data"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(cowplot)
+library(devtools)
+library(clustree)
+library(ape)
+library(limma)
+library(harmony)
+library(cowplot)
+library(ggdendro)
+library(reshape2)
+library(pheatmap)
+library(viridis)
+library(DoubletFinder)
+```
+
+read data
+```{r}
+D_1 <- readRDS("/links/groups/treutlein/USERS/tomasgomes/data/axolotl/D_1_reseq/D_1_reseq_srat.RDS")
+D_1@meta.data$region <- "dorsal"
+D_1@meta.data$sample <- "D1"
+D_2 <- readRDS("/links/groups/treutlein/USERS/tomasgomes/data/axolotl/D_2_reseq/D_2_reseq_srat.RDS")
+D_2@meta.data$region <- "dorsal"
+D_2@meta.data$sample <- "D2"
+
+L_1 <- readRDS("/links/groups/treutlein/USERS/tomasgomes/data/axolotl/L_1_reseq/L_1_reseq_srat.RDS")
+L_1@meta.data$region <- "lateral"
+L_1@meta.data$sample <- "L1"
+L_2 <- readRDS("/links/groups/treutlein/USERS/tomasgomes/data/axolotl/L_2_reseq/L_2_reseq_srat.RDS")
+L_2@meta.data$region <- "lateral"
+L_2@meta.data$sample <- "L2"
+
+M_1 <- readRDS("/links/groups/treutlein/USERS/tomasgomes/data/axolotl/M_1_reseq/M_1_reseq_srat.RDS")
+M_1@meta.data$region <- "medial"
+M_1@meta.data$sample <- "M1"
+M_2 <- readRDS("/links/groups/treutlein/USERS/tomasgomes/data/axolotl/M_2_reseq/M_2_reseq_srat.RDS")
+M_2@meta.data$region <- "medial"
+M_2@meta.data$sample <- "M2"
+```
+
+filter data for "true" cells, nFeatures, and high percent mito.
+```{r}
+table(D_1$iscell_dd)
+D_1_fil <- subset(D_1, subset = iscell_dd == TRUE & nFeature_RNA > 200 & percent.mt < 40)
+VlnPlot(D_1_fil, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T)
+D_1_fil
+
+table(D_2$iscell_dd)
+D_2_fil <- subset(D_2, subset = iscell_dd == TRUE & nFeature_RNA > 200 & percent.mt < 40)
+VlnPlot(D_2_fil, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T)
+D_2_fil
+
+table(L_1$iscell_dd)
+L_1_fil <- subset(L_1, subset = iscell_dd == TRUE & nFeature_RNA > 200 & percent.mt < 40)
+VlnPlot(L_1_fil, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T)
+L_1_fil
+
+table(L_2$iscell_dd)
+L_2_fil <- subset(L_2, subset = iscell_dd == TRUE & nFeature_RNA > 200 & percent.mt < 40)
+VlnPlot(L_2_fil, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T)
+L_2_fil
+
+table(M_1$iscell_dd)
+M_1_fil <- subset(M_1, subset = iscell_dd == TRUE & nFeature_RNA > 200 & percent.mt < 40)
+VlnPlot(M_1_fil, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T)
+M_1_fil
+
+table(M_2$iscell_dd)
+M_2_fil <- subset(M_2, subset = iscell_dd == TRUE & nFeature_RNA > 200 & percent.mt < 40)
+VlnPlot(M_2_fil, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T)
+M_2_fil
+```
+
+initial processing of indiviual samples
+```{r}
+D_1_fil <- D_1_fil %>% 
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(dims = 1:20) %>% 
+    FindNeighbors(dims = 1:20) %>% 
+    FindClusters(resolution = 0.7) %>% 
+    identity()
+
+D_2_fil <- D_2_fil %>% 
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(dims = 1:20) %>% 
+    FindNeighbors(dims = 1:20) %>% 
+    FindClusters(resolution = 0.7) %>% 
+    identity()
+
+L_1_fil <- L_1_fil %>% 
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(dims = 1:20) %>% 
+    FindNeighbors(dims = 1:20) %>% 
+    FindClusters(resolution = 0.7) %>% 
+    identity()
+
+L_2_fil <- L_2_fil %>% 
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(dims = 1:20) %>% 
+    FindNeighbors(dims = 1:20) %>% 
+    FindClusters(resolution = 0.7) %>% 
+    identity()
+
+M_1_fil <- M_1_fil %>% 
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(dims = 1:20) %>% 
+    FindNeighbors(dims = 1:20) %>% 
+    FindClusters(resolution = 0.7) %>% 
+    identity()
+
+M_2_fil <- M_2_fil %>% 
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(dims = 1:20) %>% 
+    FindNeighbors(dims = 1:20) %>% 
+    FindClusters(resolution = 0.7) %>% 
+    identity()
+
+DimPlot(D_1_fil, reduction = 'umap') + ggtitle(label = 'D_1')
+DimPlot(D_2_fil, reduction = 'umap') + ggtitle(label = 'D_2')
+DimPlot(L_1_fil, reduction = 'umap') + ggtitle(label = 'L_1')
+DimPlot(L_2_fil, reduction = 'umap') + ggtitle(label = 'L_2')
+DimPlot(M_1_fil, reduction = 'umap') + ggtitle(label = 'M_1')
+DimPlot(M_2_fil, reduction = 'umap') + ggtitle(label = 'M_2')
+```
+
+```{r}
+#D1 3000 cells recovered / 2.3% doublet rate
+sweep.res.D1 <- paramSweep_v3(D_1_fil, PCs = 1:20, sct = FALSE)
+sweep.stats_D1 <- summarizeSweep(sweep.res.D1, GT = FALSE)
+bcmvn_D1 <- find.pK(sweep.stats_D1) #highest pk = 0.07
+homotypic.prop_D1 <- modelHomotypic(D_1_fil$seurat_clusters)
+nExp_poi_D1 <- round(0.023*nrow(D_1_fil@meta.data))  #assuming 2.3% doublet formation rate 
+nExp_poi.adj_D1 <- round(nExp_poi_D1*(1-homotypic.prop_D1))
+D_1_fil <- doubletFinder_v3(D_1_fil, PCs = 1:20, pN = 0.25, pK = 0.07, nExp = nExp_poi_D1, reuse.pANN = FALSE, sct = FALSE)
+D_1_fil <- doubletFinder_v3(D_1_fil, PCs = 1:20, pN = 0.25, pK = 0.07, nExp = nExp_poi.adj_D1, reuse.pANN = "pANN_0.25_0.07_56", sct = FALSE)
+table(D_1_fil$DF.classifications_0.25_0.07_56)
+
+#D2 3000 cells recovered / 2.3% doublet rate
+sweep.res.D2 <- paramSweep_v3(D_2_fil, PCs = 1:20, sct = FALSE)
+sweep.stats_D2 <- summarizeSweep(sweep.res.D2, GT = FALSE)
+bcmvn_D2 <- find.pK(sweep.stats_D2) #highest pk = 0.12
+homotypic.prop_D2 <- modelHomotypic(D_2_fil$seurat_clusters)
+nExp_poi_D2 <- round(0.023*nrow(D_2_fil@meta.data))  #assuming 2.3% doublet formation rate 
+nExp_poi.adj_D2 <- round(nExp_poi_D2*(1-homotypic.prop_D2))
+D_2_fil <- doubletFinder_v3(D_2_fil, PCs = 1:20, pN = 0.25, pK = 0.12, nExp = nExp_poi_D2, reuse.pANN = FALSE, sct = FALSE)
+D_2_fil <- doubletFinder_v3(D_2_fil, PCs = 1:20, pN = 0.25, pK = 0.12, nExp = nExp_poi.adj_D2, reuse.pANN = "pANN_0.25_0.12_59", sct = FALSE)
+table(D_2_fil$DF.classifications_0.25_0.12_59)
+
+#L1 4000 cells recovered / 3.1% doublet rate
+sweep.res.L1 <- paramSweep_v3(L_1_fil, PCs = 1:20, sct = FALSE)
+sweep.stats_L1 <- summarizeSweep(sweep.res.L1, GT = FALSE)
+bcmvn_L1 <- find.pK(sweep.stats_L1) #highest pk = 0.07
+homotypic.prop_L1 <- modelHomotypic(L_1_fil$seurat_clusters)
+nExp_poi_L1 <- round(0.031*nrow(L_1_fil@meta.data))  #assuming 3.1% doublet formation rate 
+nExp_poi.adj_L1 <- round(nExp_poi_L1*(1-homotypic.prop_L1))
+L_1_fil <- doubletFinder_v3(L_1_fil, PCs = 1:20, pN = 0.25, pK = 0.07, nExp = nExp_poi_L1, reuse.pANN = FALSE, sct = FALSE)
+L_1_fil <- doubletFinder_v3(L_1_fil, PCs = 1:20, pN = 0.25, pK = 0.07, nExp = nExp_poi.adj_L1, reuse.pANN = "pANN_0.25_0.07_104", sct = FALSE)
+table(L_1_fil$DF.classifications_0.25_0.07_104)
+
+#L2 3000 cells recovered / 2.3% doublet rate
+sweep.res.L2 <- paramSweep_v3(L_2_fil, PCs = 1:20, sct = FALSE)
+sweep.stats_L2 <- summarizeSweep(sweep.res.L2, GT = FALSE)
+bcmvn_L2 <- find.pK(sweep.stats_L2) #highest pk = 0.23
+homotypic.prop_L2 <- modelHomotypic(L_2_fil$seurat_clusters)
+nExp_poi_L2 <- round(0.023*nrow(L_2_fil@meta.data))  #assuming 2.3% doublet formation rate 
+nExp_poi.adj_L2 <- round(nExp_poi_L2*(1-homotypic.prop_L2))
+L_2_fil <- doubletFinder_v3(L_2_fil, PCs = 1:20, pN = 0.25, pK = 0.23, nExp = nExp_poi_L2, reuse.pANN = FALSE, sct = FALSE)
+L_2_fil <- doubletFinder_v3(L_2_fil, PCs = 1:20, pN = 0.25, pK = 0.23, nExp = nExp_poi.adj_L2, reuse.pANN = "pANN_0.25_0.23_65", sct = FALSE)
+table(L_2_fil$DF.classifications_0.25_0.23_65)
+
+#M1 6000 cells recovered / 4.6% doublet rate
+sweep.res.M1 <- paramSweep_v3(M_1_fil, PCs = 1:20, sct = FALSE)
+sweep.stats_M1 <- summarizeSweep(sweep.res.M1, GT = FALSE)
+bcmvn_M1 <- find.pK(sweep.stats_M1) #highest pk = 0.07
+homotypic.prop_M1 <- modelHomotypic(M_1_fil$seurat_clusters)
+nExp_poi_M1 <- round(0.046*nrow(M_1_fil@meta.data))  #assuming 4.6% doublet formation rate 
+nExp_poi.adj_M1 <- round(nExp_poi_M1*(1-homotypic.prop_M1))
+M_1_fil <- doubletFinder_v3(M_1_fil, PCs = 1:20, pN = 0.25, pK = 0.07, nExp = nExp_poi_M1, reuse.pANN = FALSE, sct = FALSE)
+M_1_fil <- doubletFinder_v3(M_1_fil, PCs = 1:20, pN = 0.25, pK = 0.07, nExp = nExp_poi.adj_M1, reuse.pANN = "pANN_0.25_0.07_275", sct = FALSE)
+table(M_1_fil$DF.classifications_0.25_0.07_275)
+
+#M2 6000 cells recovered / 4.6% doublet rate
+sweep.res.M2 <- paramSweep_v3(M_2_fil, PCs = 1:20, sct = FALSE)
+sweep.stats_M2 <- summarizeSweep(sweep.res.M2, GT = FALSE)
+bcmvn_M2 <- find.pK(sweep.stats_M2) #highest pk = 0.12
+homotypic.prop_M2 <- modelHomotypic(M_2_fil$seurat_clusters)
+nExp_poi_M2 <- round(0.046*nrow(M_2_fil@meta.data))  #assuming 2.3% doublet formation rate 
+nExp_poi.adj_M2 <- round(nExp_poi_M2*(1-homotypic.prop_M2))
+M_2_fil <- doubletFinder_v3(M_2_fil, PCs = 1:20, pN = 0.25, pK = 0.23, nExp = nExp_poi_M2, reuse.pANN = FALSE, sct = FALSE)
+M_2_fil <- doubletFinder_v3(M_2_fil, PCs = 1:20, pN = 0.25, pK = 0.23, nExp = nExp_poi.adj_M2, reuse.pANN = "pANN_0.25_0.23_253", sct = FALSE)
+table(M_2_fil$DF.classifications_0.25_0.23_253)
+
+#tables and plots
+DimPlot(object = D_1_fil, group.by = 'DF.classifications_0.25_0.07_56')
+DimPlot(object = D_2_fil, group.by = 'DF.classifications_0.25_0.12_59')
+DimPlot(object = L_1_fil, group.by = 'DF.classifications_0.25_0.07_104')
+DimPlot(object = L_2_fil, group.by = 'DF.classifications_0.25_0.23_65')
+DimPlot(object = M_1_fil, group.by = 'DF.classifications_0.25_0.07_275')
+DimPlot(object = M_2_fil, group.by = 'DF.classifications_0.25_0.23_253')
+```
+
+```{r}
+Idents(D_1_fil) <- 'DF.classifications_0.25_0.07_56'
+D_1_fil_clean <- subset(x = D_1_fil,  ident = 'Singlet')
+table(Idents(D_1_fil_clean))
+
+Idents(D_2_fil) <- 'DF.classifications_0.25_0.12_59'
+D_2_fil_clean <- subset(x = D_2_fil,  ident = 'Singlet')
+table(Idents(D_2_fil_clean))
+
+Idents(L_1_fil) <- 'DF.classifications_0.25_0.07_104'
+L_1_fil_clean <- subset(x = L_1_fil,  ident = 'Singlet')
+table(Idents(L_1_fil_clean))
+
+Idents(L_2_fil) <- 'DF.classifications_0.25_0.23_65'
+L_2_fil_clean <- subset(x = L_2_fil,  ident = 'Singlet')
+table(Idents(L_2_fil_clean))
+
+Idents(M_1_fil) <- 'DF.classifications_0.25_0.07_275'
+M_1_fil_clean <- subset(x = M_1_fil,  ident = 'Singlet')
+table(Idents(M_1_fil_clean))
+
+Idents(M_2_fil) <- 'DF.classifications_0.25_0.23_253'
+M_2_fil_clean <- subset(x = M_2_fil,  ident = 'Singlet')
+table(Idents(M_2_fil_clean))
+```
+
+```{r}
+pallium_md <- merge(x = D_1_fil_clean, y = c(D_2_fil_clean, L_1_fil_clean, L_2_fil_clean, M_1_fil_clean, M_2_fil_clean))
+vln_qc <- VlnPlot(pallium_md, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T, group.by = 'sample')
+vln_qc
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/pallium/vln_qc.png", plot = vln_qc, device = "png", width = 10, height = 4)
+```
+
+Normalize, find variable features and scale data (using all genes)
+```{r}
+pallium_md <- NormalizeData(pallium_md)
+pallium_md <- FindVariableFeatures(pallium_md)
+pallium_md <- ScaleData(pallium_md, vars.to.regress = c("nCount_RNA", "nFeature_RNA"), features = rownames(pallium_md))
+```
+
+```{r}
+head(VariableFeatures(pallium_md), 50)
+```
+
+```{r}
+pallium_md <- RunPCA(pallium_md, features = VariableFeatures(object = pallium_md))
+```
+
+```{r}
+ElbowPlot(pallium_md, ndims = 30)
+```
+
+Find neighbors
+```{r}
+npcs = 20
+pallium_md <- FindNeighbors(pallium_md, dims = 1:npcs)
+```
+
+Use clustree to find stability of res for clustering
+```{r}
+# Set different resolutions 
+res.used <- seq(0.1,1,by=0.2)
+# Loop over and perform clustering of different resolutions 
+for(i in res.used){
+pallium_md <- FindClusters(pallium_md, resolution = i)}
+# Make Plot
+clus.tree.out <- clustree(pallium_md, layout="sugiyama") + theme(legend.position = "bottom") + scale_color_brewer(palette = "Set1") + scale_edge_color_continuous(low = "grey80", high = "red")
+
+clus.tree.out
+```
+
+Find clusters 
+```{r}
+res = 0.7
+pallium_md <- FindClusters(pallium_md, resolution = res)
+pallium_md <- RunUMAP(pallium_md, dims = 1:npcs)
+```
+
+```{r}
+pallium_md@meta.data$clus.og <- pallium_md@meta.data$seurat_clusters
+dim1 <- DimPlot(pallium_md, reduction = "umap", label = TRUE) + NoLegend()
+dim2 <- DimPlot(pallium_md, reduction = "umap", label = FALSE, group.by = "region", cols = c("#E7298A", "purple", "limegreen"))
+dim3 <- DimPlot(pallium_md, reduction = "umap", label = FALSE, group.by = "clus.og")
+
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/pallium/dimplot_cluster.png", plot = dim1, device = "png", width = 6, height = 4)
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/pallium/dimplot_region.png", plot = dim2, device = "png", width = 6, height = 4)
+
+dim1
+dim2
+dim3
+```
+
+```{r}
+clus_region_occ <- ggplot(pallium_md@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill") + theme_minimal() + scale_fill_manual(values=c("#E7298A", "purple", "limegreen"))
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/pallium/clus_region_occ.png", plot = clus_region_occ, device = "png", width = 6, height = 4)
+
+clus_region_occ
+```
+
+```{r}
+## remove the x-axis text and tick
+## plot.margin to adjust the white space between each plot.
+## ... pass any arguments to VlnPlot in Seurat
+modify_vlnplot<- function(obj,
+feature,
+pt.size = 0,
+plot.margin = margin(0, 0, 0, 0, "cm"),
+...) {
+p<- VlnPlot(obj, features = feature, pt.size = pt.size, ... )+
+ylab(feature) +
+theme(legend.position = "none",
+plot.title= element_blank(),
+axis.title.x = element_blank(),
+axis.text.x = element_blank(),
+axis.ticks.x = element_blank(),
+axis.title.y = element_text(size = rel(1), angle = 0),
+axis.text.y = element_text(size = rel(1)),
+plot.margin = plot.margin )
+return(p)
+}
+
+## extract the max value of the y axis
+extract_max<- function(p){
+  ymax<- max(ggplot_build(p)$layout$panel_scales_y[[1]]$range$range)
+  return(ceiling(ymax))
+}
+
+
+## main function
+StackedVlnPlot<- function(obj, features,
+                          pt.size = 0, 
+                          plot.margin = unit(c(-0.75, 0, -0.75, 0), "cm"),
+                          ...) {
+  
+  plot_list<- purrr::map(features, function(x) modify_vlnplot(obj = obj,feature = x, ...))
+  
+  # Add back x-axis title to bottom plot. patchwork is going to support this?
+  plot_list[[length(plot_list)]]<- plot_list[[length(plot_list)]] +
+    theme(axis.text.x=element_text(), axis.ticks.x = element_line())
+  
+  # change the y-axis tick to only max value 
+  ymaxs<- purrr::map_dbl(plot_list, extract_max)
+  plot_list<- purrr::map2(plot_list, ymaxs, function(x,y) x + 
+                            scale_y_continuous(breaks = c(y)) + 
+                            expand_limits(y = y))
+
+  p<- patchwork::wrap_plots(plotlist = plot_list, ncol = 1)
+  return(p)
+}
+```
+
+```{r}
+features <- c("MAP2", "SNAP25", "GAD1", "SLC17A6",  "EOMES", "RORB", "GLI2", "FAT4", "AQP4", "TOP2A", "MEX3A", "PDGFRA", "CSF1R", "APOE", "HSPG2", "MYLK")
+stackedmarkers <- StackedVlnPlot(obj = pallium_md, features = features)
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/pallium/stacked_goi.png", plot = stackedmarkers, device = "png", width = 6, height = 4)
+
+stackedmarkers
+```
+
+```{r}
+DotPlot(pallium_md, features = c("MAP2", "SNAP25", "GAD1", "SLC17A6",  "EOMES", "RORB", "GLI2", "FAT4", "AQP4", "TOP2A", "MEX3A", "PDGFRA", "CSF1R", "APOE", "HSPG2", "MYLK")) + RotatedAxis()
+```
+
+```{r}
+# stash current cluster IDs
+pallium_md[["cluster.ids"]] <- Idents(object = pallium_md)
+# enumerate current cluster IDs and the labels for them
+cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,22,23,24,25,26,27,28,29)
+class <- c("neuronal", "neuronal", "neuronal", "ependymoglial", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "ependymoglial", "neuronal", "neuronal", "neuronal", "neuronal", "ependymoglial", "endothelial", "neuronal", "microglia","oligodendrocyte")
+pallium_md@meta.data[,'class'] <- plyr::mapvalues(x = pallium_md@meta.data$cluster.ids, from = cluster.ids, to = class)
+
+classdimplot <- DimPlot(pallium_md, pt.size = 0.5, label = FALSE, order = F, group.by = 'class')
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/pallium/dimplot_class_ano.png", plot = classdimplot, device = "png", width = 6, height = 4)
+
+classdimplot
+```
+
+```{r}
+table(pallium_md$class)
+```
+
+```{r}
+saveRDS(object = pallium_md, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/pallium/pallium_md_fil_nodups_anno.RDS")
+```
+

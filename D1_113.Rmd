@@ -1,0 +1,367 @@
+---
+title: "113_D1"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(cowplot)
+library(devtools)
+```
+
+
+```{r}
+topdir = "/local1/USERS/tomasgomes/axolotl/mapping/spatial_pallium/113D/" # source dir
+exp = Matrix::readMM(paste0(topdir, "output.sort_em.mtx")) #read matrix
+exp = round(exp, 0) # make into interger (round)
+bc = read.csv(paste0(topdir, "output.sort_em.barcodes.txt"), header = F, stringsAsFactors = F) # spot barcodes
+g = read.csv(paste0(topdir, "output.sort_em.genes.txt"), header = F, stringsAsFactors = F) # genes
+dimnames(exp) = list(paste0(bc$V1,"-1"),g$V1) # need to add that number because of the seurat format for barcodes
+```
+
+```{r}
+D1_113 <- CreateSeuratObject(counts = Matrix::t(exp), assay = "Spatial") # create object
+image <- Read10X_Image(image.dir = "/links/groups/treutlein/DATA/sequencing/20210212_P1441_ASHLEY_VISIUM_visium_52min_axolotl_brain/spaceranger/113D/files/", filter.matrix = FALSE) # read in the images
+image <- image[Cells(x = D1_113)] # filter image by the spots
+
+DefaultAssay(object = image) <- "Spatial" # set default assay
+D1_113[["slice2"]] <- image # slice name might be changed
+```
+
+```{r}
+# pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20201011_visium_brainpallium/analysis/113_B1/C1_unfiltered_reads.pdf")
+SpatialFeaturePlot(D1_113, features = "nCount_Spatial", max.cutoff = 20000) + theme(legend.position = "right")
+# dev.off()
+```
+
+Filter out spots that do not cover tissue
+```{r}
+detected_tissue <- as.data.frame(D1_113@images$slice2@coordinates)
+D1_113@meta.data <- cbind(D1_113@meta.data, detected_tissue)
+
+SpatialDimPlot(D1_113, cells.highlight = WhichCells(D1_113, expression = tissue < 1))
+
+cells_drop <- WhichCells(D1_113, expression = tissue < 1)
+all_cells_todrop <- rownames(D1_113@meta.data)[which(rownames(D1_113@meta.data) %in% c(cells_drop))]
+
+SpatialDimPlot(D1_113, cells.highlight = all_cells_todrop, pt.size.factor = 1, stroke = .5)
+
+cells_to_keep <- rownames(D1_113@meta.data)[!rownames(D1_113@meta.data) %in% all_cells_todrop]
+
+D1_113_sub <- subset(D1_113, cells = cells_to_keep)
+
+# png(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20201011_visium_brainpallium/analysis/113_B1/C1_filtered_reads.png", width = 10, height = 10, units = "in", res = 300)
+SpatialFeaturePlot(D1_113_sub, features = "nCount_Spatial", pt.size.factor = 1.5, stroke = .5) + theme(legend.position = "right")
+# dev.off()
+SpatialFeaturePlot(D1_113_sub, features = "nFeature_Spatial", pt.size.factor = 1.5, stroke = .5)
+
+SpatialDimPlot(D1_113_sub) + theme(axis.text = element_text(), axis.line = element_line())
+
+D1_113_sub@images$slice2@coordinates
+
+#find slice a and b
+SpatialDimPlot(D1_113_sub, cells.highlight = WhichCells(D1_113_sub, expression = imagecol < 12000))
+
+D1_113_sub_a <- subset(D1_113_sub, imagecol < 12000)
+D1_113_sub_b <- subset(D1_113_sub, imagecol > 12000)
+
+p1_a <- SpatialDimPlot(D1_113_sub_a)
+p1_b <- SpatialDimPlot(D1_113_sub_b)
+
+ggsave(plot = p1_a, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113/D1_a_spots.png", device = "png")
+
+ggsave(plot = p1_b, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113/D1_b_spots.png", device = "png")
+
+p1_a
+p1_b
+```
+
+```{r}
+saveRDS(D1_113_sub_a, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113_sub_a.RDS")
+saveRDS(D1_113_sub_b, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113_sub_b.RDS")
+```
+
+SCTransform normalize
+```{r}
+D1_113_sub_a <- SCTransform(D1_113_sub_a, assay = "Spatial", verbose = FALSE, return.only.var.genes = FALSE, )
+```
+
+```{r}
+D1_113_sub_a <- FindVariableFeatures(D1_113_sub_a, selection.method = "vst", nfeatures = 4000)
+```
+
+Dimensionality reduction, clustering, and visualization
+```{r}
+D1_113_sub_a <- RunPCA(D1_113_sub_a, assay = "SCT", features = VariableFeatures(object = D1_113_sub_a), verbose = FALSE)
+ElbowPlot(D1_113_sub_a)
+```
+
+```{r}
+dims = 1:6
+D1_113_sub_a <- FindNeighbors(D1_113_sub_a, reduction = "pca", dims = dims)
+```
+
+Find best resolution for clustering
+```{r}
+D1_113_sub_a <- FindClusters(object = D1_113_sub_a, verbose = T, resolution = 0.1)
+D1_113_sub_a <- FindClusters(object = D1_113_sub_a, verbose = T, resolution = 0.3)
+D1_113_sub_a <- FindClusters(object = D1_113_sub_a, verbose = T, resolution = 0.5)
+D1_113_sub_a <- FindClusters(object = D1_113_sub_a, verbose = T, resolution = 0.7)
+# Make plot 
+clus.tree.out <- clustree(D1_113_sub_a) +
+    theme(legend.position = "top") + 
+    scale_color_brewer(palette = "Set1") +
+    scale_edge_color_continuous(low = "grey80", high = "red")
+clus.tree.out
+```
+
+Find clusters and run UMAP
+```{r}
+res <- 0.5
+D1_113_sub_a <- FindClusters(D1_113_sub_a, verbose = FALSE, resolution = res)
+D1_113_sub_a <- RunUMAP(D1_113_sub_a, reduction = "pca", dims = dims)
+```
+
+plot clusters
+```{r}
+p1 <- DimPlot(D1_113_sub_a, reduction = "umap", label = TRUE, pt.size = 2)
+p2 <- SpatialDimPlot(D1_113_sub_a, label = FALSE, pt.size.factor = 3, stroke = 0.5)
+p1_2 <- plot_grid(p1, p2)
+p1_2
+plot_dir <- "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113/" # plot dir
+ggsave(p1_2, filename = paste0(plot_dir, "113_D1_clustering.png"), height = 10, width = 20, units = "in", dpi = 300)
+```
+
+plot nfeatures and ncounts
+```{r}
+plot3 <- VlnPlot(D1_113_sub_a, features = "nCount_SCT", pt.size = 0.1) + NoLegend()
+plot4 <- SpatialFeaturePlot(D1_113_sub_a, features = "nCount_SCT", pt.size.factor = 4, stroke = 0.5) + theme(legend.position = "right")
+plot5 <- VlnPlot(D1_113_sub_a, features = "nFeature_SCT", pt.size = 0.1) + NoLegend()
+plot6 <- SpatialFeaturePlot(D1_113_sub_a, features = "nFeature_SCT", pt.size.factor = 4, stroke = 0.5) + theme(legend.position = "right")
+summary(D1_113_sub_a$nCount_SCT)
+summary(D1_113_sub_a$nFeature_SCT)
+SCT_counts <- plot_grid(plot5, plot6, plot3, plot4)
+SCT_counts
+ggsave(SCT_counts, filename = paste0(plot_dir, "113_D1_clustering_SCT_Counts_Features.png"), height = 10, width = 20, units = "in", dpi = 300)
+```
+
+Plot each cluster location on image
+```{r}
+clus_loc <- SpatialDimPlot(D1_113_sub_a, cells.highlight = CellsByIdentities(object = D1_113_sub_a, idents = c(0:8)), facet.highlight = TRUE, ncol = 4, pt.size.factor = 3)
+clus_loc
+ggsave(clus_loc, filename = paste0(plot_dir, "113_D1_clustering_highlight.png"), height = 10, width = 10, units = "in", dpi = 300)
+```
+
+```{r}
+table(D1_113_sub_a$seurat_clusters)
+```
+
+
+```{r}
+SpatialFeaturePlot(D1_113_sub_a, features = c("ETV1", "GAD1", "SLC17A6", "SATB1", "CALB2", "TOP2A", "FOXP2", "NEUROD6"), pt.size.factor = 3.5, stroke = 0.5, ncol = 4)
+```
+
+```{r}
+D1_113_sub_a <- FindSpatiallyVariableFeatures(D1_113_sub_a, assay = "SCT", features = VariableFeatures(D1_113_sub_a)[1:1000], selection.method = "markvariogram")
+
+D1_113_sub_a_spatiallyvarfeatures <- SpatiallyVariableFeatures(D1_113_sub_a, selection.method = "markvariogram")
+
+top.features <- head(SpatiallyVariableFeatures(D1_113_sub_a, selection.method = "markvariogram"), 6)
+SpatialFeaturePlot(D1_113_sub_a, features = D1_113_sub_a_spatiallyvarfeatures[1:20], ncol = 10, alpha = c(0.1, 1), pt.size.factor = 4)
+```
+
+
+```{r}
+D1_a_de_markers <- FindAllMarkers(D1_113_sub_a, only.pos = TRUE)
+D1_a_de_markers %>% group_by(cluster) %>% top_n(20, avg_logFC)
+D1_a_de_markers %>% group_by(cluster) %>% top_n(20, (pct.1-pct.2))
+write.csv(x = D1_a_de_markers, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113/113_D1_de_markers.csv")
+```
+
+```{r}
+top5 <- D1_a_de_markers %>% group_by(cluster) %>% top_n(5, (avg_logFC))
+topdiff <- D1_a_de_markers %>% group_by(cluster) %>% top_n(5, (pct.1-pct.2))
+pct1_all <- DotPlot(object = D1_113_sub_a, features = c(unique(top5$gene))) + theme(axis.text.x = element_text(angle = 90, hjust=1)) + ggtitle("top 5 (pct1 - all)")
+
+pct1_diff <- DotPlot(object = D1_113_sub_a, features = c(unique(topdiff$gene))) + theme(axis.text.x = element_text(angle = 90, hjust=1)) + ggtitle("top 5 (pct1 - all)")
+
+pct1_all
+pct1_diff
+
+ggsave(pct1_all, filename = paste0(plot_dir, "113_D1_pct1_all_Dotplot.png"), height = 10, width = 10, units = "in", dpi = 300)
+ggsave(pct1_diff, filename = paste0(plot_dir, "113_D1_pct1_diff_Dotplot.png"), height = 10, width = 10, units = "in", dpi = 300)
+```
+
+
+
+SCTransform normalize
+```{r}
+D1_113_sub_b <- SCTransform(D1_113_sub_b, assay = "Spatial", verbose = FALSE, return.only.var.genes = FALSE, )
+```
+
+```{r}
+D1_113_sub_b <- FindVariableFeatures(D1_113_sub_b, selection.method = "vst", nfeatures = 4000)
+```
+
+Dimensionality reduction, clustering, and visualization
+```{r}
+D1_113_sub_b <- RunPCA(D1_113_sub_b, assay = "SCT", features = VariableFeatures(object = D1_113_sub_b), verbose = FALSE)
+ElbowPlot(D1_113_sub_b)
+```
+
+```{r}
+dims = 1:6
+D1_113_sub_b <- FindNeighbors(D1_113_sub_b, reduction = "pca", dims = dims)
+```
+
+Find best resolution for clustering
+```{r}
+D1_113_sub_b <- FindClusters(object = D1_113_sub_b, verbose = T, resolution = 0.1)
+D1_113_sub_b <- FindClusters(object = D1_113_sub_b, verbose = T, resolution = 0.3)
+D1_113_sub_b <- FindClusters(object = D1_113_sub_b, verbose = T, resolution = 0.5)
+D1_113_sub_b <- FindClusters(object = D1_113_sub_b, verbose = T, resolution = 0.7)
+# Make plot 
+clus.tree.out <- clustree(D1_113_sub_b) +
+    theme(legend.position = "top") + 
+    scale_color_brewer(palette = "Set1") +
+    scale_edge_color_continuous(low = "grey80", high = "red")
+clus.tree.out
+```
+
+Find clusters and run UMAP
+```{r}
+res <- 0.7
+D1_113_sub_b <- FindClusters(D1_113_sub_b, verbose = FALSE, resolution = res)
+D1_113_sub_b <- RunUMAP(D1_113_sub_b, reduction = "pca", dims = dims)
+```
+
+plot clusters
+```{r}
+p1 <- DimPlot(D1_113_sub_b, reduction = "umap", label = TRUE, pt.size = 2)
+p2 <- SpatialDimPlot(D1_113_sub_b, label = FALSE, pt.size.factor = 3, stroke = 0.5)
+p1_2 <- plot_grid(p1, p2)
+p1_2
+# plot_dir <- "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113/" # plot dir
+ggsave(p1_2, filename = paste0(plot_dir, "113_D1_sub_b_clustering.png"), height = 10, width = 20, units = "in", dpi = 300)
+```
+
+plot nfeatures and ncounts
+```{r}
+plot3 <- VlnPlot(D1_113_sub_b, features = "nCount_SCT", pt.size = 0.1) + NoLegend()
+plot4 <- SpatialFeaturePlot(D1_113_sub_b, features = "nCount_SCT", pt.size.factor = 4, stroke = 0.5) + theme(legend.position = "right")
+plot5 <- VlnPlot(D1_113_sub_b, features = "nFeature_SCT", pt.size = 0.1) + NoLegend()
+plot6 <- SpatialFeaturePlot(D1_113_sub_b, features = "nFeature_SCT", pt.size.factor = 4, stroke = 0.5) + theme(legend.position = "right")
+summary(D1_113_sub_b$nCount_SCT)
+summary(D1_113_sub_b$nFeature_SCT)
+SCT_counts <- plot_grid(plot5, plot6, plot3, plot4)
+SCT_counts
+ggsave(SCT_counts, filename = paste0(plot_dir, "113_D1_sub_b_clustering_SCT_Counts_Features.png"), height = 10, width = 20, units = "in", dpi = 300)
+```
+
+Plot each cluster location on image
+```{r}
+clus_loc <- SpatialDimPlot(D1_113_sub_b, cells.highlight = CellsByIdentities(object = D1_113_sub_b, idents = c(0:8)), facet.highlight = TRUE, ncol = 4, pt.size.factor = 3)
+clus_loc
+ggsave(clus_loc, filename = paste0(plot_dir, "113_D1_sub_b_clustering_highlight.png"), height = 10, width = 10, units = "in", dpi = 300)
+```
+
+```{r}
+table(D1_113_sub_b$seurat_clusters)
+```
+
+```{r}
+SpatialFeaturePlot(D1_113_sub_b, features = c("ETV1", "GAD1", "SLC17A6", "SATB1", "CALB2", "TOP2A", "FOXP2", "NEUROD6"), pt.size.factor = 3.5, stroke = 0.5, ncol = 4)
+```
+
+```{r}
+D1_113_sub_b <- FindSpatiallyVariableFeatures(D1_113_sub_b, assay = "SCT", features = VariableFeatures(D1_113_sub_b)[1:1000], selection.method = "markvariogram")
+
+D1_113_sub_b_spatiallyvarfeatures <- SpatiallyVariableFeatures(D1_113_sub_b, selection.method = "markvariogram")
+
+SpatialFeaturePlot(D1_113_sub_b, features = D1_113_sub_b_spatiallyvarfeatures[1:20], ncol = 10, alpha = c(0.1, 1), pt.size.factor = 4)
+```
+
+
+```{r}
+D1_b_de_markers <- FindAllMarkers(D1_113_sub_b, only.pos = TRUE)
+D1_b_de_markers %>% group_by(cluster) %>% top_n(20, avg_logFC)
+D1_b_de_markers %>% group_by(cluster) %>% top_n(20, (pct.1-pct.2))
+write.csv(x = D1_b_de_markers, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113/113_D1_sub_b_de_markers.csv")
+```
+
+```{r}
+top5 <- D1_b_de_markers %>% group_by(cluster) %>% top_n(5, (avg_logFC))
+topdiff <- D1_b_de_markers %>% group_by(cluster) %>% top_n(5, (pct.1-pct.2))
+pct1_all <- DotPlot(object = D1_113_sub_b, features = c(unique(top5$gene))) + theme(axis.text.x = element_text(angle = 90, hjust=1)) + ggtitle("top 5 (pct1 - all)")
+
+pct1_diff <- DotPlot(object = D1_113_sub_b, features = c(unique(topdiff$gene))) + theme(axis.text.x = element_text(angle = 90, hjust=1)) + ggtitle("top 5 (pct1 - all)")
+
+pct1_all
+pct1_diff
+
+ggsave(pct1_all, filename = paste0(plot_dir, "113_D1_sub_b_pct1_all_Dotplot.png"), height = 10, width = 10, units = "in", dpi = 300)
+ggsave(pct1_diff, filename = paste0(plot_dir, "113_D1_sub_b_pct1_diff_Dotplot.png"), height = 10, width = 10, units = "in", dpi = 300)
+```
+
+```{r}
+summary(D1_113_sub_a$nCount_Spatial)
+summary(D1_113_sub_b$nCount_Spatial)
+```
+
+```{r}
+goi_plot1 <- SpatialFeaturePlot(D1_113_sub_a, features = c("FOXP1","FOXP2", "CALB2", "ISL1", "MEF2C", "LMO3", "PAX6", "PROX1", "GABARAPL2", "GABARAP", "BCL11B", "ETV1", "TLE1", "AQP4", "GFAP"), ncol = 6, pt.size.factor = 4, stroke = 0.5)
+goi_plot2 <- SpatialFeaturePlot(D1_113_sub_b, features = c("FOXP1","FOXP2", "CALB2", "ISL1", "MEF2C", "LMO3", "PAX6", "PROX1", "GABARAPL2", "GABARAP", "BCL11B", "ETV1", "TLE1", "AQP4", "GFAP"), ncol = 6, pt.size.factor = 4, stroke = 0.5)
+goi_plot1
+goi_plot2
+
+ggsave(goi_plot1, filename = paste0(plot_dir, "113_D1_sub_a_GOI_Featureplot.png"), height = 10, width = 10, units = "in", dpi = 300)
+ggsave(goi_plot2, filename = paste0(plot_dir, "113_D1_sub_b_GOI_Featureplot.png"), height = 10, width = 10, units = "in", dpi = 300)
+```
+
+
+```{r}
+saveRDS(D1_113_sub_a, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113_sub_a_processed.RDS")
+saveRDS(D1_113_sub_b, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113_sub_b_processed.RDS")
+D1_113_sub_b <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113_sub_b_processed.RDS")
+```
+
+
+```{r}
+D1_113_sub_b <- AddModuleScore(D1_113_sub_b, features = list(c("RORB","SATB1", "TBR1", "GRIK1")), name = 'clus1_score')
+SpatialFeaturePlot(D1_113_sub_b, features = c("RORB","SATB1", "TBR1", "GRIK1", "RELN"), pt.size.factor = 4)
+SpatialFeaturePlot(D1_113_sub_b, features = "clus1_score1", pt.size.factor = 3)
+```
+
+
+```{r}
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113_sub_b_qc_count.pdf")
+plot1 <- VlnPlot(D1_113_sub_b, features = "nCount_Spatial", pt.size = 0, group.by = 'orig.ident') + NoLegend() + geom_boxplot(width=0.1,fill="white")
+plot2 <- SpatialFeaturePlot(D1_113_sub_b, features = "nCount_Spatial", pt.size.factor = 3) + theme(legend.position = "right")
+wrap_plots(plot1, plot2)
+dev.off()
+
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/experiments/20210201_axolotl_brain_52/data_processing/D1_113_sub_b_qc_feat.pdf")
+plot3 <- VlnPlot(D1_113_sub_b, features = "nFeature_Spatial", pt.size = 0, group.by = 'orig.ident') + NoLegend() + geom_boxplot(width=0.1,fill="white")
+plot4 <- SpatialFeaturePlot(D1_113_sub_b, features = "nFeature_Spatial", pt.size.factor = 3) + theme(legend.position = "right")
+wrap_plots(plot3, plot4)
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+

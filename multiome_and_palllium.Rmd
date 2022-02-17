@@ -1,0 +1,2647 @@
+---
+title: "multiome gene expression"
+output: html_notebook
+---
+
+```{r}
+# library(SeuratObject)
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(cowplot)
+library(clustree)
+library(presto)
+library(harmony)
+library(cowplot)
+library(ggdendro)
+library(reshape2)
+library(pheatmap)
+library(viridis)
+library(ComplexHeatmap)
+```
+
+Read data
+```{r}
+multi1.1 <- readRDS(file = '/links/groups/treutlein/USERS/tomasgomes/data/axolotl/a1_1_GEX/a1_1_GEX_srat.RDS')
+multi1.1$sample <- "animal1"
+multi1.1$chem <- 'multiome'
+multi1.2 <- readRDS(file = '/links/groups/treutlein/USERS/tomasgomes/data/axolotl/a1_2_GEX/a1_2_GEX_srat.RDS')
+multi1.2$sample <- "animal1"
+multi1.2$chem <- 'multiome'
+
+multi3.1 <- readRDS(file = '/links/groups/treutlein/USERS/tomasgomes/data/axolotl/a3_1_GEX/a3_1_GEX_srat.RDS')
+multi3.1$sample <- "animal3"
+multi3.1$chem <- 'multiome'
+multi3.2 <- readRDS(file = '/links/groups/treutlein/USERS/Ashley/a3_2_GEX_srat.RDS')
+multi3.2$sample <- "animal3"
+multi3.2$chem <- 'multiome'
+
+md_combine_fil <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/pallium/pallium_md_fil_nodups_anno.RDS")
+md_combine_fil$chem <- 'v3.1'
+```
+
+Filter data for "true" cells, nFeatures, and high percent mito.
+```{r}
+table(multi1.1$iscell_dd)
+multi1.1_fil <- subset(multi1.1, subset = iscell_dd == TRUE & nFeature_RNA > 200 & percent.mt < 40)
+VlnPlot(multi1.1_fil, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T)
+multi1.1_fil
+
+table(multi1.2$iscell_dd)
+multi1.2_fil <- subset(multi1.2, subset = iscell_dd == TRUE & nFeature_RNA > 200 & percent.mt < 40)
+VlnPlot(multi1.2_fil, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T)
+multi1.2_fil
+
+table(multi3.1$iscell_dd)
+multi3.1_fil <- subset(multi3.1, subset = iscell_dd == TRUE & nFeature_RNA > 200 & percent.mt < 40)
+VlnPlot(multi3.1_fil, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T)
+multi3.1_fil
+
+table(multi3.2$iscell_dd)
+multi3.2_fil <- subset(multi3.2, subset = iscell_dd == TRUE & nFeature_RNA > 200 & percent.mt < 40)
+VlnPlot(multi3.2_fil, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, log = T)
+multi3.2_fil
+```
+
+Initial processing of individual samples (multiome alone, as the pallium_md data has already been pre-processed)
+```{r}
+multi1.1_fil <- multi1.1_fil %>% 
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(dims = 1:20) %>% 
+    FindNeighbors(dims = 1:20) %>% 
+    FindClusters(resolution = 0.7) %>% 
+    identity()
+
+multi1.2_fil <- multi1.2_fil %>% 
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(dims = 1:20) %>% 
+    FindNeighbors(dims = 1:20) %>% 
+    FindClusters(resolution = 0.7) %>% 
+    identity()
+
+multi3.1_fil <- multi3.1_fil %>% 
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(dims = 1:20) %>% 
+    FindNeighbors(dims = 1:20) %>% 
+    FindClusters(resolution = 0.7) %>% 
+    identity()
+
+multi3.2_fil <- multi3.2_fil %>% 
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(dims = 1:20) %>% 
+    FindNeighbors(dims = 1:20) %>% 
+    FindClusters(resolution = 0.7) %>% 
+    identity()
+```
+
+Filter out doublets
+```{r}
+#~7000 cells recovered / 5.4% doublet rate
+sweep.res.M1 <- paramSweep_v3(multi1.1_fil, PCs = 1:20, sct = FALSE)
+sweep.stats_M1 <- summarizeSweep(sweep.res.M1, GT = FALSE)
+bcmvn_M1 <- find.pK(sweep.stats_M1) #highest pk = 0.29
+homotypic.prop_M1 <- modelHomotypic(multi1.1_fil$seurat_clusters)
+nExp_poi_M1 <- round(0.054*nrow(multi1.1_fil@meta.data))  #assuming 5.4% doublet formation rate 
+nExp_poi.adj_M1 <- round(nExp_poi_M1*(1-homotypic.prop_M1))
+multi1.1_fil <- doubletFinder_v3(multi1.1_fil, PCs = 1:20, pN = 0.25, pK = 0.29, nExp = nExp_poi_M1, reuse.pANN = FALSE, sct = FALSE)
+table(multi1.1_fil$DF.classifications_0.25_0.29_353)
+
+#~8000 cells recovered / 6.1% doublet rate
+sweep.res.m2 <- paramSweep_v3(multi1.2_fil, PCs = 1:20, sct = FALSE)
+sweep.stats_m2 <- summarizeSweep(sweep.res.m2, GT = FALSE)
+bcmvn_m2 <- find.pK(sweep.stats_m2) #highest pk = 0.28
+homotypic.prop_m2 <- modelHomotypic(multi1.2_fil$seurat_clusters)
+nExp_poi_m2 <- round(0.061*nrow(multi1.2_fil@meta.data))  #assuming 6.1% doublet formation rate 
+nExp_poi.adj_m2 <- round(nExp_poi_m2*(1-homotypic.prop_m2))
+multi1.2_fil <- doubletFinder_v3(multi1.2_fil, PCs = 1:20, pN = 0.25, pK = 0.28, nExp = nExp_poi_m2, reuse.pANN = FALSE, sct = FALSE)
+table(multi1.2_fil$DF.classifications_0.25_0.28_479)
+
+#~6000 cells recovered / 4.6% doublet rate
+sweep.res.m3 <- paramSweep_v3(multi3.1_fil, PCs = 1:20, sct = FALSE)
+sweep.stats_m3 <- summarizeSweep(sweep.res.m3, GT = FALSE)
+bcmvn_m3 <- find.pK(sweep.stats_m3) #highest pk = 0.24
+homotypic.prop_m3 <- modelHomotypic(multi3.1_fil$seurat_clusters)
+nExp_poi_m3 <- round(0.046*nrow(multi3.1_fil@meta.data))  #assuming 4.6% doublet formation rate 
+nExp_poi.adj_m3 <- round(nExp_poi_m3*(1-homotypic.prop_m3))
+multi3.1_fil <- doubletFinder_v3(multi3.1_fil, PCs = 1:20, pN = 0.25, pK = 0.24, nExp = nExp_poi_m3, reuse.pANN = FALSE, sct = FALSE)
+table(multi3.1_fil$DF.classifications_0.25_0.24_274)
+
+#~8000 cells recovered / 6.1% doublet rate
+sweep.res.m4 <- paramSweep_v3(multi3.2_fil, PCs = 1:20, sct = FALSE)
+sweep.stats_m4 <- summarizeSweep(sweep.res.m4, GT = FALSE)
+bcmvn_m4 <- find.pK(sweep.stats_m4) #highest pk = 0.21
+homotypic.prop_m4 <- modelHomotypic(multi3.2_fil$seurat_clusters)
+nExp_poi_m4 <- round(0.061*nrow(multi3.2_fil@meta.data))  #assuming 6.1% doublet formation rate 
+nExp_poi.adj_m4 <- round(nExp_poi_m4*(1-homotypic.prop_m4))
+multi3.2_fil <- doubletFinder_v3(multi3.2_fil, PCs = 1:20, pN = 0.25, pK = 0.21, nExp = nExp_poi_m4, reuse.pANN = FALSE, sct = FALSE)
+table(multi3.2_fil$DF.classifications_0.25_0.21_457)
+```
+
+Set Idents to Singlet
+```{r}
+Idents(multi1.1_fil) <- 'DF.classifications_0.25_0.29_353'
+multi1.1_fil_clean <- subset(x = multi1.1_fil,  ident = 'Singlet')
+table(Idents(multi1.1_fil_clean))
+
+Idents(multi1.2_fil) <- 'DF.classifications_0.25_0.28_479'
+multi1.2_fil_clean <- subset(x = multi1.2_fil,  ident = 'Singlet')
+table(Idents(multi1.2_fil_clean))
+
+Idents(multi3.1_fil) <- 'DF.classifications_0.25_0.24_274'
+multi3.1_fil_clean <- subset(x = multi3.1_fil,  ident = 'Singlet')
+table(Idents(multi3.1_fil_clean))
+
+Idents(multi3.2_fil) <- 'DF.classifications_0.25_0.21_457'
+multi3.2_fil_clean <- subset(x = multi3.2_fil,  ident = 'Singlet')
+table(Idents(multi3.2_fil_clean))
+```
+
+```{r}
+multi_combine <- merge(multi1.1_fil_clean, y = c(multi1.2_fil_clean, multi3.1_fil_clean, multi3.2_fil_clean, md_combine_fil))
+
+postfil_main_vln_qc <- VlnPlot(multi_combine, features = c("percent.mt", "nCount_RNA", "nFeature_RNA"), pt.size = 0, group.by = "chem", cols = c("turquoise4", "gray"))
+
+ggsave(plot = postfil_main_vln_qc, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/postfil_main_vln_qc_chem.png", device = "png", width = 6, height = 4)
+
+postfil_main_vln_sample_qc <- VlnPlot(multi_combine, features = c("percent.mt", "nCount_RNA", "nFeature_RNA"), pt.size = 0, group.by = "sample", cols = c("turquoise4","turquoise4", "gray", "gray", "gray", "gray", "gray", "gray"))
+ggsave(plot = postfil_main_vln_sample_qc, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/postfil_main_vln_sample_qc.png", device = "png", width = 6, height = 4)
+
+postfil_main_vln_qc
+postfil_main_vln_sample_qc
+```
+
+# ```{r}
+# saveRDS(object = multi_combine, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/all_nuclei_precluster.RDS")
+# ```
+
+```{r}
+table(multi_combine$chem)
+```
+
+Normalize, find variable features and scale data (highly var. genes)
+```{r}
+multi_combine <- NormalizeData(multi_combine)
+multi_combine <- FindVariableFeatures(multi_combine, nfeatures = 10000)
+multi_combine <- ScaleData(multi_combine, vars.to.regress = c("nCount_RNA", "percent.mt"))
+```
+
+Plot highly variable genes (found by 'vst' method)
+```{r}
+VariableFeaturePlot(object = multi_combine)
+```
+
+Run PCA
+```{r}
+multi_combine <- RunPCA(multi_combine, features = VariableFeatures(object = multi_combine))
+```
+
+Plot chemistry and genes of interest on PCA 1 vs 2
+```{r}
+main_pc_chem <- DimPlot(object = multi_combine, reduction = 'pca', group.by = 'chem', cols = c("turquoise4", "gray"))
+main_pc <- FeaturePlot(object = multi_combine, reduction = 'pca', features = c('PTPRC', 'PDGFRA', 'COL4A2', 'GLI2'))
+main_pc1 <- FeaturePlot(object = multi_combine, reduction = 'pca', features = c('SLC17A6', 'GAD1'))
+
+ggsave(plot = main_pc_chem, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_pc_chem.png", device = "png", width = 6, height = 4)
+ggsave(plot = main_pc, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_pc.png", device = "png", width = 6, height = 4)
+ggsave(plot = main_pc1, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_pc1.png", device = "png", width = 6, height = 4)
+
+main_pc_chem
+main_pc
+main_pc1
+```
+
+Run harmony to correct for chemistry
+```{r}
+library(harmony)
+multi_combine <- RunHarmony(multi_combine, "chem")
+```
+
+Identify the highest contributing PCs
+```{r}
+ElbowPlot(multi_combine, ndims = 50)
+```
+
+```{r}
+npcs = 30
+multi_combine <- FindNeighbors(multi_combine, dims = 1:npcs, reduction = 'harmony')
+```
+
+Use clustree to find stability of res for clustering
+```{r}
+# Set different resolutions 
+res.used <- seq(0.1,1,by=0.2)
+# Loop over and perform clustering of different resolutions 
+for(i in res.used){
+multi_combine <- FindClusters(multi_combine, resolution = i)}
+# Make Plot
+clustree(multi_combine, layout="sugiyama") + theme(legend.position = "bottom") + scale_color_brewer(palette = "Set1") + scale_edge_color_continuous(low = "grey80", high = "red")
+```
+
+Find clusters 
+```{r}
+res = 0.7
+multi_combine <- FindClusters(multi_combine, resolution = res)
+multi_combine <- RunUMAP(multi_combine, reduction = 'harmony', dims = 1:npcs, reduction.name = 'umap_harmony')
+```
+
+Make UMAPs
+```{r}
+dimplot_main_clus <- DimPlot(multi_combine, reduction = "umap_harmony", label = T, group.by = 'seurat_clusters') + NoLegend()
+dimplot_main_sample <- DimPlot(multi_combine, reduction = "umap_harmony", label = F, group.by = 'sample')
+dimplot_main_chem <- DimPlot(multi_combine, reduction = "umap_harmony", label = F, group.by = 'sample', cols = c("turquoise4", "turquoise3", "gray", "gray", "gray", "gray", "gray", "gray"), shuffle = T)
+
+ggsave(plot = dimplot_main_clus, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/dimplot_main_clus.png", device = "png", width = 6, height = 4)
+ggsave(plot = dimplot_main_sample, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/dimplot_main_sample.png", device = "png", width = 6, height = 4)
+ggsave(plot = dimplot_main_chem, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/dimplot_main_chem.png", device = "png", width = 6, height = 4)
+
+dimplot_main_clus
+dimplot_main_sample
+dimplot_main_chem
+```
+
+
+```{r}
+RP_genes <- c(rownames(multi_combine)[grep(rownames(multi_combine), pattern = "^RPS")], rownames(multi_combine)[grep(rownames(multi_combine), pattern = "^RPL")])
+percent.rp <- Matrix::colSums(multi_combine@assays$RNA@counts[RP_genes, ])/Matrix::colSums(multi_combine@assays$RNA@counts)
+multi_combine <- AddMetaData(object = multi_combine, metadata = percent.rp, col.name = "percent.rp")
+VlnPlot(multi_combine, features = 'nFeature_RNA')
+VlnPlot(multi_combine, features = 'percent.rp') + scale_y_log10()
+```
+
+```{r}
+saveRDS(object = multi_combine, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/all_nuclei_postcluster.RDS")
+```
+
+Table of number of cells in each seurat cluster
+```{r}
+table(multi_combine$seurat_clusters)
+```
+
+
+```{r}
+goi_sub <- c("SNAP25", "GAD2", "SLC17A6", "AQP4", "GLI2", "FAT4", "MEX3A", "HSPG2","ADGRA2","COL4A2","PDGFRA","CLDN11","MYRF", "CD68","PTPRC","ITGAM","TOP2A")
+
+main_dot <- DotPlot(multi_combine, features = c(goi_sub)) +
+    RotatedAxis() +
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    scale_colour_viridis(option="magma") +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))
+ggsave(plot = main_dot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_viridis_dotplot.pdf", device = "pdf", width = 12, height = 8)
+main_dot
+```
+
+```{r}
+clus_region_occ <- ggplot(multi_combine@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill") 
+
+clus_region_occ
+
+ggsave(plot = clus_region_occ, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_clus_region_occ.png", device = "png", width = 6, height = 2)
+
+clus_chem_occ <- ggplot(multi_combine@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=chem), position = "fill") + theme_minimal() +scale_fill_manual(values=c("turquoise4", "gray")) + NoLegend()
+
+clus_chem_occ
+
+ggsave(plot = clus_chem_occ, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_clus_chem_occ.png", device = "png", width = 6, height = 2)
+```
+
+```{r}
+summary(multi_combine$nCount_RNA)
+summary(multi_combine$nFeature_RNA)
+```
+
+```{r}
+clus_region_occ1 <- ggplot(multi_combine@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill") + theme_minimal() 
+
+clus_region_occ1
+```
+
+```{r}
+main_dot
+```
+
+```{r}
+# stash current cluster IDs
+multi_combine[["main.cluster.ids"]] <- Idents(object = multi_combine)
+multi_combine$high_level_anno <- multi_combine$seurat_clusters
+# enumerate current cluster IDs and the labels for them
+main.cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33)
+high_level_anno <- c("neuronal", "neuronal", "non-neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "neuronal", "non-neuronal", "neuronal", "neuronal", "neuronal", "non-neuronal", "neuronal", "non-neuronal", "neuronal", "non-neuronal", "non-neuronal", "neuronal")
+multi_combine@meta.data[,'high_level_anno'] <- plyr::mapvalues(x = multi_combine@meta.data$main.cluster.ids, from = main.cluster.ids, to = high_level_anno)
+
+high_level_anno_dimplot <- DimPlot(multi_combine, reduction = "umap_harmony", pt.size = 0.5, label = FALSE, cols = c("black", "gray"), group.by = 'high_level_anno', shuffle = T)
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/dimplot_main_class.png", plot = high_level_anno_dimplot, device = "png", width = 6, height = 4)
+high_level_anno_dimplot
+
+table(multi_combine$high_level_anno, multi_combine$seurat_clusters)
+table(multi_combine$high_level_anno)
+
+saveRDS(object = multi_combine, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/all_nuclei_clustered_highlevel_anno.RDS")
+# multi_combine <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/all_nuclei_clustered_highlevel_anno.RDS")
+```
+
+
+
+
+
+Subset non-neuronal clusters
+```{r}
+Idents(multi_combine) <- "high_level_anno"
+multi_nonneuronal <- subset(x = multi_combine, idents = c("non-neuronal"))
+```
+
+Find variable features and scale data (using all genes)
+```{r}
+multi_nonneuronal <- FindVariableFeatures(multi_nonneuronal, nfeatures = 10000)
+multi_nonneuronal <- ScaleData(multi_nonneuronal, vars.to.regress = c("nCount_RNA", "percent.mt"))
+```
+
+```{r}
+head(VariableFeatures(multi_nonneuronal), 50)
+```
+
+```{r}
+multi_nonneuronal <- RunPCA(multi_nonneuronal)
+```
+
+```{r}
+DimPlot(object = multi_nonneuronal, reduction = 'pca', group.by = 'sample')
+nonneuro_pc<- FeaturePlot(object = multi_nonneuronal, reduction = 'pca', features = c('PTPRC', 'PDGFRA', 'COL4A2', 'GLI2'))
+
+ggsave(plot = nonneuro_pc, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/nonneuro_pc.png", device = "png", width = 6, height = 4)
+
+nonneuro_pc
+```
+
+```{r}
+ElbowPlot(multi_nonneuronal, ndims = 50)
+```
+
+set number of pcs based on elbow plot
+```{r}
+npcs = 20
+```
+
+run harmoney to correct for changes between chemestries 
+```{r}
+multi_nonneuronal <- RunHarmony(multi_nonneuronal, "chem")
+```
+
+```{r}
+multi_nonneuronal <- FindNeighbors(multi_nonneuronal, dims = 1:npcs, reduction = 'harmony')
+```
+
+Use clustree to find stability of res for clustering
+```{r}
+# Set different resolutions 
+res.used <- seq(0.1,1,by=0.2)
+# Loop over and perform clustering of different resolutions 
+for(i in res.used){
+multi_nonneuronal <- FindClusters(multi_nonneuronal, resolution = i)}
+# Make Plot
+clustree(multi_nonneuronal, layout="sugiyama") + theme(legend.position = "bottom") + scale_color_brewer(palette = "Set1") + scale_edge_color_continuous(low = "grey80", high = "red")
+
+```
+
+Find clusters 
+```{r}
+res = 0.9
+multi_nonneuronal <- FindClusters(multi_nonneuronal, resolution = res)
+multi_nonneuronal <- RunUMAP(multi_nonneuronal, dims = 1:npcs, reduction = "harmony", reduction.name = 'umap_harmony')
+```
+
+Dimplot UMAPs
+```{r}
+nonneuro_dim_clus <- DimPlot(multi_nonneuronal, label = T, reduction = "umap_harmony", group.by = 'seurat_clusters') + NoLegend()
+nonneuro_dim_region <- DimPlot(multi_nonneuronal, label = F, group.by = 'region', reduction = "umap_harmony")
+nonneuro_dim_chem <- DimPlot(multi_nonneuronal, label = F, group.by = 'sample', cols = c("turquoise4", "turquoise3", "gray", "gray", "gray", "gray", "gray", "gray"), shuffle = T, reduction = "umap_harmony")
+
+ggsave(plot = nonneuro_dim_clus, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/nonneuro_dim_clus.png", device = "png", width = 6, height = 4)
+ggsave(plot = nonneuro_dim_region, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/nonneuro_dim_region.png", device = "png", width = 6, height = 4)
+ggsave(plot = nonneuro_dim_chem, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/nonneuro_dim_chem.png", device = "png", width = 6, height = 4)
+
+nonneuro_dim_clus
+nonneuro_dim_region
+nonneuro_dim_chem
+```
+
+```{r}
+FeaturePlot(multi_nonneuronal, features = 'GLI2')
+```
+
+
+```{r}
+ggplot(multi_nonneuronal@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill")
+
+clus_region_occ_nonneuro <- ggplot(subset(multi_nonneuronal@meta.data, !is.na(region)), aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill")  
+
+ggsave(plot = clus_region_occ_nonneuro, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_region_occ_nonneuro.png", device = "png", width = 6, height = 2)
+clus_region_occ_nonneuro
+```
+
+```{r}
+clus_chem_occ_nonneuro <- ggplot(multi_nonneuronal@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=chem), position = "fill") + theme_minimal() +scale_fill_manual(values=c("turquoise4", "gray"))
+clus_chem_occ_nonneuro
+ggsave(plot = clus_chem_occ_nonneuro, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_chem_occ_nonneuro.png", device = "png", width = 6, height = 2)
+```
+
+
+```{r}
+goi_sub <- c("SNAP25", "GAD2", "SLC17A6", "AQP4", "GLI2", "FAT4", "MEX3A", "HSPG2","ADGRA2","COL4A2","PDGFRA","MYRF","CLDN11", "CD68","PTPRC","ITGAM","TOP2A")
+nonneuro_dotplot <- DotPlot(multi_nonneuronal, features = c(goi_sub)) +
+    RotatedAxis() +
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    scale_colour_viridis(option="magma") +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))
+ggsave(plot = nonneuro_dotplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/nonneuro_dotplot.png", device = "png", width = 7, height = 6)
+nonneuro_dotplot
+```
+
+```{r}
+non_neuro_15_markers <- FindMarkers(object = multi_nonneuronal, oonly.pos = T, ident.1 = "15")
+```
+
+
+annotate the clusters
+```{r}
+# stash current cluster IDs
+multi_nonneuronal[["nonneuronal.cluster.ids"]] <- Idents(object = multi_nonneuronal)
+
+# enumerate current cluster IDs and the labels for them
+nonneuronal.cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12,13,14,15)
+non_neuronal_class <- c("ependymal", "ependymal", "ependymal", "ependymal", "ependymal", "ependymal", "ependymal", "ependymal", "microglia", "ependymal", "oligodendrocyte", "endothelial", "endothelial", "ependymal", "endothelial", "oligodendrocyte")
+multi_nonneuronal@meta.data[,'non_neuronal_class'] <- plyr::mapvalues(x = multi_nonneuronal@meta.data$nonneuronal.cluster.ids, from = nonneuronal.cluster.ids, to = non_neuronal_class)
+
+dimplot_nonneuro_class <- DimPlot(multi_nonneuronal, reduction = "umap_harmony", pt.size = 0.5, label = FALSE, group.by = 'non_neuronal_class')
+
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/dimplot_nonneuro_class.png", plot = dimplot_nonneuro_class, device = "png", width = 6, height = 4)
+
+dimplot_nonneuro_class
+```
+
+```{r}
+table(multi_nonneuronal$non_neuronal_class)
+```
+
+```{r}
+saveRDS(object = multi_nonneuronal, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/multi_nonneuronal.RDS")
+# multi_nonneuronal <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multi_nonneuronal.RDS")
+```
+
+
+Subset ependymal clusters
+```{r}
+Idents(multi_nonneuronal) <- 'non_neuronal_class'
+multi_epen <- subset(x = multi_nonneuronal, idents = c("ependymal"))
+```
+
+Find variable features and scale data (using all genes)
+```{r}
+multi_epen <- FindVariableFeatures(multi_epen, nfeatures = 10000)
+multi_epen <- ScaleData(multi_epen, vars.to.regress = c("nCount_RNA", "percent.mt"))
+```
+
+```{r}
+head(VariableFeatures(multi_epen), 50)
+```
+
+```{r}
+multi_epen <- RunPCA(multi_epen, features = VariableFeatures(object = multi_epen))
+```
+
+Plot PC1 vs PC2 
+```{r}
+DimPlot(object = multi_epen, reduction = 'pca', group.by = 'sample')
+FeaturePlot(object = multi_epen, reduction = 'pca', features = c('GLI2', "BUB1B", "WNT8B", "GRIN1"))
+```
+
+```{r}
+ElbowPlot(multi_epen, ndims = 50)
+```
+
+set number of pcs based on elbow plot
+```{r}
+npcs = 25
+```
+
+run harmony to correct for changes between chemestries 
+```{r}
+multi_epen <- RunHarmony(multi_epen, "chem")
+```
+
+```{r}
+multi_epen <- FindNeighbors(multi_epen, dims = 1:npcs, reduction = 'harmony')
+```
+
+Use clustree to find stability of res for clustering
+```{r}
+# Set different resolutions 
+res.used <- seq(0.1,1.7,by=0.2)
+# Loop over and perform clustering of different resolutions 
+for(i in res.used){
+multi_epen <- FindClusters(multi_epen, resolution = i)}
+# Make Plot
+clustree(multi_epen, layout="sugiyama") + theme(legend.position = "bottom") + scale_color_brewer(palette = "Set1") + scale_edge_color_continuous(low = "grey80", high = "red")
+```
+
+Find clusters 
+```{r}
+res = 1.1
+multi_epen <- FindClusters(multi_epen, resolution = res)
+multi_epen <- RunUMAP(multi_epen, dims = 1:npcs, reduction = "harmony", reduction.name = 'umap_harmony')
+```
+
+Epen cell UMAPs
+```{r}
+epen_dim_clus <- DimPlot(multi_epen, reduction = "umap_harmony", label = T, group.by = 'seurat_clusters') + NoLegend()
+epen_dim_region <- DimPlot(multi_epen, reduction = "umap_harmony", label = F, group.by = 'region')
+epen_dim_chem <- DimPlot(multi_epen, reduction = "umap_harmony", label = F, group.by = 'sample', cols = c("turquoise4", "turquoise3", "gray", "gray", "gray", "gray", "gray", "gray"), shuffle = T)
+
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_dim_clus.png", plot = epen_dim_clus, device = "png", width = 6, height = 4)
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_dim_region.png", plot = epen_dim_region, device = "png", width = 6, height = 4)
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_dim_chem.png", plot = epen_dim_chem, device = "png", width = 6, height = 4)
+
+epen_dim_clus
+epen_dim_region
+epen_dim_chem
+```
+
+Epen gene marker GLI2 FeaturePlot
+```{r}
+FeaturePlot(object = multi_epen, features = 'GLI2')
+```
+
+```{r}
+table(multi_epen$seurat_clusters)
+```
+
+epen cluster qc checks (no real outliers)
+```{r}
+VlnPlot(multi_epen, features = c("percent.mt", "nCount_RNA", "nFeature_RNA"), pt.size = 0)
+VlnPlot(multi_epen, features = c("percent.mt", "nCount_RNA", "nFeature_RNA"), pt.size = 0, group.by = "chem")
+```
+
+epen cluster occ by region
+```{r}
+clus_region_occ_epen_multi <- ggplot(multi_epen@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill") + theme_minimal()
+
+clus_region_occ_epen <- ggplot(subset(multi_epen@meta.data, !is.na(region)), aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill") + theme_minimal()  
+
+ggsave(plot = clus_region_occ_epen_multi, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_region_occ_epen_multi.png", device = "png", width = 6, height = 2)
+ggsave(plot = clus_region_occ_epen, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_region_occ_epen.png", device = "png", width = 6, height = 2)
+
+clus_region_occ_epen
+clus_region_occ_epen_multi
+```
+
+epen cluster occ by chem
+```{r}
+clus_chem_occ_epen_multi <-ggplot(multi_epen@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=chem), position = "fill") + theme_minimal() + scale_fill_manual(values=c("turquoise4", "gray"))
+
+ggsave(plot = clus_chem_occ_epen_multi, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_chem_occ_epen_multi.png", device = "png", width = 6, height = 2)
+
+clus_chem_occ_epen_multi
+```
+
+DotPlott for genes of interest
+```{r}
+goi_sub <- c("SNAP25", "GAD2", "SLC17A6", "AQP4", "GLI2", "FAT4", "MEX3A","TOP2A")
+epen_dotplot <- DotPlot(multi_epen, features = c(goi_sub)) +
+    RotatedAxis() +
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    scale_colour_viridis(option="magma") +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))
+ggsave(plot = epen_dotplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_dotplot.png", device = "png", width = 7, height = 6)
+epen_dotplot
+```
+
+```{r}
+epen_feat <- FeaturePlot(object = multi_epen, features = c("GAD2", "SLC17A6", "AQP4", "GLI2", "MEX3A","TOP2A"), reduction = 'umap_harmony')
+
+ggsave(plot = epen_feat, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_feat.pdf", device = "pdf", width = 10, height = 10)
+
+epen_feat
+```
+
+
+Find DE by region
+```{r}
+Idents(multi_epen) <- "region"
+table(Idents(multi_epen))
+
+regionealone_epen <- subset(multi_epen, idents = c("dorsal", "medial", "lateral"))
+table(Idents(regionealone_epen))
+regional_epen_markers <- FindAllMarkers(object = regionealone_epen, only.pos = TRUE)
+
+top10 <- regional_epen_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+regional_epen_markers$pct.diff <- regional_epen_markers$pct.1 - regional_epen_markers$pct.2
+regional_epen_markers_rankdiff <- regional_epen_markers[order(-regional_epen_markers$pct.diff),]
+top20_diff <- regional_epen_markers %>% group_by(cluster) %>% top_n(n = 20, wt = pct.diff)
+top5_region <- regional_epen_markers %>% group_by(cluster) %>% top_n(n = 5, wt = avg_log2FC)
+top20_region <- regional_epen_markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC)
+
+write.csv(regional_epen_markers, file =  "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_select_de_region_markers.csv")
+
+regionealone_epen <- ScaleData(regionealone_epen, features = c(VariableFeatures(regionealone_epen), top20_region$gene,  top20_diff$gene))
+epen_select_de_region_heat <- DoHeatmap(object = regionealone_epen, features = top20_region$gene, group.by = 'region') + scale_fill_viridis(option = "D")
+epen_select_de_region_diff_heat <- DoHeatmap(object = regionealone_epen, features = top20_diff$gene, group.by = 'region') + scale_fill_viridis(option = "D")
+
+ggsave(plot = epen_select_de_region_heat, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_select_de_region_heat.png", device = "png", width = 15, height = 10)
+ggsave(plot = epen_select_de_region_diff_heat, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_select_de_region_diff_heat.png", device = "png", width = 15, height = 10)
+
+epen_select_de_region_heat
+epen_select_de_region_diff_heat
+```
+
+Find DE by cluster
+```{r}
+Idents(multi_epen) <- 'seurat_clusters'
+epen_cluster_markers <- FindAllMarkers(object = multi_epen, only.pos = TRUE)
+top10_clus <- epen_cluster_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+epen_cluster_markers$pct.diff <- epen_cluster_markers$pct.1 - epen_cluster_markers$pct.2
+clus_epen_markers_rankdiff <- epen_cluster_markers[order(-epen_cluster_markers$pct.diff),]
+top10_diff_clus <- epen_cluster_markers %>% group_by(cluster) %>% top_n(n = 10, wt = pct.diff)
+
+top10_diff_clus
+top10_clus
+```
+
+<!-- ```{r} -->
+<!-- table(Idents(multi_epen)) -->
+<!-- epen_presto_DE <- wilcoxauc(multi_epen, pseudocount.use = 0.1) -->
+<!-- epen_presto_DE1 <- epen_presto_DE[!(grepl(pattern = "^AMEX", x = epen_presto_DE$feature)), ] -->
+<!-- epen_presto_DE2 <- epen_presto_DE1[!(grepl(pattern = "^LOC", x = epen_presto_DE1$feature)), ] -->
+<!-- epen_presto_DE_top <- epen_presto_DE2 %>% -->
+<!--     group_by(group) %>% -->
+<!--     arrange(desc(logFC), .by_group=T) %>% -->
+<!--     top_n(n = 10, wt = logFC) %>% -->
+<!--     print(n = 40, width = Inf) -->
+
+<!-- avg_epen_topDE <- AverageExpression(multi_epen, features = epen_presto_DE_top$feature, return.seurat = F) -->
+
+<!-- # pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_classes_DE_heatmap_t.pdf", height = 5, width = 12) -->
+<!-- Heatmap(apply(epen_presto_DE_top$RNA, 1, function(x)(x-min(x))/(max(x)-min(x))), col = magma(10), cluster_rows = T, name = "Expression") -->
+<!-- # dev.off() -->
+
+<!-- # pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_classes_DE_heatmap_scaled_t.pdf", height = 5, width = 12) -->
+<!-- Heatmap(scale(t(epen_presto_DE_top$RNA)), col = magma(10)) -->
+<!-- # dev.off() -->
+
+<!-- ``` -->
+
+
+Plotting DE by seurat cluster
+```{r}
+write.csv(epen_cluster_markers, file =  "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_clus_markers.csv")
+epen_cluster_markers <- read.csv("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_clus_markers.csv")
+
+Idents(multi_epen) <- 'seurat_clusters'
+top5_clus <- epen_cluster_markers %>% group_by(cluster) %>% top_n(n = 5, wt = avg_log2FC)
+top5_clus_diff <- epen_cluster_markers %>% group_by(cluster) %>% top_n(n = 5, wt = pct.1-pct.2)
+top10_clus <- epen_cluster_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+
+multi_epen <- ScaleData(multi_epen, features = c(VariableFeatures(multi_epen), top5_clus_diff$gene, top5_clus$gene, "GLI2", "AQP4")) #rescaling data to include DE genes
+
+epen_select_de_heat <- DoHeatmap(object = multi_epen, features = c(unique(top5_clus$gene))) + scale_fill_viridis(option = "magma")
+epen_select_de_heat_diff <- DoHeatmap(object = multi_epen, features = c(unique(top5_clus_diff$gene))) + scale_fill_viridis(option = "magma")
+
+ggsave(plot = epen_select_de_heat, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_select_de_clusmark_heat.png", device = "png", width = 15, height = 10)
+ggsave(plot = epen_select_de_heat_diff, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_select_diff_de_clusmark_heat.png", device = "png", width = 15, height = 10)
+
+epen_avg <- AverageExpression(multi_epen, return.seurat=TRUE) 
+avg_epen_clus_heat <- DoHeatmap(object = epen_avg, features = c(unique(top5_clus$gene)), draw.lines = F) + scale_fill_viridis(option = "magma")
+ggsave(plot = avg_epen_clus_heat, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/avg_epen_clus_heat.pdf", device = "pdf", width = 15, height = 10)
+
+epen_select_de_heat_diff
+epen_select_de_heat
+avg_epen_clus_heat
+epen_avg
+```
+
+
+```{r}
+epen_presto_DE <- wilcoxauc(multi_epen, pseudocount.use = 0.1)
+epen_presto_DE1 <- epen_presto_DE[!(grepl(pattern = "^AMEX", x = epen_presto_DE$feature)), ]
+epen_presto_DE2 <- epen_presto_DE1[!(grepl(pattern = "^LOC", x = epen_presto_DE1$feature)), ]
+epen_presto_DE_top <- epen_presto_DE2 %>%
+    group_by(group) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 5, wt = logFC) %>%
+    print(n = 40, width = Inf)
+
+epen_presto_DE_top$group <- as.numeric(epen_presto_DE_top$group)
+epen_presto_DE_top <- epen_presto_DE_top[order(epen_presto_DE_top$group),]
+
+epen_presto_topDE <- AverageExpression(multi_epen, features = epen_presto_DE_top$feature, return.seurat = F)
+
+write.csv(epen_presto_DE, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_presto_topDE.csv")
+# epen_presto_DE <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_presto_topDE.csv")
+
+epen_presto_DE_filtered <- epen_presto_DE %>%
+    group_by(group) %>%
+    filter(padj < 0.05, pct_in > 10 & logFC > log(1)) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 100, wt = logFC) #%>%
+    # print(n = 40, width = Inf)
+write.csv(epen_presto_DE_filtered, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/csv_files/epen_presto_top100DE.csv")
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_clus_presto_top5_DE_heatmap_t.pdf", height = 25, width = 10)
+Heatmap(t(apply(epen_presto_topDE$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = F, cluster_columns = F, name = "Expression")
+dev.off()
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_clus_presto_top5_DE_heatmap_scaled_t.pdf", height = 25, width = 10)
+Heatmap(t(scale(t(epen_presto_topDE$RNA))), col = magma(10), cluster_rows = F, cluster_columns = F)
+dev.off()
+
+Heatmap(t(apply(epen_presto_topDE$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = F, cluster_columns = F, name = "Expression")
+Heatmap(t(scale(t(epen_presto_topDE$RNA))), col = magma(10), cluster_rows = F, cluster_columns = F)
+```
+
+```{r}
+DotPlot(multi_epen, features = c('WNT3B','WNT3A','WNT5A','WNT5B','WNT8B','WNT2B', 'AXIN2','RSPO2'))
+```
+
+```{r}
+multi_epen$epen_clus <- paste0("epen_clus_", multi_epen$seurat_clusters)
+```
+
+3590 ependymal cells
+```{r}
+table(multi_epen$seurat_clusters)
+```
+
+```{r}
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+multi_epen <- CellCycleScoring(multi_epen, s.features = s.genes, g2m.features = g2m.genes)
+DimPlot(multi_epen, reduction = 'umap_harmony', group.by = 'Phase')
+# multi_epen$S.Score
+# multi_epen$G2M.Score
+# ggplot(multi_epen@meta.data, aes(x = multi_epen@meta.data$seurat_clusters, y = multi_epen@meta.data$S.Score)) + geom_boxplot()
+# ggplot(multi_epen@meta.data, aes(x = multi_epen@meta.data$seurat_clusters, y = multi_epen@meta.data$G2M.Score)) + geom_boxplot()
+RidgePlot(object = multi_epen, features = c("S.Score", "G2M.Score"))
+```
+
+
+```{r}
+pdf(file ="/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_featureplots.pdf", width = 6, height = 6)
+FeaturePlot(object = multi_epen, features = c("G2M.Score"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("S.Score"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("MEX3A"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("SLC17A6"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("GAD2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("GLI2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("SFRP1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("WNT2B"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("NOTCH1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("NOTCH2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_epen, features = c("GRIN1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("AQP4"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("KCNJ10"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("EDN3"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+dev.off()
+```
+
+```{r}
+go_term <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/go_scores.csv")
+head(go_term)
+colnames(go_term)[1] <- "cell_id"
+multi_epen@meta.data <- left_join(multi_epen@meta.data, go_term)
+rownames(multi_epen@meta.data) <- multi_epen$cell_id
+
+pdf(file ="/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_go_term_featureplots.pdf", width = 6, height = 6)
+FeaturePlot(object = multi_epen, features = c("cell.division1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("neurotransmitter.uptake1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("regulation.of.NMDA.receptor.activity1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("cell.adhesion1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("transport.across.blood.brain.barrier1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("chemical.synaptic.transmission1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("L.glutamate.import.across.plasma.membrane1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_epen, features = c("ionotropic.glutamate.receptor.signaling.pathway1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+dev.off()
+```
+
+```{r}
+colnames(go_term)
+```
+
+
+
+Filter DE to exclude cell cycle genes
+```{r}
+cc_genes <- c(cc.genes$s.genes, cc.genes$g2m.genes)
+cc_filter_epen_DE <- filter(epen_clus_DE2, !feature %in% c(cc_genes))
+cc_filter_epen_DE %>%
+    group_by(group) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 20, wt = logFC) %>%
+    print(n = 40, width = Inf)
+```
+
+```{r}
+DotPlot(multi_epen, features = c('NSD2', 'ASPM', 'INCENP', 'IQGAP3', 'NCAPG2', 'PASK','KIF15','MELK', "SMC2", "FOXM1", "MASTL", "FANCI", 'KIF4A','FANCC','STN1','NUMA1')) + RotatedAxis()
+DotPlot(multi_epen, features = c('PTPRM', 'BOC', 'GLI2', 'SKI', 'PLCB4', 'CNTRF','MEIS2','SSBP3'))
+```
+
+
+```{r}
+saveRDS(multi_epen, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/all_ependymalcells.RDS")
+multi_epen <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/all_ependymalcells.RDS")
+```
+
+```{r}
+DotPlot(object = multi_epen, features = c('DLL1', "NOTCH1", "NOTCH2", "HES5", "CBX7"))
+```
+
+
+FGF, WNT, mTOR, Notch (Signaling pathway among ependymal cell clusters/regions/timepoints)
+```{r}
+wnt_genes <- rownames(multi_epen)[grep(pattern = "WNT", ignore.case = T, x = rownames(multi_epen))]
+bmp_genes <- rownames(multi_epen)[grep(pattern = "BMP", ignore.case = T, x = rownames(multi_epen))]
+fgf_genes <- rownames(multi_epen)[grep(pattern = "FGF", ignore.case = T, x = rownames(multi_epen))]
+notch_genes <- rownames(multi_epen)[grep(pattern = "NOTCH", ignore.case = T, x = rownames(multi_epen))]
+signalling_genes <- c(wnt_genes, bmp_genes, fgf_genes, notch_genes)
+epen_presto_DE$feature[grep(pattern = 'NOTCH', x = epen_presto_DE$feature)]
+
+DotPlot(multi_epen, features = wnt_genes) + RotatedAxis()
+DotPlot(multi_epen, features = bmp_genes) + RotatedAxis()
+DotPlot(multi_epen, features = fgf_genes) + RotatedAxis()
+DotPlot(multi_epen, features = notch_genes) + RotatedAxis()
+
+epen_presto_DE_signal_fil <- epen_presto_DE[epen_presto_DE$feature %in% c(signalling_genes, "SFRP1", "SFRP2", "AXIN2"), ]
+epen_presto_DE_signal_fil1 <- epen_presto_DE_signal_fil %>%
+    group_by(group) %>%
+    filter(padj < 0.05 & logFC > 0) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 10, wt = logFC) %>%
+    print(n = 40, width = Inf)
+  
+  
+epen_signalling <- AverageExpression(multi_epen, features = c(epen_presto_DE_signal_fil1$feature), return.seurat = F)
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_signalling_heatmaps.pdf")
+Heatmap(t(apply(epen_signalling$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = T, cluster_columns = T, name = "Expression")
+Heatmap(t(scale(t(epen_signalling$RNA))), col = magma(10), cluster_rows = T, cluster_columns = T)
+dev.off()
+```
+heatmap select of signalling genes 
+```{r}
+epen_signalling1 <- AverageExpression(multi_epen, features = c("GLI2", "NOTCH2", "NOTCH1", "WNT7B","WNT8B", "WNT2B", "WNT3A", "SFRP1", "FGF14","GRIN1"), return.seurat = F)
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_signalling_heatmap_goi.pdf")
+Heatmap(t(apply(epen_signalling1$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = F, cluster_columns = T, name = "Expression")
+dev.off()
+```
+
+heatmap of 35 select signalling genes of interest and regional epen markers
+```{r}
+epen_select1 <- AverageExpression(multi_epen, features = c("GLI2", "NOTCH2", "NOTCH1", "WNT7B","WNT8B", "WNT2B", "WNT3A", "SFRP1", "FGF14","GRIN1", "MEIS2", "FGFRL1", "CDK14", "EPS8L2", "CHK1", "SHISA6","LRRTM4", "GRM8", "KIF1A", "ST6GALNAC5", "NOX4", "EDN3", "VAX2", "RSPO2", "HIP1", "WNT5B", "SKI", "PASK", "GRIA3", "GRIN2B", "IRS1", "FGFR3", "EPHB2", "GRM3", "AR"), return.seurat = F)
+
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_select_goi_heatmap.pdf")
+# Heatmap(t(apply(epen_select1$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = T, cluster_columns = F, name = "Expression", column_order = c("12", "11", "2", "6", "0", "9", "8", "5", "10", "4", "3", "13", "1", "7", "14"))
+Heatmap(t(apply(epen_select1$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = T, cluster_columns = T, name = "Expression")
+dev.off()
+```
+
+
+```{r}
+install.packages("gprofiler2")
+library(gprofiler2)
+go = "GO:0007267"
+cellcomm = gprofiler2::gconvert(go, target = "HGNC")
+
+epen_presto_DE1 <- epen_presto_DE[!(grepl(pattern = "^AMEX", x = epen_presto_DE$feature)), ]
+epen_presto_DE2 <- epen_presto_DE1[!(grepl(pattern = "^LOC", x = epen_presto_DE1$feature)), ]
+epen_presto_DE_fil <- epen_presto_DE2 %>%
+    group_by(group) %>%
+    filter(padj < 0.05 & logFC > 0) %>%
+    arrange(desc(logFC), .by_group=T)  %>%
+    top_n(n = 20, wt = logFC)
+grep(x = epen_presto_DE_fil$feature, pattern = "NOTCH")
+epen_presto_DE_fil$feature[c(464)]
+sign_intersect <- unique(intersect(epen_presto_DE_fil$feature, cellcomm$name))
+epen_signalling2 <- AverageExpression(multi_epen, features = c(sign_intersect, "NOTCH1", "NOTCH2", "SFRP1"), return.seurat = F)
+
+length(sign_intersect)
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_signalling_heatmap2_short.pdf", height = 4, width = 10)
+Heatmap(apply(epen_signalling2$RNA, 1, function(x)(x-min(x))/(max(x)-min(x))), col = magma(10), cluster_rows = T, cluster_columns = T, name = "Expression")
+dev.off()
+```
+
+
+
+wnt - hsa04310
+mTor - hsa04150
+notch - hsa04330
+
+mapk- hsa04010
+pi3k-akt - hsa04151
+ras signaling pathway - hsa04014 
+rap1 - hsa04015
+calcium signaling pathway - hsa04020
+neuroactive ligand-receptor interaction - hsa04080
+
+```{r}
+pathways <- readRDS("/links/groups/treutlein/USERS/zhisong_he/Work/retina_organoids_timecourse/analysis/data.kegg_pathway_genes.rds")
+wnt_pathway <- pathways[which(pathways$id == "hsa04310"), "gene_symbol"]
+mTOR_pathway <- pathways[which(pathways$id == "hsa04150"), "gene_symbol"]
+notch_pathway <- pathways[which(pathways$id == "hsa04330"), "gene_symbol"]
+neuroactive_pathway <- pathways[which(pathways$id == "hsa04080"), "gene_symbol"]
+```
+
+```{r}
+wnt_features = list(intersect(wnt_pathway, rownames(multi_epen)))
+multi_epen <- AddModuleScore(multi_epen, features = wnt_features, name = 'wnt_sig_score')
+mTOR_features <- list(intersect(mTOR_pathway, rownames(multi_epen)))
+multi_epen <- AddModuleScore(multi_epen, features = mTOR_features, name = 'mTOR_sig_score')
+notch_feature <- list(intersect(notch_pathway, rownames(multi_epen)))
+multi_epen <- AddModuleScore(multi_epen, features = notch_feature, name = 'notch_sig_score')
+notch_feature <- list(intersect(notch_pathway, rownames(multi_epen)))
+multi_epen <- AddModuleScore(multi_epen, features = notch_feature, name = 'notch_sig_score')
+neuroactive_feature <- list(intersect(neuroactive_pathway, rownames(multi_epen)))
+multi_epen <- AddModuleScore(multi_epen, features = neuroactive_feature, name = 'neuroactive_sig_score')
+
+VlnPlot(multi_epen, features = c('wnt_sig_score1', 'mTOR_sig_score1', 'notch_sig_score1'))
+VlnPlot(multi_epen, features = c('wnt_sig_score1', 'mTOR_sig_score1', 'notch_sig_score1'), group.by = 'region')
+FeaturePlot(multi_epen, features = c('wnt_sig_score1', 'mTOR_sig_score1', 'notch_sig_score1'))
+DotPlot(multi_epen, features = c('NOTCH1', "NOTCH2"))
+
+DotPlot(multi_epen, features = c('NOTCH1', "NOTCH2", 'wnt_sig_score1', 'mTOR_sig_score1', 'notch_sig_score1', 'neuroactive_sig_score')) + RotatedAxis()
+DotPlot(multi_epen, features = notch_feature[[1]]) + RotatedAxis()
+```
+
+Subset neuronal clusters
+```{r}
+Idents(multi_combine) <- 'high_level_anno'
+table(multi_combine$high_level_anno)
+multi_neuronal <- subset(x = multi_combine, idents = c("neuronal"))
+table(multi_neuronal$high_level_anno)
+```
+
+Normalize, find variable features and scale data (using all genes)
+```{r}
+multi_neuronal <- FindVariableFeatures(multi_neuronal, nfeatures = 10000)
+multi_neuronal <- ScaleData(multi_neuronal,  vars.to.regress = c("nCount_RNA", "percent.mt"))
+```
+
+```{r}
+head(VariableFeatures(multi_neuronal), 50)
+```
+
+```{r}
+multi_neuronal <- RunPCA(multi_neuronal, features = VariableFeatures(object = multi_neuronal))
+```
+
+
+
+
+```{r}
+DimPlot(object = multi_neuronal, reduction = 'pca', group.by = 'sample')
+neuro_pc<- FeaturePlot(object = multi_neuronal, reduction = 'pca', features = c('GAD1', 'GAD2', 'SLC17A6','EOMES'), order = T)
+
+ggsave(plot = neuro_pc, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_pc.png", device = "png", width = 6, height = 4)
+
+neuro_pc
+```
+
+```{r}
+ElbowPlot(multi_neuronal, ndims = 50)
+```
+
+set number of pcs based on elbow plot
+```{r}
+npcs = 30
+```
+
+run harmony to correct for changes between chemestries 
+```{r}
+multi_neuronal <- RunHarmony(multi_neuronal, "chem")
+```
+
+```{r}
+multi_neuronal <- FindNeighbors(multi_neuronal, dims = 1:npcs, reduction = 'harmony')
+```
+
+Use clustree to find stability of res for clustering
+```{r}
+# Set different resolutions 
+res.used <- seq(0.1,1.5,by=0.2)
+# Loop over and perform clustering of different resolutions 
+for(i in res.used){
+multi_neuronal <- FindClusters(multi_neuronal, resolution = i)}
+# Make Plot
+clustree(multi_neuronal, layout="sugiyama") + theme(legend.position = "bottom") + scale_color_brewer(palette = "Set1") + scale_edge_color_continuous(low = "grey80", high = "red")
+
+```
+
+Find clusters 
+```{r}
+res = 1.1
+multi_neuronal <- FindClusters(multi_neuronal, resolution = res)
+multi_neuronal <- RunUMAP(multi_neuronal, dims = 1:npcs, reduction = "harmony", reduction.name = 'umap_harmony')
+```
+
+
+```{r}
+neuro_dim_clus <- DimPlot(multi_neuronal, reduction = "umap_harmony", label = T) + NoLegend()
+neuro_dim_region <- DimPlot(multi_neuronal, reduction = "umap_harmony", label = F, group.by = 'region')
+neuro_dim_chem <- DimPlot(multi_neuronal, reduction = "umap_harmony", label = F, group.by = 'sample', cols = c("turquoise4", "turquoise3", "gray", "gray", "gray", "gray", "gray", "gray"), shuffle = T)
+
+ggsave(plot = neuro_dim_clus, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_dim_clus.png", device = "png", width = 6, height = 4)
+ggsave(plot = neuro_dim_region, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_dim_region.png", device = "png", width = 6, height = 4)
+ggsave(plot = neuro_dim_chem, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_dim_chem.png", device = "png", width = 6, height = 4)
+
+neuro_dim_clus
+neuro_dim_region
+neuro_dim_chem
+```
+
+```{r}
+ggplot(multi_neuronal@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill")
+clus_region_occ_neuro <- ggplot(subset(multi_neuronal@meta.data, !is.na(region)), aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill")  
+clus_region_occ_neuro
+ggsave(plot = clus_region_occ_neuro, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_region_occ_neuro.png", device = "png", width = 6, height = 2)
+```
+
+```{r}
+clus_chem_occ_neuro <- ggplot(multi_neuronal@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=chem), position = "fill") + theme_minimal() +scale_fill_manual(values=c("turquoise4", "gray"))
+clus_chem_occ_neuro
+ggsave(plot = clus_chem_occ_neuro, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_chem_occ_neuro.png", device = "png", width = 6, height = 2)
+```
+
+
+```{r}
+FeaturePlot(object = multi_neuronal, features = c('EOMES', 'SLC17A6', 'GAD2', 'MEX3A'), reduction = 'umap_harmony')
+```
+
+
+```{r}
+goi_sub <- c("SNAP25", "MAP2", "GAD2", "SLC17A6", "MEX3A")
+neuro_dotplot <- DotPlot(multi_neuronal, features = c(goi_sub)) +
+    RotatedAxis() +
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    scale_colour_viridis(option="magma") +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))
+ggsave(plot = neuro_dotplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_dotplot.png", device = "png", width = 7, height = 6)
+neuro_dotplot
+```
+
+```{r}
+VlnPlot(object = multi_neuronal,features = c('GAD1'), pt.size = 0)
+VlnPlot(object = multi_neuronal,features = c('GAD2'), pt.size = 0)
+VlnPlot(object = multi_neuronal, features = c('MEX3A'), pt.size = 0)
+VlnPlot(object = multi_neuronal, features = c('SLC17A6'), pt.size = 0)
+```
+NPC Clusters -- 17, 30
+SLC17A6 Clusters -- 1,2,3,4,5,7,8,11,13,14,15,18,20,21,22,25,29,31,32,34,35,36
+GAD clusters -- 0, 6, 9, 10, 12, 16, 19,23,24,26,27,28,33,37
+
+
+```{r}
+# stash current cluster IDs
+multi_neuronal[["neuronal.cluster.ids"]] <- Idents(object = multi_neuronal)
+
+# enumerate current cluster IDs and the labels for them
+neuronal.cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37)
+neuronal_class <- c("gaba", "glut", "glut", "glut", "glut", "glut", "gaba", "glut", "glut", "gaba", "gaba", "glut", "gaba", "glut", "glut", "glut", "gaba", "npc", "glut", "gaba", "glut", "glut", "glut","gaba", "gaba","glut", "gaba", "gaba", "gaba", "glut", "npc", "glut", "glut", "gaba", "glut", "glut", "glut", "gaba")
+
+multi_neuronal@meta.data[,'neuronal_class'] <- plyr::mapvalues(x = multi_neuronal@meta.data$neuronal.cluster.ids, from = neuronal.cluster.ids, to = neuronal_class)
+
+neuronal_class_dimplot <- DimPlot(multi_neuronal, reduction = "umap_harmony", pt.size = 0.3, label = FALSE, group.by = 'neuronal_class')
+ggsave(filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/dimplot_neuro_class.png", plot = neuronal_class_dimplot, device = "png", width = 6, height = 4)
+neuronal_class_dimplot
+
+saveRDS(multi_neuronal, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multi_neuronal_subset.RDS")
+```
+
+
+Subset GABA
+
+```{r}
+Idents(multi_neuronal) <- 'neuronal_class'
+table(multi_neuronal$neuronal_class)
+multi_neuro_gaba <- subset(multi_neuronal, idents = c('gaba'))
+table(multi_neuro_gaba$neuronal_class)
+```
+
+
+Find variable features and scale data (using all genes)
+```{r}
+multi_neuro_gaba <- FindVariableFeatures(multi_neuro_gaba, nfeatures = 10000)
+multi_neuro_gaba <- ScaleData(multi_neuro_gaba,  vars.to.regress = c("nCount_RNA", "percent.mt"))
+```
+
+```{r}
+head(VariableFeatures(multi_neuro_gaba), 50)
+```
+
+```{r}
+multi_neuro_gaba <- RunPCA(multi_neuro_gaba, features = VariableFeatures(object = multi_neuro_gaba))
+```
+
+```{r}
+DimPlot(object = multi_neuro_gaba, reduction = 'pca', group.by = 'sample')
+neuro_gaba_pc<- FeaturePlot(object = multi_neuro_gaba, reduction = 'pca', features = c('LHX6', 'BCL11B', 'GAD1','TRH'), order = T)
+
+ggsave(plot = neuro_gaba_pc, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_gaba_pc", device = "png", width = 6, height = 4)
+
+neuro_gaba_pc
+```
+
+```{r}
+ElbowPlot(multi_neuro_gaba, ndims = 50)
+```
+
+set number of pcs based on elbow plot
+```{r}
+npcs = 30
+```
+
+run harmony to correct for changes between chemestries 
+```{r}
+multi_neuro_gaba <- RunHarmony(multi_neuro_gaba, "chem")
+```
+
+```{r}
+multi_neuro_gaba <- FindNeighbors(multi_neuro_gaba, dims = 1:npcs, reduction = 'harmony')
+```
+
+Use clustree to find stability of res for clustering
+```{r}
+# Set different resolutions 
+res.used <- seq(0.1,1.5,by=0.2)
+# Loop over and perform clustering of different resolutions 
+for(i in res.used){
+multi_neuro_gaba <- FindClusters(multi_neuro_gaba, resolution = i)}
+# Make Plot
+clustree(multi_neuro_gaba, layout="sugiyama") + theme(legend.position = "bottom") + scale_color_brewer(palette = "Set1") + scale_edge_color_continuous(low = "grey80", high = "red")
+```
+
+Find clusters 
+```{r}
+res = 1.1
+multi_neuro_gaba <- FindClusters(multi_neuro_gaba, resolution = res)
+multi_neuro_gaba <- RunUMAP(multi_neuro_gaba, dims = 1:npcs, reduction = "harmony", reduction.name = 'umap_harmony')
+```
+
+plot UMAPs for GABA
+```{r}
+neuro_gaba_dim_clus <- DimPlot(multi_neuro_gaba, reduction = "umap_harmony", label = T) + NoLegend()
+neuro_gaba_dim_region <- DimPlot(multi_neuro_gaba, reduction = "umap_harmony", label = F, group.by = 'region')
+neuro_gaba_dim_chem <- DimPlot(multi_neuro_gaba, reduction = "umap_harmony", label = F, group.by = 'sample', cols = c("turquoise4", "turquoise3", "gray", "gray", "gray", "gray", "gray", "gray"), shuffle = T)
+
+ggsave(plot = neuro_gaba_dim_clus, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_gaba_dim_clus.png", device = "png", width = 6, height = 4)
+ggsave(plot = neuro_gaba_dim_region, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_gaba_dim_region.png", device = "png", width = 6, height = 4)
+ggsave(plot = neuro_gaba_dim_chem, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_gaba_dim_chem.png", device = "png", width = 6, height = 4)
+
+neuro_gaba_dim_clus
+neuro_gaba_dim_region
+neuro_gaba_dim_chem
+```
+Vln plots for qc check
+```{r}
+VlnPlot(multi_neuro_gaba, features = c('GAD2','SLC17A6'))
+VlnPlot(multi_neuro_gaba, features = c('percent.mt', 'percent.rp'))
+```
+
+Plot region occ per cluster
+```{r}
+ggplot(multi_neuro_gaba@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill")
+clus_region_occ_neuro_gaba <- ggplot(subset(multi_neuro_gaba@meta.data, !is.na(region)), aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill")  
+ggsave(plot = clus_region_occ_neuro_gaba, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_region_occ_neuro_gaba.png", device = "png", width = 6, height = 2)
+clus_region_occ_neuro_gaba
+```
+
+Plot region occ per cluster
+```{r}
+clus_chem_occ_neuro_gaba <- ggplot(multi_neuro_gaba@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=chem), position = "fill") + theme_minimal() +scale_fill_manual(values=c("turquoise4", "gray"))
+ggsave(plot = clus_chem_occ_neuro_gaba, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium//multiRNA_and_palliumclus_chem_occ_neuro_gaba.png", device = "png", width = 6, height = 2)
+clus_chem_occ_neuro_gaba
+```
+
+Plot GE markers (handpicked mouse and turtle)
+```{r}
+ge_genes <-  c("NR2F2", 'NR2F1', "ADARB2", "ZBTB16", "PROX1", "NFIX",'LHX6','ARX','SOX6', 'LMO3', 'SATB1','MEIS2','PBX3','TSHZ1','FOXP1','FOXP2', 'ZFHX4',"TRH")
+
+gaba_ge <- AverageExpression(multi_neuro_gaba, features = ge_genes, return.seurat = F)
+
+# pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/gaba_ge_heatmap_t.pdf", height = 6, width = 4)
+Heatmap(apply(gaba_ge$RNA, 1, function(x)(x-min(x))/(max(x)-min(x))), col = magma(10), cluster_rows = F, cluster_columns = F, name = "Expression", row_order = c('22', '29','3','10','1','12','25','0','8','5','24','9','11','4','13','19','26','15','14','2','17','6','20','7','23','16','18','21','27','28'))
+# dev.off()
+```
+
+Plot GE markers (All Tfs from turtle)
+```{r}
+ge_genes1 <-  c('ETV1','LMO3','SOX6','LHX6','ARX','BCL11A','SATB1','ZEB2','ID2','NR2F2','NPAS1','SALL1','ZBTB16','NR2E1','PROX1','NFIX','SP8','MEIS2','PBX3','TSHZ1','SIX3','FOXP1','FOXP2','ZFHX4','ZIC1','PAX6','SALL3')
+ge_genes1 <- rev(ge_genes1)
+gaba_ge <- AverageExpression(multi_neuro_gaba, features = ge_genes1, return.seurat = F)
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/gaba_ge_heatmap_allturtletfs.pdf", height = 6, width = 4)
+Heatmap(apply(gaba_ge$RNA, 1, function(x)(x-min(x))/(max(x)-min(x))), col = magma(10), cluster_rows = F, cluster_columns = F, name = "Expression", row_order = c('22', '29','3','10','1','12','25','0','8','5','24','9','11','4','13','19','26','15','14','2','17','6','20','7','23','16','18','21','27','28'))
+dev.off()
+
+Heatmap(apply(gaba_ge$RNA, 1, function(x)(x-min(x))/(max(x)-min(x))), col = magma(10), cluster_rows = T, cluster_columns = F, name = "Expression")
+```
+
+Plotting all turtle markers for GABA clusters
+```{r}
+ge_genes <-  c("PLAU", 'PVALB', "ETV1", "BCAN", "LMO3", "GABRB2",'CNTNAP4','TRPS1','BTBD3', 'S100A1', 'KCNC1','KCNC2','ENO2','SOX6','LHX6','ARX', 'BCL11A',"SATB1", "SST", "NPY", "HTR1A", "CACNG3", "CTNND2", "EFNA5", "ELFN1", "CBLN4", "CALB1", "ZEB2", "RELN", "ID2", "NDNF", "RGS12", "TNFAIP8L3", "PENK", "LRRTM4", "SLC1A2", "NR2F2", "NPY1R", "NPAS1", "ADARB2", "CNR1", "SALL1", "ZBTB16", "HTR3A", "NR2E1", "PROX1", "NFIX", "GRP", "SP8", "VIP", "TRH", "MEIS2", "PBX3", "TSHZ1", "SIX3", "FOXP1", "FOXP2", "ZFHX4", "TH", "ZIC1", "PAX6", "SALL3")
+
+gaba_ge <- AverageExpression(multi_neuro_gaba, features = ge_genes, return.seurat = F)
+
+# pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/gaba_ge_heatmap_t.pdf", height = 6, width = 4)
+Heatmap(t(apply(gaba_ge$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = F, cluster_columns = T, name = "Expression")
+ # dev.off()
+
+Heatmap(t(scale(t(gaba_ge$RNA))), col = magma(10), cluster_rows = F, cluster_columns = F, column_order = c('22', '29','3','10','1','12','25','0','8','5','24','9','11','4','13','19','26','15','14','2','17','6','20','7','23','16','18','21','27','28'))
+
+```
+
+```{r}
+gaba_presto_DE <- wilcoxauc(multi_neuro_gaba, pseudocount.use = 0.1)
+gaba_presto_DE1 <- gaba_presto_DE[!(grepl(pattern = "^AMEX", x = gaba_presto_DE$feature)), ]
+gaba_presto_DE2 <- gaba_presto_DE1[!(grepl(pattern = "^LOC", x = gaba_presto_DE1$feature)), ]
+gaba_presto_DE_top <- gaba_presto_DE2 %>%
+    group_by(group) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 3, wt = logFC) %>%
+    print(n = 40, width = Inf)
+
+gaba_presto_DE_top$group <- as.numeric(gaba_presto_DE_top$group)
+gaba_presto_DE_top <- gaba_presto_DE_top[order(gaba_presto_DE_top$group),]
+
+gaba_presto_topDE <- AverageExpression(multi_neuro_gaba, features = gaba_presto_DE_top$feature, return.seurat = F)
+
+write.csv(gaba_presto_DE, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/gaba_presto_topDE.csv")
+# gaba_presto_DE <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/gaba_presto_topDE.csv")
+
+gaba_presto_DE_filtered <- gaba_presto_DE %>%
+    group_by(group) %>%
+    filter(padj < 0.05, pct_in > 10 & logFC > log(1)) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 100, wt = logFC) #%>%
+    # print(n = 40, width = Inf)
+write.csv(gaba_presto_DE_filtered, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/csv_files/gaba_presto_top100DE.csv")
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/gaba_presto_top3DE_heatmap_t.pdf", height = 10, width = 7)
+Heatmap(t(apply(gaba_presto_topDE$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = F, cluster_columns = F, name = "Expression")
+dev.off()
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/gaba_presto_top3DE_heatmap_scaled_t.pdf", height = 25, width = 10)
+Heatmap(t(scale(t(gaba_presto_topDE$RNA))), col = magma(10), cluster_rows = F, cluster_columns = F)
+dev.off()
+
+Heatmap(t(scale(t(gaba_presto_topDE$RNA))), col = magma(10), cluster_rows = T, cluster_columns = T)
+
+```
+
+
+```{r}
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/gaba_neuron_feat.pdf", height = 6, width = 6)
+FeaturePlot(object = multi_neuro_gaba, features = c("SST"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("SFRP1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("RSPO2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("ZBTB16"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("SATB1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("FOXP1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("FOXP2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("LHX6"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("PNOC"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("NR2F2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("MEIS2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("NFIX"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_gaba, features = c("ST6GALNAC5"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_gaba, features = c("BCL11B"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_gaba, features = c("DACH1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_gaba, features = c("NPY"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_gaba, features = c("NXPH1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_gaba, features = c("TAC1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_gaba, features = c("GAD2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+dev.off()
+```
+
+
+```{r}
+write.csv(x = neuro_gaba_markers, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_gaba_markers.csv")
+# neuro_gaba_markers <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_gaba_markers.csv")
+neuro_gaba_markers <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_gaba_markers.csv")
+```
+
+```{r}
+multi_neuro_gaba$gaba_cluster <- paste0("GABA_SUBSET_",multi_neuro_gaba$seurat_clusters)
+table(multi_neuro_gaba$gaba_cluster)
+```
+
+```{r}
+saveRDS(object = multi_neuro_gaba, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/multi_neuronal_gaba_subset.RDS")
+multi_neuro_gaba <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/multi_neuronal_gaba_subset.RDS")
+```
+
+```{r}
+table(multi_neuro_gaba$seurat_clusters)
+```
+
+```{r}
+VlnPlot(multi_neuro_gaba, features = 'SFRP1')
+VlnPlot(multi_neuro_gaba, features = 'RSPO2')
+VlnPlot(multi_neuro_gaba, features = 'ZBTB16')
+VlnPlot(multi_neuro_gaba, features = 'SATB1')
+VlnPlot(multi_neuro_gaba, features = 'SST')
+VlnPlot(multi_neuro_gaba, features = 'FOXP1')
+VlnPlot(multi_neuro_gaba, features = 'FOXP2')
+```
+
+
+
+
+Subset GLUT
+```{r}
+Idents(multi_neuronal) <- 'neuronal_class'
+table(multi_neuronal$neuronal_class)
+multi_neuro_glut <- subset(multi_neuronal, idents = c('glut'))
+table(multi_neuro_glut$neuronal_class)
+```
+
+Find variable features and scale data (using all genes)
+```{r}
+multi_neuro_glut <- FindVariableFeatures(multi_neuro_glut, nfeatures = 10000)
+multi_neuro_glut <- ScaleData(multi_neuro_glut,  vars.to.regress = c("nCount_RNA", "percent.mt"))
+```
+
+```{r}
+head(VariableFeatures(multi_neuro_glut), 50)
+```
+
+```{r}
+multi_neuro_glut <- RunPCA(multi_neuro_glut, features = VariableFeatures(object = multi_neuro_glut))
+```
+
+```{r}
+DimPlot(object = multi_neuro_glut, reduction = 'pca', group.by = 'sample')
+neuro_glut_pc<- FeaturePlot(object = multi_neuro_glut, reduction = 'pca', features = c('NFIX', 'RELN', 'NETO1','HTR5A'), order = T)
+
+ggsave(plot = neuro_glut_pc, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_pc", device = "png", width = 6, height = 4)
+
+neuro_glut_pc
+```
+
+```{r}
+ElbowPlot(multi_neuro_glut, ndims = 50)
+```
+
+set number of pcs based on elbow plot
+```{r}
+npcs = 30
+```
+
+run harmony to correct for changes between chemestries 
+```{r}
+multi_neuro_glut <- RunHarmony(multi_neuro_glut, "chem")
+```
+
+```{r}
+multi_neuro_glut <- FindNeighbors(multi_neuro_glut, dims = 1:npcs, reduction = 'harmony')
+```
+
+Use clustree to find stability of res for clustering
+```{r}
+# Set different resolutions 
+res.used <- seq(0.1,1.5,by=0.2)
+# Loop over and perform clustering of different resolutions 
+for(i in res.used){
+multi_neuro_glut <- FindClusters(multi_neuro_glut, resolution = i)}
+# Make Plot
+clustree(multi_neuro_glut, layout="sugiyama") + theme(legend.position = "bottom") + scale_color_brewer(palette = "Set1") + scale_edge_color_continuous(low = "grey80", high = "red")
+```
+
+Find clusters 
+```{r}
+res = 1.1
+multi_neuro_glut <- FindClusters(multi_neuro_glut, resolution = res)
+multi_neuro_glut <- RunUMAP(multi_neuro_glut, dims = 1:npcs, reduction = "harmony", reduction.name = 'umap_harmony')
+```
+
+```{r}
+neuro_glut_dim_clus <- DimPlot(multi_neuro_glut, reduction = "umap_harmony", label = T) + NoLegend()
+neuro_glut_dim_region <- DimPlot(multi_neuro_glut, reduction = "umap_harmony", label = F, group.by = 'region')
+neuro_glut_dim_chem <- DimPlot(multi_neuro_glut, reduction = "umap_harmony", label = F, group.by = 'sample', cols = c("turquoise4", "turquoise3", "gray", "gray", "gray", "gray", "gray", "gray"), shuffle = T)
+
+ggsave(plot = neuro_glut_dim_clus, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_dim_clus.png", device = "png", width = 6, height = 4)
+ggsave(plot = neuro_glut_dim_region, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_dim_region.png", device = "png", width = 6, height = 4)
+ggsave(plot = neuro_glut_dim_chem, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_dim_chem.png", device = "png", width = 6, height = 4)
+
+neuro_glut_dim_clus
+neuro_glut_dim_region
+neuro_glut_dim_chem
+```
+
+
+```{r}
+ggplot(multi_neuro_glut@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill")
+clus_region_occ_neuro_glut <- ggplot(subset(multi_neuro_glut@meta.data, !is.na(region)), aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill")  
+ggsave(plot = clus_region_occ_neuro_glut, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_region_occ_neuro_glut.png", device = "png", width = 6, height = 2)
+clus_region_occ_neuro_glut
+```
+
+```{r}
+clus_chem_occ_neuro_glut <- ggplot(multi_neuro_glut@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=chem), position = "fill") + theme_minimal() +scale_fill_manual(values=c("turquoise4", "gray"))
+ggsave(plot = clus_chem_occ_neuro_glut, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_chem_occ_neuro_glut.png", device = "png", width = 6, height = 2)
+clus_chem_occ_neuro_glut
+```
+
+
+```{r}
+neuro_glut_markers <- FindAllMarkers(object = multi_neuro_glut, only.pos = T)
+neuro_glut_markers_top3 <- neuro_glut_markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC)
+neuro_glut_markers_top5 <- neuro_glut_markers %>% group_by(cluster) %>% top_n(n = 5, wt = avg_log2FC)
+neuro_glut_markers_diff <- neuro_glut_markers %>% group_by(cluster) %>% top_n(n = 10, wt = (pct.1-pct.2))
+neuro_glut_markers_top10 <- neuro_glut_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+```
+
+```{r}
+VlnPlot(multi_neuro_glut, features = "SCN5A")
+```
+
+
+```{r}
+neuro_glut_markers_top10_fil <- neuro_glut_markers_top10[!(grepl(pattern = "^AMEX", x = neuro_glut_markers_top10$gene)), ]
+neuro_glut_markers_top10_fil1 <- neuro_glut_markers_top10_fil[!(grepl(pattern = "^LOC", x = neuro_glut_markers_top10_fil$gene)), ]
+neuro_glut_markers_top3_fil <- neuro_glut_markers_top10_fil1 %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC)
+neuro_glut_markers_top3_fil <- neuro_glut_markers_top10_fil1 %>% group_by(cluster) %>% top_n(n = 7, wt = avg_log2FC)
+
+glut_top3_top_fil_dot <- DotPlot(multi_neuro_glut, features = c(unique(neuro_glut_markers_top3_fil$gene))) +
+    RotatedAxis() +
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    scale_colour_viridis(option="magma") +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white"))) +
+    coord_flip()
+
+ggsave(plot = glut_top3_top_fil_dot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_top_dotplot.pdf", device = "pdf", width = 12, height = 6)
+glut_top3_top_fil_dot
+```
+
+
+```{r}
+neuro_glut_markers_diff_fil <- neuro_glut_markers_diff[!(grepl(pattern = "^AMEX", x = neuro_glut_markers_diff$gene)), ]
+neuro_glut_markers_diff_fil1 <- neuro_glut_markers_diff_fil[!(grepl(pattern = "^LOC", x = neuro_glut_markers_diff_fil$gene)), ]
+neuro_glut_markers_diff3_fil <- neuro_glut_markers_diff_fil1 %>% group_by(cluster) %>% top_n(n = 3, wt = (pct.1-pct.2))
+
+glut_top3_diff_dot <- DotPlot(multi_neuro_glut, features = c(unique(neuro_glut_markers_diff3_fil$gene))) +
+    RotatedAxis() +
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    scale_colour_viridis(option="magma") +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white"))) +
+    coord_flip()
+
+ggsave(plot = glut_top3_diff_dot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_topdiff_dotplot.pdf", device = "pdf", width = 12, height = 6)
+glut_top3_diff_dot
+```
+
+plot top 3 DE for glut cluster averages
+```{r}
+conglut_avg1 <- AverageExpression(multi_neuro_glut, features = neuro_glut_markers_top3_fil$gene, return.seurat = T)
+DoHeatmap(conglut_avg1, features = neuro_glut_markers_top3_fil$gene, draw.lines = F) + scale_fill_viridis(option = "magma")
+```
+
+Plot top 5 markers per glut cluster
+```{r}
+conglut_avg2 <- AverageExpression(multi_neuro_glut, features = neuro_glut_markers_top5$gene)
+con_glut_avg3 <- t(apply(conglut_avg2$RNA, 1, function(x)(x-min(x))/(max(x)-min(x))))
+# library(ComplexHeatmap) # use columnorder to change column order (to match dendrogram)
+heat_glut <- Heatmap(con_glut_avg3, col = magma(20), cluster_rows = F, name = "Expression")
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/glut_neuron_avgheatmap.pdf", height = 14, width = 7, useDingbats = F)
+print(heat_glut)
+dev.off()
+heat_glut
+```
+
+```{r}
+write.csv(x = neuro_glut_markers, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_markers.csv")
+neuro_glut_markers <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_markers.csv")
+```
+
+```{r}
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/glut_neuron_feat.pdf", height = 6, width = 6)
+FeaturePlot(object = multi_neuro_glut, features = c("RORB"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"), order = T)
+FeaturePlot(object = multi_neuro_glut, features = c("SATB1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_glut, features = c("SLC17A6"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_glut, features = c("ETV1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_glut, features = c("ELMO1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_glut, features = c("FOXP1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_glut, features = c("CNTNAP5"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_glut, features = c("RBFOX3"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_glut, features = c("SPOCK1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_glut, features = c("TMEM88B"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_glut, features = c("NDST4"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+dev.off()
+```
+
+
+!!!!!! glut_23 is low quality cells 
+```{r}
+VlnPlot(multi_neuro_glut, features = 'percent.rp')
+VlnPlot(multi_neuro_glut, features = 'percent.mt')
+```
+
+```{r}
+multi_neuro_glut_clean <- subset(multi_neuro_glut, idents = c(0:22, 24:28))
+table(Idents(multi_neuro_glut_clean))
+glut_presto_DE <- wilcoxauc(multi_neuro_glut_clean, pseudocount.use = 0.1)
+glut_presto_DE1 <- glut_presto_DE[!(grepl(pattern = "^AMEX", x = glut_presto_DE$feature)), ]
+glut_presto_DE2 <- glut_presto_DE1[!(grepl(pattern = "^LOC", x = glut_presto_DE1$feature)), ]
+glut_presto_DE3 <- glut_presto_DE2[!(grepl(pattern = "^OJAV", x = glut_presto_DE2$feature)), ]
+
+glut_presto_DE_top <- glut_presto_DE3 %>%
+    group_by(group) %>%
+    arrange(desc(auc), .by_group=T) %>%
+    top_n(n = 3, wt = logFC) %>%
+    print(n = 40, width = Inf)
+
+glut_presto_DE_top30 <- glut_presto_DE2 %>%
+    group_by(group) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n =30, wt = logFC) %>%
+    print(n = 40, width = Inf)
+# write.csv(glut_presto_DE_top30, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/glut_presto_top30DE.csv")
+
+# glut_presto_DE_top$group <- as.numeric(glut_presto_DE_top$group)
+# glut_presto_DE_top <- glut_presto_DE_top[order(glut_presto_DE_top$group),]
+
+reference <- c("22", '25', '9','20','10','24','19','11','1','2','21','8','6','13','28','27','26','16','3','0','5','12','17','18','4','7','14','15')
+glut_presto_DE_top$reference <- sapply(glut_presto_DE_top$group, function(x) which(x == reference))
+glut_presto_DE_top <- glut_presto_DE_top[order(glut_presto_DE_top$reference), ]
+
+glut_presto_topDE <- AverageExpression(multi_neuro_glut_clean, features = glut_presto_DE_top$feature, return.seurat = F)
+
+# write.csv(glut_presto_DE, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/glut_presto_topDE.csv")
+# glut_presto_DE <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/glut_presto_topDE.csv")
+
+glut_presto_DE_filtered <- glut_presto_DE %>%
+    group_by(group) %>%
+    filter(padj < 0.05, pct_in > 10 & logFC > log(1)) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 100, wt = logFC) #%>%
+    # print(n = 40, width = Inf)
+write.csv(glut_presto_DE_filtered, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/csv_files/glut_presto_top100DE.csv")
+
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/glut_presto_top3DE_heatmap_t_reordered.pdf", height = 10, width = 6)
+Heatmap(t(apply(glut_presto_topDE$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = F, cluster_columns = F, name = "Expression", column_order = c("22", '25', '9','20','10','24','19','11','1','2','21','8','6','13','28','27','26','16','3','0','5','12','17','18','4','7','14','15'))
+dev.off()
+# pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/glut_presto_top5DE_heatmap_scaled_t.pdf", height = 25, width = 10)
+Heatmap(t(scale(t(glut_presto_topDE$RNA))), col = magma(10), cluster_rows = F, cluster_columns = F)
+# dev.off()
+```
+
+RORB cluster co expression heatmap
+```{r}
+glut_presto_rorb_pop <- AverageExpression(multi_neuro_glut_clean, features = c("RORB", "SATB1", "GRM2", "EOMES", "RELN", "GRIK1", "FEZF2", "TBR1"), return.seurat = F)
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/glut_rorb_heatmap.pdf", height = 25, width = 10)
+Heatmap(apply(glut_presto_rorb_pop$RNA, 1, function(x)(x-min(x))/(max(x)-min(x))), col = magma(10), cluster_rows = F, cluster_columns = F, name = "Expression")
+dev.off()
+```
+
+heatmap for TFs from turtle 
+```{r}
+glut_TFs_turtle <- AverageExpression(multi_neuro_glut_clean, features = c("LHX2", "MEF2C", 'NEUROD6','RORB','SATB1','NR2F1','ETV1','MEIS2','FEZF2','BCL11B','FOXP2','TBR1','NFIA','NR4A2','LMO3'), return.seurat = F)
+
+# pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/glut_rorb_heatmap.pdf", height = 25, width = 10)
+Heatmap(t(apply(glut_TFs_turtle$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = F, cluster_columns = T, name = "Expression")
+# dev.off()
+DotPlot(multi_neuro_glut_clean, features = c("LHX2", "MEF2C", 'NEUROD6','SATB2','RORB','SATB1','NR2F1','ETV1','MEIS2','FEZF2','BCL11B','FOXP2','TBR1','NFIA','NR4A2','SOX5','LMO3','ID2')) + RotatedAxis()
+```
+
+
+```{r}
+DotPlot(multi_neuro_glut, features = c("CDH11", "PTPRK", "PEX5L", "FOXP1", "CNTNAP2"))
+```
+
+
+```{r}
+multi_neuro_glut$glut_cluster <- paste0("glut_SUBSET_",multi_neuro_glut$seurat_clusters)
+table(multi_neuro_glut$glut_cluster)
+```
+
+```{r}
+saveRDS(object = multi_neuro_glut, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/multi_neuronal_glut_subset.RDS")
+# multi_neuro_glut <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/multi_neuronal_glut_subset.RDS")
+```
+
+```{r}
+# stash current cluster IDs
+multi_neuro_glut_clean[["glut.clean.cluster.ids"]] <- Idents(object = multi_neuro_glut_clean)
+table(multi_neuro_glut_clean$glut.clean.cluster.ids)
+# enumerate current cluster IDs and the labels for them
+glut.clean.cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12,13,14,15,16,17,18,19,20,21,22, 24,25,26,27,28)
+glut_corr_class <- c("hippo", "lc", "dvr", "dc", "hippo", "hippo", "dc", "hippo", "lc", "lc", "lc", "lc", "hippo", "lc", "hippo", "hippo", "hippo", "hippo", "hippo", "hippo", "dvr", "lc", "lc","hippo","lc", "dvr", "dvr", "dvr")
+
+multi_neuro_glut_clean@meta.data[,'glut_corr_class'] <- plyr::mapvalues(x = multi_neuro_glut_clean@meta.data$glut.clean.cluster.ids, from = glut.clean.cluster.ids, to = glut_corr_class)
+
+DimPlot(multi_neuro_glut_clean, reduction = "umap_harmony", pt.size = 0.3, label = FALSE, group.by = 'glut_corr_class')
+DimPlot(multi_neuro_glut_clean, reduction = "umap_harmony", pt.size = 0.3, label = T)
+```
+
+```{r}
+library(presto)
+Idents(multi_neuro_glut_clean) <- 'glut_corr_class'
+corr_region <- wilcoxauc(multi_neuro_glut_clean, pseudocount.use = 0.1)
+corr_region1 <- corr_region[!(grepl(pattern = "^AMEX", x = corr_region$feature)), ]
+corr_region2 <- corr_region1[!(grepl(pattern = "^LOC", x = corr_region1$feature)), ]
+corr_region2$pct_diff <- corr_region2$pct_in - corr_region2$pct_out
+corr_region_top <- corr_region2 %>%
+    group_by(group) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 20, wt = logFC) %>%
+    print(n = 40, width = Inf)
+```
+
+
+
+
+
+
+Subset NPCs
+
+```{r}
+Idents(multi_neuronal) <- 'neuronal_class'
+table(multi_neuronal$neuronal_class)
+multi_neuro_npc <- subset(multi_neuronal, idents = c('npc'))
+table(multi_neuro_npc$neuronal_class)
+```
+
+
+Find variable features and scale data (using all genes)
+```{r}
+multi_neuro_npc <- FindVariableFeatures(multi_neuro_npc, nfeatures = 10000)
+multi_neuro_npc <- ScaleData(multi_neuro_npc,  vars.to.regress = c("nCount_RNA", "percent.mt"))
+```
+
+```{r}
+head(VariableFeatures(multi_neuro_npc), 50)
+```
+
+```{r}
+multi_neuro_npc <- RunPCA(multi_neuro_npc, features = VariableFeatures(object = multi_neuro_npc))
+```
+
+```{r}
+DimPlot(object = multi_neuro_npc, reduction = 'pca', group.by = 'sample')
+neuro_npc_pc<- FeaturePlot(object = multi_neuro_npc, reduction = 'pca', features = c('SLC17A6', 'GAD2','MEX3A', 'NFIX'), order = T)
+
+ggsave(plot = neuro_npc_pc, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_npc_pc", device = "png", width = 6, height = 4)
+
+neuro_npc_pc
+```
+
+```{r}
+ElbowPlot(multi_neuro_npc, ndims = 50)
+```
+
+set number of pcs based on elbow plot
+```{r}
+npcs = 25
+```
+
+run harmony to correct for changes between chemestries 
+```{r}
+multi_neuro_npc <- RunHarmony(multi_neuro_npc, "chem")
+```
+
+```{r}
+multi_neuro_npc <- FindNeighbors(multi_neuro_npc, dims = 1:npcs, reduction = 'harmony')
+```
+
+Use clustree to find stability of res for clustering
+```{r}
+# Set different resolutions 
+res.used <- seq(0.1,1,by=0.2)
+# Loop over and perform clustering of different resolutions 
+for(i in res.used){
+multi_neuro_npc <- FindClusters(multi_neuro_npc, resolution = i)}
+# Make Plot
+clustree(multi_neuro_npc, layout="sugiyama") + theme(legend.position = "bottom") + scale_color_brewer(palette = "Set1") + scale_edge_color_continuous(low = "grey80", high = "red")
+```
+
+Find clusters 
+```{r}
+res = 1.7
+multi_neuro_npc <- FindClusters(multi_neuro_npc, resolution = res)
+multi_neuro_npc <- RunUMAP(multi_neuro_npc, dims = 1:npcs, reduction = "harmony", reduction.name = 'umap_harmony')
+```
+
+```{r}
+neuro_npc_dim_clus <- DimPlot(multi_neuro_npc, reduction = "umap_harmony", label = T) + NoLegend()
+neuro_npc_dim_region <- DimPlot(multi_neuro_npc, reduction = "umap_harmony", label = F, group.by = 'region')
+neuro_npc_dim_chem <- DimPlot(multi_neuro_npc, reduction = "umap_harmony", label = F, group.by = 'sample', cols = c("turquoise4", "turquoise3", "gray", "gray", "gray", "gray", "gray", "gray"), shuffle = T)
+
+ggsave(plot = neuro_npc_dim_clus, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_npc_dim_clus.png", device = "png", width = 6, height = 4)
+ggsave(plot = neuro_npc_dim_region, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_npc_dim_region.png", device = "png", width = 6, height = 4)
+ggsave(plot = neuro_npc_dim_chem, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_npc_dim_chem.png", device = "png", width = 6, height = 4)
+
+neuro_npc_dim_clus
+neuro_npc_dim_region
+neuro_npc_dim_chem
+```
+
+
+```{r}
+ggplot(multi_neuro_npc@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill")
+clus_region_occ_neuro_npc <- ggplot(subset(multi_neuro_npc@meta.data, !is.na(region)), aes(x = seurat_clusters)) + geom_bar(aes(fill=region), position = "fill")  
+ggsave(plot = clus_region_occ_neuro_npc, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_region_occ_neuro_npc.png", device = "png", width = 6, height = 2)
+clus_region_occ_neuro_npc
+```
+
+```{r}
+clus_chem_occ_neuro_npc <- ggplot(multi_neuro_npc@meta.data, aes(x = seurat_clusters)) + geom_bar(aes(fill=chem), position = "fill") + theme_minimal() +scale_fill_manual(values=c("turquoise4", "gray"))
+ggsave(plot = clus_chem_occ_neuro_npc, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/clus_chem_occ_neuro_npc.png", device = "png", width = 6, height = 2)
+clus_chem_occ_neuro_npc
+```
+
+
+```{r}
+FeaturePlot(object = multi_neuro_npc, features = 'MEX3A', reduction = 'umap_harmony') + RotatedAxis()
+```
+
+```{r}
+DotPlot(multi_neuro_npc, features = c('SLC17A6', "GAD2", "MEX3A"))
+```
+
+
+
+```{r}
+neuro_npc_markers <- FindAllMarkers(object = multi_neuro_npc, only.pos = T)
+neuro_npc_markers_top10 <- neuro_npc_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+neuro_npc_markers_diff <- neuro_npc_markers %>% group_by(cluster) %>% top_n(n = 10, wt = (pct.1-pct.2))
+neuro_npc_markers_top3 <- neuro_npc_markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC)
+```
+
+```{r}
+neuro_npc_markers_top10
+neuro_npc_markers_diff
+neuro_npc_markers_top3
+```
+
+```{r}
+neuro_npc_markers_top10_fil <- neuro_npc_markers_top10[!(grepl(pattern = "^AMEX", x = neuro_npc_markers_top10$gene)), ]
+neuro_npc_markers_top10_fil1 <- neuro_npc_markers_top10_fil[!(grepl(pattern = "^LOC", x = neuro_npc_markers_top10_fil$gene)), ]
+neuro_npc_markers_top3_fil <- neuro_npc_markers_top10_fil1 %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC)
+
+npc_top3_top_fil_dot <- DotPlot(multi_neuro_npc, features = c(unique(neuro_npc_markers_top3_fil$gene))) +
+    RotatedAxis() +
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    scale_colour_viridis(option="magma") +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white"))) +
+    coord_flip()
+
+ggsave(plot = npc_top3_top_fil_dot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_npc_top_dotplot.pdf", device = "pdf", width = 12, height = 6)
+npc_top3_top_fil_dot
+```
+
+
+```{r}
+neuro_npc_markers_diff_fil <- neuro_npc_markers_diff[!(grepl(pattern = "^AMEX", x = neuro_npc_markers_diff$gene)), ]
+neuro_npc_markers_diff_fil1 <- neuro_npc_markers_diff_fil[!(grepl(pattern = "^LOC", x = neuro_npc_markers_diff_fil$gene)), ]
+neuro_npc_markers_diff3_fil <- neuro_npc_markers_diff_fil1 %>% group_by(cluster) %>% top_n(n = 3, wt = (pct.1-pct.2))
+
+npc_top3_diff_dot <- DotPlot(multi_neuro_npc, features = c(unique(neuro_npc_markers_diff3_fil$gene))) +
+    RotatedAxis() +
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    scale_colour_viridis(option="magma") +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white"))) +
+    coord_flip()
+
+ggsave(plot = npc_top3_diff_dot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_npc_topdiff_dotplot.pdf", device = "pdf", width = 12, height = 6)
+npc_top3_diff_dot
+```
+
+
+```{r}
+npc_presto_DE <- wilcoxauc(multi_neuro_npc, pseudocount.use = 0.1)
+npc_presto_DE1 <- npc_presto_DE[!(grepl(pattern = "^AMEX", x = npc_presto_DE$feature)), ]
+npc_presto_DE2 <- npc_presto_DE1[!(grepl(pattern = "^LOC", x = npc_presto_DE1$feature)), ]
+npc_presto_DE_top <- npc_presto_DE2 %>%
+    group_by(group) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 3, wt = logFC) %>%
+    print(n = 40, width = Inf)
+
+npc_presto_DE_top$group <- as.numeric(npc_presto_DE_top$group)
+npc_presto_DE_top <- npc_presto_DE_top[order(npc_presto_DE_top$group),]
+
+npc_presto_topDE <- AverageExpression(multi_neuro_npc, features = npc_presto_DE_top$feature, return.seurat = F)
+
+# write.csv(npc_presto_DE, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/npc_presto_topDE.csv")
+# npc_presto_DE <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/npc_presto_topDE.csv")
+
+npc_presto_DE_filtered <- npc_presto_DE %>%
+    group_by(group) %>%
+    filter(padj < 0.05, pct_in > 10 & logFC > log(1)) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 100, wt = logFC) #%>%
+    # print(n = 40, width = Inf)
+write.csv(npc_presto_DE_filtered, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/csv_files/npcs_presto_top100DE.csv")
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/npc_clus_presto_top3_DE_heatmap_t.pdf", height = 25, width = 10)
+Heatmap(t(apply(npc_presto_topDE$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = F, cluster_columns = F, name = "Expression")
+dev.off()
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/npc_clus_presto_top3_DE_heatmap_scaled_t.pdf", height = 25, width = 10)
+Heatmap(t(scale(t(npc_presto_topDE$RNA))), col = magma(10), cluster_rows = F, cluster_columns = F)
+dev.off()
+
+Heatmap(t(apply(npc_presto_topDE$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = F, cluster_columns = F, name = "Expression")
+Heatmap(t(scale(t(npc_presto_topDE$RNA))), col = magma(10), cluster_rows = F, cluster_columns = F)
+```
+
+```{r}
+npc_presto_DE_top <- npc_presto_DE2 %>%
+    group_by(group) %>%
+    arrange(desc(pct_in - pct_out), .by_group=T) %>%
+    top_n(n = 5, wt = logFC) %>%
+    print(n = 40, width = Inf)
+```
+
+
+plot top 3 DE for npc cluster averages
+```{r}
+connpc_avg1 <- AverageExpression(multi_neuro_npc, features = neuro_npc_markers_top3_fil$gene, return.seurat = T)
+DoHeatmap(connpc_avg1, features = neuro_npc_markers_top3_fil$gene, draw.lines = F) + scale_fill_viridis(option = "magma")
+```
+
+
+```{r}
+write.csv(x = neuro_npc_markers, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_npc_markers.csv")
+# neuro_npc_markers <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_npc_markers.csv")
+```
+
+```{r}
+multi_neuro_npc$npc_cluster <- paste0("npc_SUBSET_",multi_neuro_npc$seurat_clusters)
+table(multi_neuro_npc$npc_cluster)
+```
+
+```{r}
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/npc_neuron_feat.pdf", height = 6, width = 6)
+FeaturePlot(object = multi_neuro_npc, features = c("MEX3A"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("NEGR1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("DRD3"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("PLXDC2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("SLC17A6"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("DRD4"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("FRMD4B"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("ERBB4"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("PCBP3"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("ROBO1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("GAD2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("NFIX"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("TSPAN18"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("NEGR1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("PTPRK"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("ASIC4"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_neuro_npc, features = c("SHISA6"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+dev.off()
+```
+
+
+```{r}
+saveRDS(object = multi_neuro_npc, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multi_neuronal_npc_subset.RDS")
+multi_neuro_npc <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multi_neuronal_npc_subset.RDS")
+```
+
+```{r}
+DotPlot(multi_epen, features = c("SLC1A3", "CXCL14")) + ggtitle('Epen')
+
+```
+
+```{r}
+DotPlot(multi_epen, features = c("PAX6", "SOX2")) + ggtitle('Epen')
+DotPlot(multi_neuro_npc, features = c("PAX6", "SOX2")) + ggtitle('NB')
+```
+
+```{r}
+DotPlot(multi_neuro_npc, features = c('EMX1', 'DLX2','DLX5'))
+DotPlot(multi_epen, features = c('EMX1', 'DLX2','DLX5'))
+DotPlot(multi_neuro_gaba, features = c('EMX1', 'DLX2','DLX5'))
+DotPlot(multi_neuro_glut, features = c('EMX1', 'DLX2','DLX5'))
+```
+
+
+Add annotations and plot with main data (all cell types)
+```{r}
+anno <- read.csv(file =  "/links/groups/treutlein/USERS/tomasgomes/projects/pallium_evo/data/annotations/axolotl_all_umeta.csv")
+names(anno)[1] <- "cell_id"
+
+multi_combine@meta.data <- left_join(multi_combine@meta.data, anno)
+table(multi_combine$subclasses)
+rownames(multi_combine@meta.data) <- multi_combine$cell_id
+
+main_classes_dimplot <- DimPlot(multi_combine, reduction = "umap_harmony", label = F, group.by = 'subclasses')
+ggsave(plot = main_classes_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_dimplot_annoclasses.png", device = "png", width = 12, height = 10)
+main_classes_dimplot
+```
+
+```{r}
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/qc_plots_main_classes.pdf")
+VlnPlot(object = multi_combine, features = c("nCount_RNA", "nFeature_RNA"), group.by = 'subclasses', pt.size = 0) + geom_boxplot(width=0.1,fill="white")
+dev.off()
+```
+
+Plots for multiome qc
+```{r}
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/qc_multiome_v3_umap.pdf")
+DimPlot(multi_combine, reduction = "umap_harmony", label = F, group.by = 'sample', cols = c("turquoise4", "turquoise3", "gray", "gray", "gray", "gray", "gray", "gray"), shuffle = T)
+dev.off()
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/qc_multiome_v3_vlnplot.pdf")
+VlnPlot(object = multi_combine, features = c("nCount_RNA", "nFeature_RNA"), group.by = 'chem', pt.size = 0, cols = c("turquoise4", "gray")) + geom_boxplot(width=0.1,fill="white")
+dev.off()
+
+table(multi_combine$sample)
+```
+
+
+
+recolor main umap with all cells
+```{r}
+# endo (2) ##712166, ##B565AB
+# ependymal (2) ##4c8844, ##70A069
+#newgaba (10) #560208(1), ##641116 (3), #6d191c(5), #782226 (12),#842c2f(13), #903639(15), #9c3f43(20), #(21), #b45357(30), #c05d62(33)
+# gaba (10) ##64050C, ##6b1015, ##721a1d, ##792224, ##802a2c, ##873234, ##8e3a3d, ##954245, ##9c494d, ##a25156
+# glut (16) ##02263f, ##072c46, ##0e324e, ##143955, ##1a3f5d,##224968, ##2b5474, ##335e80, ##3b698c, ##447498, ##4c7fa5, ##5286ad, ##578eb5, ##5d96be, ##65a1cb, ##6eadd8
+# micro (1) ##d94b08
+# npc (2) ##ffb120, ##FFC14D
+# olgio (1) ##CF3E7F  
+
+recolored_main_dim <- DimPlot(multi_combine, reduction = "umap_harmony", label = T, group.by = 'seurat_clusters') + scale_color_manual(values = c("#02263f", "#a8494d", "#4c8844", "#641116", "#072c46", "#560208", "#1a3f5d", "#143955", "#578eb5", "#224968", "#2b5474", "#335e80", "#782226", "#c05d62", "#3b698c", "#903639", "#447498", "#ffb120", "#4c7fa5", "#5286ad", "#9c3f43", "#6d191c", "#FFC14D", "#70A069", "#0e324e", "#5d96be", "#65a1cb", "#CF3E7F", "#6eadd8", "#d94b08", "#b45357", "#712166", "#B565AB", "#842c2f")) + NoLegend()
+
+ggsave(plot = recolored_main_dim, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_dimplot_subclass_labeled_recolor.pdf", device = "pdf", width = 6, height = 6)
+
+ggsave(plot = recolored_main_dim, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_dimplot_subclass_labeled_recolor.png", device = "png", width = 6, height = 6)
+
+recolored_main_dim
+```
+
+
+
+
+```{r}
+#endo- #712166
+#epen- #4c8844
+#gaba- #85050E
+#glut- 05548C
+#micro- #E6530D
+#npc- #ffb120
+#oligo- #E43D88
+
+classes_main_dim <- DimPlot(multi_combine, reduction = "umap_harmony", label = F, group.by = 'subclasses') + scale_color_manual(values = c("#712166", "#4c8844", "#85050E", "#05548C", "#E6530D", "#ffb120", "#E43D88")) + NoLegend()
+
+ggsave(plot = classes_main_dim, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_dimplot_classes_labeled_recolor.pdf", device = "pdf", width = 6, height = 6)
+
+ggsave(plot = classes_main_dim, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_dimplot_classes_labeled_recolor.png", device = "png", width = 6, height = 6)
+
+classes_main_dim
+```
+
+```{r}
+length(unique(multi_neuro_glut$glut_cluster))
+```
+
+
+```{r}
+DimPlot(multi_combine, reduction = "umap_harmony", label = F, group.by = 'cellclusters') + NoLegend()
+multi_combine$cellclusters <- factor(multi_combine$cellclusters, levels = c("epen_clus_0", "epen_clus_1",  "epen_clus_2",  "epen_clus_3",  "epen_clus_4",  "epen_clus_5",  "epen_clus_6","epen_clus_7",  "epen_clus_8", "epen_clus_9",  "epen_clus_10", "epen_clus_11",  "epen_clus_12",  "epen_clus_13","epen_clus_14", "GABA_SUBSET_0",  "GABA_SUBSET_1",  "GABA_SUBSET_2", "GABA_SUBSET_3", "GABA_SUBSET_4",  "GABA_SUBSET_5","GABA_SUBSET_6", "GABA_SUBSET_7",  "GABA_SUBSET_8", "GABA_SUBSET_9", "GABA_SUBSET_10",  "GABA_SUBSET_11", "GABA_SUBSET_12", "GABA_SUBSET_13", "GABA_SUBSET_14",  "GABA_SUBSET_15", "GABA_SUBSET_16", "GABA_SUBSET_17", "GABA_SUBSET_18", "GABA_SUBSET_19",  "GABA_SUBSET_20", "GABA_SUBSET_21", "GABA_SUBSET_22", "GABA_SUBSET_23", "GABA_SUBSET_24", "GABA_SUBSET_25", "GABA_SUBSET_26", "GABA_SUBSET_27", "GABA_SUBSET_28", "GABA_SUBSET_29", "glut_SUBSET_0",  "glut_SUBSET_1",  "glut_SUBSET_2", "glut_SUBSET_3", "glut_SUBSET_4",  "glut_SUBSET_5","glut_SUBSET_6", "glut_SUBSET_7",  "glut_SUBSET_8", "glut_SUBSET_9", "glut_SUBSET_10",  "glut_SUBSET_11", "glut_SUBSET_12", "glut_SUBSET_13", "glut_SUBSET_14",  "glut_SUBSET_15", "glut_SUBSET_16", "glut_SUBSET_17", "glut_SUBSET_18", "glut_SUBSET_19",  "glut_SUBSET_20", "glut_SUBSET_21", "glut_SUBSET_22", "glut_SUBSET_23", "glut_SUBSET_24", "glut_SUBSET_25", "glut_SUBSET_26", "glut_SUBSET_27", "glut_SUBSET_28", "npc_SUBSET_0",  "npc_SUBSET_1",  "npc_SUBSET_2", "npc_SUBSET_3", "npc_SUBSET_4",  "npc_SUBSET_5","npc_SUBSET_6", "npc_SUBSET_7",  "npc_SUBSET_8", "npc_SUBSET_9", "npc_SUBSET_10",  "npc_SUBSET_11", "npc_SUBSET_12", "npc_SUBSET_13", "npc_SUBSET_14", "oligodendrocyte_10", "oligodendrocyte_15", "microglia_8", "endothelial_11","endothelial_12", "endothelial_14"))
+
+# colors <- c("#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472","#700209", "#75090e","#7a0f13", "#801517", "#851a1b", "#8a1f1f", "#902423", "#952927", "#9a2d2c","#a03230", "#a53634", "#aa3a39", "#b03f3d","#b54342", "#ba4846", "#c04c4b", "#c5504f", "#ca5554", "#d05959", "#d55e5e","#73050c", "#780c11","#8d2221", "#982b2a","#a23432", "#a83837", "#b2413f", "#b84544", "#bd4a49", "#c85352","#054674", "#134d7b","#1d5481", "#265a88", "#2e618e", "#73a4cb", "#366995", "#3e709c", "#4677a2","#4d7ea9", "#5586b0", "#5c8db7", "#6495bd","#6b9cc4", "#7bacd2", "#8ebfe4", "#96c7eb", "#9ecff2", "#18507e", "#18507e","#2a5e8b", "#497ba6","#5889b3", "#6fa0c8","#7fafd6", "#6091ba", "#5182ac", "#3a6c98", "#a6d7f9", "#ffb120", "#feb72a","#fdbc34", "#fcc13d", "#fbc745", "#facc4e", "#f9d156", "#f8d65f", "#f8da68","#f7df70", "#f7e479", "#f7e882", "#f7ed8a", "#f7f193", "#eca319","#E43D88", "#F662A5", "#E6530D", "#712166","B0279D" "#BE5AB0")
+
+cellclusters_main_dim <- DimPlot(multi_combine, reduction = "umap_harmony", label = F, group.by = 'cellclusters') + scale_color_manual(values = c("#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472","#700209", "#75090e","#7a0f13", "#801517", "#851a1b", "#8a1f1f", "#902423", "#952927", "#9a2d2c","#a03230", "#a53634", "#aa3a39", "#b03f3d","#b54342", "#ba4846", "#c04c4b", "#c5504f", "#ca5554", "#d05959", "#d55e5e","#73050c", "#780c11","#8d2221", "#982b2a","#a23432", "#a83837", "#b2413f", "#b84544", "#bd4a49", "#c85352","#054674", "#134d7b","#1d5481", "#265a88", "#2e618e", "#73a4cb", "#366995", "#3e709c", "#4677a2","#4d7ea9", "#5586b0", "#5c8db7", "#6495bd","#6b9cc4", "#7bacd2", "#8ebfe4", "#96c7eb", "#9ecff2", "#18507e", "#18507e","#2a5e8b", "#497ba6","#5889b3", "#6fa0c8","#7fafd6", "#6091ba", "#5182ac", "#3a6c98", "#a6d7f9", "#ffb120", "#feb72a","#fdbc34", "#fcc13d", "#fbc745", "#facc4e", "#f9d156", "#f8d65f", "#f8da68","#f7df70", "#f7e479", "#f7e882", "#f7ed8a", "#f7f193", "#eca319","#E43D88", "#F662A5", "#E6530D", "#712166","#B0279D", "#BE5AB0")) + NoLegend()
+
+#endo- #712166
+#epen- #4c8844
+#gaba- #85050E
+#glut- 05548C
+#micro- #E6530D
+#npc- #ffb120
+#oligo- #E43D88
+classes_main_dim <- DimPlot(multi_combine, reduction = "umap_harmony", label = F, group.by = 'subclasses') + scale_color_manual(values = c("#712166", "#4c8844", "#85050E", "#05548C", "#E6530D", "#ffb120", "#E43D88")) + NoLegend()
+
+ggsave(plot = classes_main_dim, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_dimplot_classes_labeled_recolor.pdf", device = "pdf", width = 6, height = 6)
+ggsave(plot = classes_main_dim, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_dimplot_classes_labeled_recolor.png", device = "png", width = 6, height = 6)
+ggsave(plot = cellclusters_main_dim, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_dimplot_cellclusters_labeled_recolor.pdf", device = "pdf", width = 6, height = 6)
+ggsave(plot = cellclusters_main_dim, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_dimplot_cellclusters_labeled_recolor.png", device = "png", width = 6, height = 6)
+
+cellclusters_main_dim
+classes_main_dim
+```
+
+
+The Big heatmap of cell clusters
+```{r}
+# multi_combine <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/all_nuclei_annotated.RDS")
+
+Idents(multi_combine) <- 'cellclusters'
+main_cellculst_DE <- wilcoxauc(multi_combine, pseudocount.use = 0.1)
+main_cellculst_DE_DE1 <- main_cellculst_DE[!(grepl(pattern = "^AMEX", x = main_cellculst_DE$feature)), ]
+main_cellculst_DE_DE2 <- main_cellculst_DE_DE1[!(grepl(pattern = "^LOC", x = main_cellculst_DE_DE1$feature)), ]
+main_cellculst_DE_top <- main_cellculst_DE_DE2 %>%
+    group_by(group) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 10, wt = logFC) %>%
+    print(n = 40, width = Inf)
+
+write.csv(x = main_cellculst_DE, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_cellclusters_DE_presto.csv")
+
+write.csv(x = main_cellculst_DE_top, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/csv_files/main_cellclusters_DE_presto_top10_heatmap.csv")
+
+# main_cellculst_DE <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_cellclusters_DE_presto.csv")
+
+
+
+order <- c("epen_clus_0", "epen_clus_1",  "epen_clus_2",  "epen_clus_3",  "epen_clus_4",  "epen_clus_5",  "epen_clus_6","epen_clus_7",  "epen_clus_8", "epen_clus_9",  "epen_clus_10", "epen_clus_11",  "epen_clus_12",  "epen_clus_13","epen_clus_14", "GABA_SUBSET_0",  "GABA_SUBSET_1",  "GABA_SUBSET_2", "GABA_SUBSET_3", "GABA_SUBSET_4",  "GABA_SUBSET_5","GABA_SUBSET_6", "GABA_SUBSET_7",  "GABA_SUBSET_8", "GABA_SUBSET_9", "GABA_SUBSET_10",  "GABA_SUBSET_11", "GABA_SUBSET_12", "GABA_SUBSET_13", "GABA_SUBSET_14",  "GABA_SUBSET_15", "GABA_SUBSET_16", "GABA_SUBSET_17", "GABA_SUBSET_18", "GABA_SUBSET_19",  "GABA_SUBSET_20", "GABA_SUBSET_21", "GABA_SUBSET_22", "GABA_SUBSET_23", "GABA_SUBSET_24", "GABA_SUBSET_25", "GABA_SUBSET_26", "GABA_SUBSET_27", "GABA_SUBSET_28", "GABA_SUBSET_29", "glut_SUBSET_0",  "glut_SUBSET_1",  "glut_SUBSET_2", "glut_SUBSET_3", "glut_SUBSET_4",  "glut_SUBSET_5","glut_SUBSET_6", "glut_SUBSET_7",  "glut_SUBSET_8", "glut_SUBSET_9", "glut_SUBSET_10",  "glut_SUBSET_11", "glut_SUBSET_12", "glut_SUBSET_13", "glut_SUBSET_14",  "glut_SUBSET_15", "glut_SUBSET_16", "glut_SUBSET_17", "glut_SUBSET_18", "glut_SUBSET_19",  "glut_SUBSET_20", "glut_SUBSET_21", "glut_SUBSET_22", "glut_SUBSET_23", "glut_SUBSET_24", "glut_SUBSET_25", "glut_SUBSET_26", "glut_SUBSET_27", "glut_SUBSET_28", "npc_SUBSET_0",  "npc_SUBSET_1",  "npc_SUBSET_2", "npc_SUBSET_3", "npc_SUBSET_4",  "npc_SUBSET_5","npc_SUBSET_6", "npc_SUBSET_7",  "npc_SUBSET_8", "npc_SUBSET_9", "npc_SUBSET_10",  "npc_SUBSET_11", "npc_SUBSET_12", "npc_SUBSET_13", "npc_SUBSET_14", "oligodendrocyte_10", "oligodendrocyte_15", "microglia_8", "endothelial_11","endothelial_12", "endothelial_14")
+main_cellculst_DE_top <- main_cellculst_DE_top %>% arrange(factor(group, levels = order))
+
+main_cellclus_presto_topDE <- AverageExpression(multi_combine, features = main_cellculst_DE_top$feature, return.seurat = F)
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_cellclus_presto_top10_DE_heatmap_t.pdf", height = 25, width = 25)
+Heatmap(t(apply(main_cellclus_presto_topDE$RNA, 1, function(x)(x-min(x))/(max(x)-min(x)))), col = magma(10), cluster_rows = F, cluster_columns = F, name = "Expression", column_order = c("epen_clus_0", "epen_clus_1",  "epen_clus_2",  "epen_clus_3",  "epen_clus_4",  "epen_clus_5",  "epen_clus_6","epen_clus_7",  "epen_clus_8", "epen_clus_9",  "epen_clus_10", "epen_clus_11",  "epen_clus_12",  "epen_clus_13","epen_clus_14", "GABA_SUBSET_0",  "GABA_SUBSET_1",  "GABA_SUBSET_2", "GABA_SUBSET_3", "GABA_SUBSET_4",  "GABA_SUBSET_5","GABA_SUBSET_6", "GABA_SUBSET_7",  "GABA_SUBSET_8", "GABA_SUBSET_9", "GABA_SUBSET_10",  "GABA_SUBSET_11", "GABA_SUBSET_12", "GABA_SUBSET_13", "GABA_SUBSET_14",  "GABA_SUBSET_15", "GABA_SUBSET_16", "GABA_SUBSET_17", "GABA_SUBSET_18", "GABA_SUBSET_19",  "GABA_SUBSET_20", "GABA_SUBSET_21", "GABA_SUBSET_22", "GABA_SUBSET_23", "GABA_SUBSET_24", "GABA_SUBSET_25", "GABA_SUBSET_26", "GABA_SUBSET_27", "GABA_SUBSET_28", "GABA_SUBSET_29", "glut_SUBSET_0",  "glut_SUBSET_1",  "glut_SUBSET_2", "glut_SUBSET_3", "glut_SUBSET_4",  "glut_SUBSET_5","glut_SUBSET_6", "glut_SUBSET_7",  "glut_SUBSET_8", "glut_SUBSET_9", "glut_SUBSET_10",  "glut_SUBSET_11", "glut_SUBSET_12", "glut_SUBSET_13", "glut_SUBSET_14",  "glut_SUBSET_15", "glut_SUBSET_16", "glut_SUBSET_17", "glut_SUBSET_18", "glut_SUBSET_19",  "glut_SUBSET_20", "glut_SUBSET_21", "glut_SUBSET_22", "glut_SUBSET_23", "glut_SUBSET_24", "glut_SUBSET_25", "glut_SUBSET_26", "glut_SUBSET_27", "glut_SUBSET_28", "npc_SUBSET_0",  "npc_SUBSET_1",  "npc_SUBSET_2", "npc_SUBSET_3", "npc_SUBSET_4",  "npc_SUBSET_5","npc_SUBSET_6", "npc_SUBSET_7",  "npc_SUBSET_8", "npc_SUBSET_9", "npc_SUBSET_10",  "npc_SUBSET_11", "npc_SUBSET_12", "npc_SUBSET_13", "npc_SUBSET_14", "oligodendrocyte_10", "oligodendrocyte_15", "microglia_8", "endothelial_11","endothelial_12", "endothelial_14"))
+dev.off()
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_cellclus_presto_top10_DE_heatmap_scaled_t.pdf", height = 25, width = 25)
+Heatmap(t(scale(t(main_cellclus_presto_topDE$RNA))), col = magma(10), cluster_rows = F, cluster_columns = F,column_order = c("epen_clus_0", "epen_clus_1",  "epen_clus_2",  "epen_clus_3",  "epen_clus_4",  "epen_clus_5",  "epen_clus_6","epen_clus_7",  "epen_clus_8", "epen_clus_9",  "epen_clus_10", "epen_clus_11",  "epen_clus_12",  "epen_clus_13","epen_clus_14", "GABA_SUBSET_0",  "GABA_SUBSET_1",  "GABA_SUBSET_2", "GABA_SUBSET_3", "GABA_SUBSET_4",  "GABA_SUBSET_5","GABA_SUBSET_6", "GABA_SUBSET_7",  "GABA_SUBSET_8", "GABA_SUBSET_9", "GABA_SUBSET_10",  "GABA_SUBSET_11", "GABA_SUBSET_12", "GABA_SUBSET_13", "GABA_SUBSET_14",  "GABA_SUBSET_15", "GABA_SUBSET_16", "GABA_SUBSET_17", "GABA_SUBSET_18", "GABA_SUBSET_19",  "GABA_SUBSET_20", "GABA_SUBSET_21", "GABA_SUBSET_22", "GABA_SUBSET_23", "GABA_SUBSET_24", "GABA_SUBSET_25", "GABA_SUBSET_26", "GABA_SUBSET_27", "GABA_SUBSET_28", "GABA_SUBSET_29", "glut_SUBSET_0",  "glut_SUBSET_1",  "glut_SUBSET_2", "glut_SUBSET_3", "glut_SUBSET_4",  "glut_SUBSET_5","glut_SUBSET_6", "glut_SUBSET_7",  "glut_SUBSET_8", "glut_SUBSET_9", "glut_SUBSET_10",  "glut_SUBSET_11", "glut_SUBSET_12", "glut_SUBSET_13", "glut_SUBSET_14",  "glut_SUBSET_15", "glut_SUBSET_16", "glut_SUBSET_17", "glut_SUBSET_18", "glut_SUBSET_19",  "glut_SUBSET_20", "glut_SUBSET_21", "glut_SUBSET_22", "glut_SUBSET_23", "glut_SUBSET_24", "glut_SUBSET_25", "glut_SUBSET_26", "glut_SUBSET_27", "glut_SUBSET_28", "npc_SUBSET_0",  "npc_SUBSET_1",  "npc_SUBSET_2", "npc_SUBSET_3", "npc_SUBSET_4",  "npc_SUBSET_5","npc_SUBSET_6", "npc_SUBSET_7",  "npc_SUBSET_8", "npc_SUBSET_9", "npc_SUBSET_10",  "npc_SUBSET_11", "npc_SUBSET_12", "npc_SUBSET_13", "npc_SUBSET_14", "oligodendrocyte_10", "oligodendrocyte_15", "microglia_8", "endothelial_11","endothelial_12", "endothelial_14"))
+dev.off()
+```
+
+The Big heatmap of subclasses
+```{r}
+Idents(multi_combine) <- 'subclasses'
+main_subclasses_DE <- wilcoxauc(multi_combine, pseudocount.use = 0.1)
+main_subclasses_DE1 <- main_subclasses_DE[!(grepl(pattern = "^AMEX", x = main_subclasses_DE$feature)), ]
+main_subclasses_DE2 <- main_subclasses_DE1[!(grepl(pattern = "^LOC", x = main_subclasses_DE1$feature)), ]
+main_subclasses_DE_top <- main_subclasses_DE2 %>%
+    group_by(group) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 10, wt = logFC) %>%
+    print(n = 40, width = Inf)
+
+write.csv(x = main_subclasses_DE, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_subclasses_DE_presto.csv")
+# main_subclasses_DE <- read.csv(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_subclasses_DE_presto.csv")
+
+main_subclasses_DE_filtered <- main_subclasses_DE %>%
+    group_by(group) %>%
+    filter(padj < 0.05, pct_in > 10 & logFC > log(1)) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 100, wt = logFC) #%>%
+    # print(n = 40, width = Inf)
+write.csv(main_subclasses_DE_filtered, "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/csv_files/main_subclasses_presto_top100DE.csv")
+
+order <- c("epen_clus_0", "epen_clus_1",  "epen_clus_2",  "epen_clus_3",  "epen_clus_4",  "epen_clus_5",  "epen_clus_6","epen_clus_7",  "epen_clus_8", "epen_clus_9",  "epen_clus_10", "epen_clus_11",  "epen_clus_12",  "epen_clus_13","epen_clus_14", "GABA_SUBSET_0",  "GABA_SUBSET_1",  "GABA_SUBSET_2", "GABA_SUBSET_3", "GABA_SUBSET_4",  "GABA_SUBSET_5","GABA_SUBSET_6", "GABA_SUBSET_7",  "GABA_SUBSET_8", "GABA_SUBSET_9", "GABA_SUBSET_10",  "GABA_SUBSET_11", "GABA_SUBSET_12", "GABA_SUBSET_13", "GABA_SUBSET_14",  "GABA_SUBSET_15", "GABA_SUBSET_16", "GABA_SUBSET_17", "GABA_SUBSET_18", "GABA_SUBSET_19",  "GABA_SUBSET_20", "GABA_SUBSET_21", "GABA_SUBSET_22", "GABA_SUBSET_23", "GABA_SUBSET_24", "GABA_SUBSET_25", "GABA_SUBSET_26", "GABA_SUBSET_27", "GABA_SUBSET_28", "GABA_SUBSET_29", "glut_SUBSET_0",  "glut_SUBSET_1",  "glut_SUBSET_2", "glut_SUBSET_3", "glut_SUBSET_4",  "glut_SUBSET_5","glut_SUBSET_6", "glut_SUBSET_7",  "glut_SUBSET_8", "glut_SUBSET_9", "glut_SUBSET_10",  "glut_SUBSET_11", "glut_SUBSET_12", "glut_SUBSET_13", "glut_SUBSET_14",  "glut_SUBSET_15", "glut_SUBSET_16", "glut_SUBSET_17", "glut_SUBSET_18", "glut_SUBSET_19",  "glut_SUBSET_20", "glut_SUBSET_21", "glut_SUBSET_22", "glut_SUBSET_23", "glut_SUBSET_24", "glut_SUBSET_25", "glut_SUBSET_26", "glut_SUBSET_27", "glut_SUBSET_28", "npc_SUBSET_0",  "npc_SUBSET_1",  "npc_SUBSET_2", "npc_SUBSET_3", "npc_SUBSET_4",  "npc_SUBSET_5","npc_SUBSET_6", "npc_SUBSET_7",  "npc_SUBSET_8", "npc_SUBSET_9", "npc_SUBSET_10",  "npc_SUBSET_11", "npc_SUBSET_12", "npc_SUBSET_13", "npc_SUBSET_14", "oligodendrocyte_10", "oligodendrocyte_15", "microglia_8", "endothelial_11","endothelial_12", "endothelial_14")
+main_subclasses_DE_top <- main_subclasses_DE_top %>% arrange(factor(group, levels = order))
+
+avg_main_subclasses_topDE <- AverageExpression(multi_combine, features = main_subclasses_DE_top$feature, return.seurat = F)
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_subclasses_DE_heatmap.pdf", height = 55, width = 25)
+Heatmap((t(apply(avg_main_subclasses_topDE$RNA, 1, function(x)(x-min(x))/(max(x)-min(x))))), col = magma(10), cluster_rows = F, name = "Expression")
+dev.off()
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_subclasses_DE_heatmap_scaled.pdf", height = 55, width = 25)
+Heatmap(t(scale(t(avg_main_subclasses_topDE$RNA))), col = magma(10), cluster_rows = F)
+dev.off()
+```
+
+
+```{r}
+multi_combine <- CellCycleScoring(multi_combine, s.features = s.genes, g2m.features = g2m.genes)
+```
+
+
+```{r}
+pdf(file ="/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/all_nuclei_featureplots.pdf", width = 6, height = 6)
+FeaturePlot(object = multi_combine, features = c("G2M.Score"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("S.Score"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("MEX3A"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("SLC17A6"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("GAD2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("GLI2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("DOCK2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("AIF1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("COL4A2"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("EOMES"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("RORB"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("BRIP1"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("STARD9"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("SNAP25"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+FeaturePlot(object = multi_combine, features = c("TOP2A"), reduction = 'umap_harmony', cols = c("lightgrey","#a6317d","#491078"))
+dev.off()
+```
+
+```{r}
+Idents(multi_combine) <- 'subclasses'
+main_classes_DE <- wilcoxauc(multi_combine, pseudocount.use = 0.1)
+main_classes_DE1 <- main_classes_DE[!(grepl(pattern = "^AMEX", x = main_classes_DE$feature)), ]
+main_classes_DE2 <- main_classes_DE1[!(grepl(pattern = "^LOC", x = main_classes_DE1$feature)), ]
+main_classes_DE_top <- main_classes_DE2 %>%
+    group_by(group) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 10, wt = logFC) %>%
+    print(n = 40, width = Inf)
+avg_main_classes_topDE <- AverageExpression(multi_combine, features = main_classes_DE_top$feature, return.seurat = F)
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_classes_DE_heatmap_t.pdf", height = 5, width = 12)
+Heatmap(apply(avg_main_classes_topDE$RNA, 1, function(x)(x-min(x))/(max(x)-min(x))), col = magma(10), cluster_rows = T, name = "Expression")
+dev.off()
+
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_classes_DE_heatmap_scaled_t.pdf", height = 5, width = 12)
+Heatmap(scale(t(avg_main_classes_topDE$RNA)), col = magma(10))
+dev.off()
+```
+
+region prediction done by Tomas 
+a few points:
+the cell names use the sample name (*-a1-1), rather than the default (*_1-1). But the correspondence is just a1-1, a1-2, a3-1, a3-2 to 1,2,3,4 (or something like that).
+I haven't verified these results yet, just ran the old pipeline I had
+there are three columns. choose whichever you prefer
+the first one "pred_lr" is just the prediction from a logistic regression model.
+the second "pred_regions_top": any cell belonging to cell types where more than 30% of cells have a maximum assignment probability <0.9 get assigned as "other/unknown", instead of the predicted region.
+the third "pred_regions_all" is similar, but without the 30% threshold. so, any cell with an assignment probability <0.9 gets labeled as "other/unknown"
+
+
+```{r}
+WP_region_pred <- read.csv('/links/groups/treutlein/USERS/tomasgomes/projects/pallium_evo/data/processed/multiome/WP_region_predictions.csv')
+# multi_combine <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/all_nuclei_annotated.RDS")
+
+# table(multi_combine$chem) #multiome and v3.1
+# Idents(multi_combine) <- "chem"
+
+# multiome_alone <- subset(x = multi_combine, ident = 'multiome')
+# colnames(multiome_alone)
+
+WP_region_pred$X = gsub("-a1-1", "-1_1", WP_region_pred$X)
+WP_region_pred$X = gsub("-a1-2", "-1_2", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-1", "-1_3", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-2", "-1_4", WP_region_pred$X)
+
+
+WP_region_pred$pred_lr = paste0(WP_region_pred$pred_lr, "_pred")
+WP_region_pred$pred_regions_top = paste0(WP_region_pred$pred_regions_top, "_pred")
+WP_region_pred$pred_regions_all = paste0(WP_region_pred$pred_regions_all, "_pred")
+rownames(WP_region_pred) <- WP_region_pred$X
+
+# this assumes that:
+## rownames(WP_region_pred) are already present in rownames(srat@meta.data)
+## srat@meta.data$chem=="v3.1" corresponds to the microdissection data only, and that any remaining data is from whole pallium
+microd_cond = multi_combine@meta.data$chem=="v3.1"
+table(microd_cond)
+
+# length(rownames(multi_combine@meta.data))==length(microd_cond)
+# length(c(rownames(multi_combine@meta.data)[microd_cond], rownames(WP_region_pred)))
+# length(c(multi_combine@meta.data$region[microd_cond], WP_region_pred$pred_lr))
+# length(c(multi_combine@meta.data$region[microd_cond], WP_region_pred$pred_regions_top))
+# length(c(multi_combine@meta.data$region[microd_cond], WP_region_pred$pred_regions_all))
+
+combined_meta = data.frame(row.names = c(rownames(multi_combine@meta.data)[microd_cond], rownames(WP_region_pred)), 
+                           "all_reg_pred" = c(multi_combine@meta.data$region[microd_cond], WP_region_pred$pred_lr),
+                           "all_reg_pred_top" = c(multi_combine@meta.data$region[microd_cond], WP_region_pred$pred_regions_top),
+                           "all_reg_pred_all" = c(multi_combine@meta.data$region[microd_cond], WP_region_pred$pred_regions_all))
+
+multi_combine = AddMetaData(multi_combine, combined_meta)
+
+main_region_dimplot_pred_top <- DimPlot(multi_combine, reduction = "umap_harmony", label = F, group.by = "all_reg_pred_top", order = F) + scale_color_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + NoLegend()
+
+ggsave(plot = main_region_dimplot_pred_top, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/main_region_dimplot_pred_top.pdf", device = "pdf", width = 6, height = 6)
+main_region_dimplot_pred_top
+```
+
+```{r}
+DotPlot(multi_combine, features = c('NSD2', 'ASPM', 'INCENP', 'IQGAP3', 'NCAPG2', 'PASK','KIF15','MELK', "SMC2", "FOXM1", "MASTL", "FANCI", 'KIF4A','FANCC','STN1','NUMA1')) + RotatedAxis()
+```
+
+```{r}
+saveRDS(object = multi_combine, file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/all_nuclei_annotated.RDS")
+# multi_combine <- readRDS("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/all_nuclei_annotated.RDS")
+```
+
+
+```{r}
+# multi_epen <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/all_ependymalcells.RDS")
+
+WP_region_pred <- read.csv('/links/groups/treutlein/USERS/tomasgomes/projects/pallium_evo/data/processed/multiome/WP_region_predictions.csv')
+
+WP_region_pred$X = gsub("-a1-1", "-1_1", WP_region_pred$X)
+WP_region_pred$X = gsub("-a1-2", "-1_2", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-1", "-1_3", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-2", "-1_4", WP_region_pred$X)
+
+WP_region_pred$pred_lr = paste0(WP_region_pred$pred_lr, "_pred")
+WP_region_pred$pred_regions_top = paste0(WP_region_pred$pred_regions_top, "_pred")
+WP_region_pred$pred_regions_all = paste0(WP_region_pred$pred_regions_all, "_pred")
+rownames(WP_region_pred) <- WP_region_pred$X
+
+microd_cond = multi_epen@meta.data$chem=="v3.1"
+table(microd_cond)
+
+combined_meta = data.frame(row.names = c(rownames(multi_epen@meta.data)[microd_cond], rownames(WP_region_pred)), 
+                           "all_reg_pred" = c(multi_epen@meta.data$region[microd_cond], WP_region_pred$pred_lr),
+                           "all_reg_pred_top" = c(multi_epen@meta.data$region[microd_cond], WP_region_pred$pred_regions_top),
+                           "all_reg_pred_all" = c(multi_epen@meta.data$region[microd_cond], WP_region_pred$pred_regions_all))
+
+multi_epen = AddMetaData(multi_epen, combined_meta)
+
+epen_regions_dimplot <- DimPlot(multi_epen, reduction = "umap_harmony", label = F, group.by = 'all_reg_pred_top') + scale_color_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + NoLegend()
+
+# ggsave(plot = epen_regions_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_regions_dimplot.pdf", device = "pdf", width = 6, height = 6)
+epen_regions_dimplot
+```
+
+```{r}
+ggplot(multi_epen@meta.data, aes(x = multi_epen$seurat_clusters)) + geom_bar(position = 'fill', aes(fill= multi_epen$all_reg_pred_top)) + scale_fill_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + theme_minimal() + NoLegend()
+```
+
+
+```{r}
+epen_clusters_dimplot <- DimPlot(multi_epen, reduction = "umap_harmony", label = F, group.by = 'seurat_clusters') + scale_color_manual(values = c("#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472")) + NoLegend()
+ggsave(plot = epen_clusters_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_clusters_dimplot.pdf", device = "pdf", width = 6, height = 6)
+epen_clusters_dimplot
+DimPlot(multi_epen, reduction = "umap_harmony", label = T, group.by = 'seurat_clusters') + scale_color_manual(values = c("#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472")) + NoLegend()
+```
+
+```{r}
+multi_epen$region_combine <- multi_epen$all_reg_pred_top
+multi_epen$region_combine <- gsub("dorsal_pred", "dorsal", multi_epen$region_combine)
+multi_epen$region_combine <- gsub("lateral_pred", "lateral", multi_epen$region_combine)
+multi_epen$region_combine <- gsub("medial_pred", "medial", multi_epen$region_combine)
+table(multi_epen$all_reg_pred_top)
+
+#find markers for region ignoring the other/unknown cells
+Idents(multi_epen) <- 'region_combine'
+multi_epen_region_fil <-  subset(multi_epen, idents = c("dorsal", "medial", "lateral"))
+Idents(multi_epen_region_fil) <- 'region_combine'
+epen_region_DE <- wilcoxauc(multi_epen_region_fil, pseudocount.use = 0.1)
+epen_region_DE_DE1 <- epen_region_DE[!(grepl(pattern = "^AMEX", x = epen_region_DE$feature)), ]
+epen_region_DE_DE2 <- epen_region_DE_DE1[!(grepl(pattern = "^LOC", x = epen_region_DE_DE1$feature)), ]
+epen_region_DE_top <- epen_region_DE_DE2 %>%
+    group_by(group) %>%
+    arrange(desc(logFC), .by_group=T) %>%
+    top_n(n = 10, wt = logFC) %>%
+    print(n = 40, width = Inf)
+avg_epen_region <- AverageExpression(multi_epen_region_fil, features = epen_region_DE_top$feature, return.seurat = F)
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_region_DE_heatmap_t.pdf", height = 5, width = 12)
+Heatmap(apply(avg_epen_region$RNA, 1, function(x)(x-min(x))/(max(x)-min(x))), col = magma(10), cluster_rows = F, name = "Expression", cluster_columns = T)
+dev.off()
+pdf("/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_region_DE_heatmap_scaled_t.pdf", height = 5, width = 12)
+Heatmap(scale(t(avg_epen_region$RNA)), col = magma(10), cluster_rows = F,name = "Expression", cluster_columns = T)
+dev.off()
+
+
+epen_select_mrk <- FetchData(object = multi_epen, vars = c("region_combine", "epen_clus", "WNT2B", "WNT3A", "EPS8L2", "SFRP1", "AXIN2","RSPO2", "G2M.Score", "S.Score"))
+epen_select_mrk_fil <-  epen_select_mrk[!epen_select_mrk$region_combine == "other/unknown_pred", ]
+epen_select_mrk_fil$region_combine <- factor(x = epen_select_mrk_fil$region_combine, levels = c("medial", "dorsal", "lateral"))
+
+
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/epen_selectgenes_boxplots.pdf", width = 3, height = 6)
+ggplot(epen_select_mrk_fil, aes(x = region_combine, y = WNT2B)) + geom_boxplot() + theme_bw()
+ggplot(epen_select_mrk_fil, aes(x = region_combine, y = WNT3A)) + geom_boxplot() + theme_bw() + scale_y_log10()
+ggplot(epen_select_mrk_fil, aes(x = region_combine, y = EPS8L2)) + geom_boxplot() + theme_bw()
+ggplot(epen_select_mrk_fil, aes(x = region_combine, y = SFRP1)) + geom_boxplot() + theme_bw()
+ggplot(epen_select_mrk_fil, aes(x = region_combine, y = AXIN2)) + geom_boxplot() + theme_bw()
+ggplot(epen_select_mrk_fil, aes(x = region_combine, y = RSPO2)) + geom_boxplot() + theme_bw()
+ggplot(epen_select_mrk_fil, aes(x = region_combine, y = G2M.Score)) + geom_boxplot() + theme_bw()
+ggplot(epen_select_mrk_fil, aes(x = region_combine, y = S.Score)) + geom_boxplot() + theme_bw()
+dev.off()
+```
+
+
+
+
+
+
+
+```{r}
+# multi_neuro_gaba <- readRDS(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/multi_neuronal_gaba_subset.RDS")
+
+WP_region_pred <- read.csv('/links/groups/treutlein/USERS/tomasgomes/projects/pallium_evo/data/processed/multiome/WP_region_predictions.csv')
+
+WP_region_pred$X = gsub("-a1-1", "-1_1", WP_region_pred$X)
+WP_region_pred$X = gsub("-a1-2", "-1_2", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-1", "-1_3", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-2", "-1_4", WP_region_pred$X)
+
+WP_region_pred$pred_lr = paste0(WP_region_pred$pred_lr, "_pred")
+WP_region_pred$pred_regions_top = paste0(WP_region_pred$pred_regions_top, "_pred")
+WP_region_pred$pred_regions_all = paste0(WP_region_pred$pred_regions_all, "_pred")
+rownames(WP_region_pred) <- WP_region_pred$X
+
+microd_cond = multi_neuro_gaba@meta.data$chem=="v3.1"
+table(microd_cond)
+
+combined_meta = data.frame(row.names = c(rownames(multi_neuro_gaba@meta.data)[microd_cond], rownames(WP_region_pred)), 
+                           "all_reg_pred" = c(multi_neuro_gaba@meta.data$region[microd_cond], WP_region_pred$pred_lr),
+                           "all_reg_pred_top" = c(multi_neuro_gaba@meta.data$region[microd_cond], WP_region_pred$pred_regions_top),
+                           "all_reg_pred_all" = c(multi_neuro_gaba@meta.data$region[microd_cond], WP_region_pred$pred_regions_all))
+
+multi_neuro_gaba = AddMetaData(multi_neuro_gaba, combined_meta)
+
+neuro_gaba_regions_dimplot <- DimPlot(multi_neuro_gaba, reduction = "umap_harmony", label = F, group.by = 'all_reg_pred_top') + scale_color_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + NoLegend()
+
+# ggsave(plot = neuro_gaba_regions_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_gaba_regions_dimplot.pdf", device = "pdf", width = 6, height = 6)
+neuro_gaba_regions_dimplot
+```
+
+```{r}
+neuro_gaba_clusters_dimplot <- DimPlot(multi_neuro_gaba, reduction = "umap_harmony", label = F, group.by = 'seurat_clusters') + scale_color_manual(values = c("#700209", "#75090e","#7a0f13", "#801517", "#851a1b", "#8a1f1f", "#902423", "#952927", "#9a2d2c","#a03230", "#a53634", "#aa3a39", "#b03f3d","#b54342", "#ba4846", "#c04c4b", "#c5504f", "#ca5554", "#d05959", "#d55e5e","#73050c", "#780c11","#8d2221", "#982b2a","#a23432", "#a83837", "#b2413f", "#b84544", "#bd4a49", "#c85352", "#cd5756")) + NoLegend()
+# ggsave(plot = neuro_gaba_clusters_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_gaba_clusters_dimplot.pdf", device = "pdf", width = 6, height = 6)
+# DimPlot(multi_neuro_gaba, reduction = "umap_harmony", label = T, group.by = 'seurat_clusters')
+neuro_gaba_clusters_dimplot
+table(multi_neuro_gaba$seurat_clusters)
+```
+
+```{r}
+multi_neuro_gaba$region_combine <- multi_neuro_gaba$all_reg_pred_top
+multi_neuro_gaba$region_combine <- gsub("dorsal_pred", "dorsal", multi_neuro_gaba$region_combine)
+multi_neuro_gaba$region_combine <- gsub("lateral_pred", "lateral", multi_neuro_gaba$region_combine)
+multi_neuro_gaba$region_combine <- gsub("medial_pred", "medial", multi_neuro_gaba$region_combine)
+table(multi_neuro_gaba$all_reg_pred_top)
+gaba_select_mrk <- FetchData(object = multi_neuro_gaba, vars = c("region_combine", "gaba_cluster", "GAD2", "SFRP1", "RSPO2", "ZBTB16", "SST", "SATB1", "FOXP1", "FOXP2"))
+gaba_select_mrk_fil <-  gaba_select_mrk[!gaba_select_mrk$region_combine == "other/unknown_pred", ]
+gaba_select_mrk_fil$region_combine <- factor(x = gaba_select_mrk_fil$region_combine, levels = c("medial", "dorsal", "lateral"))
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_gaba_selectgenes_boxplots.pdf", width = 6, height = 6)
+ggplot(gaba_select_mrk_fil, aes(x = region_combine, y = GAD2)) + geom_boxplot() + theme_bw()
+ggplot(gaba_select_mrk_fil, aes(x = region_combine, y = SFRP1)) + geom_boxplot() + theme_bw()
+ggplot(gaba_select_mrk_fil, aes(x = region_combine, y = RSPO2)) + geom_boxplot() + theme_bw()
+ggplot(gaba_select_mrk_fil, aes(x = region_combine, y = ZBTB16)) + geom_boxplot() + theme_bw()
+ggplot(gaba_select_mrk_fil, aes(x = region_combine, y = SST)) + geom_boxplot() + theme_bw()
+ggplot(gaba_select_mrk_fil, aes(x = region_combine, y = SATB1)) + geom_boxplot() + theme_bw()
+ggplot(gaba_select_mrk_fil, aes(x = region_combine, y = FOXP1)) + geom_boxplot() + theme_bw()
+ggplot(gaba_select_mrk_fil, aes(x = region_combine, y = FOXP2)) + geom_boxplot() + theme_bw()
+dev.off()
+```
+
+
+```{r}
+WP_region_pred <- read.csv('/links/groups/treutlein/USERS/tomasgomes/projects/pallium_evo/data/processed/multiome/WP_region_predictions.csv')
+
+WP_region_pred$X = gsub("-a1-1", "-1_1", WP_region_pred$X)
+WP_region_pred$X = gsub("-a1-2", "-1_2", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-1", "-1_3", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-2", "-1_4", WP_region_pred$X)
+
+WP_region_pred$pred_lr = paste0(WP_region_pred$pred_lr, "_pred")
+WP_region_pred$pred_regions_top = paste0(WP_region_pred$pred_regions_top, "_pred")
+WP_region_pred$pred_regions_all = paste0(WP_region_pred$pred_regions_all, "_pred")
+rownames(WP_region_pred) <- WP_region_pred$X
+
+microd_cond = multi_neuro_glut@meta.data$chem=="v3.1"
+table(microd_cond)
+
+combined_meta = data.frame(row.names = c(rownames(multi_neuro_glut@meta.data)[microd_cond], rownames(WP_region_pred)), 
+                           "all_reg_pred" = c(multi_neuro_glut@meta.data$region[microd_cond], WP_region_pred$pred_lr),
+                           "all_reg_pred_top" = c(multi_neuro_glut@meta.data$region[microd_cond], WP_region_pred$pred_regions_top),
+                           "all_reg_pred_all" = c(multi_neuro_glut@meta.data$region[microd_cond], WP_region_pred$pred_regions_all))
+
+multi_neuro_glut = AddMetaData(multi_neuro_glut, combined_meta)
+
+neuro_glut_regions_dimplot <- DimPlot(multi_neuro_glut, reduction = "umap_harmony", label = F, group.by = 'all_reg_pred_top') + scale_color_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + NoLegend()
+
+# ggsave(plot = neuro_glut_regions_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_regions_dimplot.pdf", device = "pdf", width = 6, height = 6)
+neuro_glut_regions_dimplot
+```
+
+```{r}
+neuro_glut_clusters_dimplot <- DimPlot(multi_neuro_glut, reduction = "umap_harmony", label = F, group.by = 'seurat_clusters') + scale_color_manual(values = c("#054674", "#134d7b","#1d5481", "#265a88", "#2e618e", "#73a4cb", "#366995", "#3e709c", "#4677a2","#4d7ea9", "#5586b0", "#5c8db7", "#6495bd","#6b9cc4", "#7bacd2", "#8ebfe4", "#96c7eb", "#9ecff2", "#18507e", "#18507e","#2a5e8b", "#497ba6","#5889b3", "#6fa0c8","#7fafd6", "#6091ba", "#5182ac", "#3a6c98", "#a6d7f9")) + NoLegend()
+ggsave(plot = neuro_glut_clusters_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_clusters_dimplot.pdf", device = "pdf", width = 6, height = 6)
+# DimPlot(multi_neuro_glut, reduction = "umap_harmony", label = T, group.by = 'seurat_clusters')
+neuro_glut_clusters_dimplot
+```
+
+```{r}
+multi_neuro_glut$region_combine <- multi_neuro_glut$all_reg_pred_top
+multi_neuro_glut$region_combine <- gsub("dorsal_pred", "dorsal", multi_neuro_glut$region_combine)
+multi_neuro_glut$region_combine <- gsub("lateral_pred", "lateral", multi_neuro_glut$region_combine)
+multi_neuro_glut$region_combine <- gsub("medial_pred", "medial", multi_neuro_glut$region_combine)
+table(multi_neuro_glut$all_reg_pred_top)
+glut_select_mrk <- FetchData(object = multi_neuro_glut, vars = c("region_combine", "glut_cluster", "ETV1", "RORB", "SATB1"))
+glut_select_mrk_fil <-  glut_select_mrk[!glut_select_mrk$region_combine == "other/unknown_pred", ]
+
+pdf(file = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_selectgenes_boxplots.pdf", width = 6, height = 6)
+ggplot(glut_select_mrk_fil, aes(x = region_combine, y = ETV1)) + geom_boxplot() + theme_bw()
+ggplot(glut_select_mrk_fil, aes(x = region_combine, y = SATB1)) + geom_boxplot() + theme_bw()
+ggplot(glut_select_mrk_fil, aes(x = region_combine, y = RORB)) + geom_boxplot() + theme_bw()
+dev.off()
+```
+
+```{r}
+glut_rorb_dot <- DotPlot(multi_neuro_glut, features = c("EOMES", "GRM2", "SATB1", "RORB")) +
+    RotatedAxis() +
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    scale_colour_viridis(option="magma") +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white"))) +
+    coord_flip()
+ggsave(plot = glut_rorb_dot, filename = '/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/neuro_glut_rorb_dotplot.pdf', device = "pdf", height = 2, width = 8)
+glut_rorb_dot
+```
+
+
+```{r}
+WP_region_pred <- read.csv('/links/groups/treutlein/USERS/tomasgomes/projects/pallium_evo/data/processed/multiome/WP_region_predictions.csv')
+
+WP_region_pred$X = gsub("-a1-1", "-1_1", WP_region_pred$X)
+WP_region_pred$X = gsub("-a1-2", "-1_2", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-1", "-1_3", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-2", "-1_4", WP_region_pred$X)
+
+WP_region_pred$pred_lr = paste0(WP_region_pred$pred_lr, "_pred")
+WP_region_pred$pred_regions_top = paste0(WP_region_pred$pred_regions_top, "_pred")
+WP_region_pred$pred_regions_all = paste0(WP_region_pred$pred_regions_all, "_pred")
+rownames(WP_region_pred) <- WP_region_pred$X
+
+microd_cond = multi_neuro_npc@meta.data$chem=="v3.1"
+table(microd_cond)
+
+combined_meta = data.frame(row.names = c(rownames(multi_neuro_npc@meta.data)[microd_cond], rownames(WP_region_pred)), 
+                           "all_reg_pred" = c(multi_neuro_npc@meta.data$region[microd_cond], WP_region_pred$pred_lr),
+                           "all_reg_pred_top" = c(multi_neuro_npc@meta.data$region[microd_cond], WP_region_pred$pred_regions_top),
+                           "all_reg_pred_all" = c(multi_neuro_npc@meta.data$region[microd_cond], WP_region_pred$pred_regions_all))
+
+multi_neuro_npc = AddMetaData(multi_neuro_npc, combined_meta)
+
+npc_regions_dimplot <- DimPlot(multi_neuro_npc, reduction = "umap_harmony", label = F, group.by = 'all_reg_pred_top') + scale_color_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + NoLegend()
+
+ggsave(plot = npc_regions_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/npc_regions_dimplot.pdf", device = "pdf", width = 6, height = 6)
+npc_regions_dimplot
+```
+
+```{r}
+DimPlot(multi_neuro_npc, reduction = "umap_harmony", label = T, group.by = 'seurat_clusters') + NoLegend()
+```
+
+
+```{r}
+npc_clusters_dimplot <- DimPlot(multi_neuro_npc, reduction = "umap_harmony", label = F, group.by = 'seurat_clusters') + scale_color_manual(values = c("#ffb120", "#feb72a","#fdbc34", "#fcc13d", "#fbc745", "#facc4e", "#f9d156", "#f8d65f", "#f8da68","#f7df70", "#f7e479", "#f7e882", "#f7ed8a", "#f7f193", "#eca319")) + NoLegend()
+ggsave(plot = npc_clusters_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multiRNA_and_pallium/npc_clusters_dimplot.pdf", device = "pdf", width = 6, height = 6)
+npc_clusters_dimplot
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+microd_cond = multi_neuronal@meta.data$chem=="v3.1"
+table(microd_cond)
+combined_meta = data.frame(row.names = c(rownames(multi_neuronal@meta.data)[microd_cond], rownames(WP_region_pred)), 
+                           "all_reg_pred" = c(multi_neuronal@meta.data$region[microd_cond], WP_region_pred$pred_lr),
+                           "all_reg_pred_top" = c(multi_neuronal@meta.data$region[microd_cond], WP_region_pred$pred_regions_top),
+                           "all_reg_pred_all" = c(multi_neuronal@meta.data$region[microd_cond], WP_region_pred$pred_regions_all))
+multi_neuronal = AddMetaData(multi_neuronal, combined_meta)
+
+neuronal_region_dimplot_pred_top <- DimPlot(multi_neuronal, reduction = "umap_harmony", label = F, group.by = 'all_reg_pred_top') + scale_color_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + NoLegend()
+
+ggsave(plot = neuronal_region_dimplot_pred_top, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/neuronal_region_dimplot_pred_top.pdf", device = "pdf", width = 6, height = 4)
+neuronal_region_dimplot_pred_top
+```
+
+
+```{r}
+tab <- prop.table(x = table(multi_neuronal$classes, multi_neuronal$all_reg_pred_top), 2) * 100
+tab2 <- as.data.frame(tab)
+neuron_classes_by_region <- ggplot(data = tab2, aes(x = Var1, y = Freq)) + geom_col(aes(fill = Var2), position = 'fill') + theme_bw() + scale_fill_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + theme_bw()
+ggsave(plot = neuron_classes_by_region, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/neuron_classes_by_region.pdf", device = "pdf", width = 6, height = 4)
+neuron_classes_by_region
+```
+
+add annotations and plot with all neurons
+```{r}
+anno <- read.csv(file =  "/links/groups/treutlein/USERS/tomasgomes/projects/pallium_evo/data/annotations/axolotl_all_umeta.csv")
+names(anno)[1] <- "cell_id"
+multi_neuronal@meta.data$cell_id <- rownames(multi_neuronal@meta.data)
+multi_neuronal@meta.data <- left_join(multi_neuronal@meta.data, anno)
+table(multi_neuronal$classes)
+rownames(multi_neuronal@meta.data) <- multi_neuronal$cell_id
+
+neuron_classes_dimplot <- DimPlot(multi_neuronal, reduction = "umap_harmony", label = F, group.by = 'classes', cols = c("#85050E", "#00487B", "#ffb120", "#6dbff8"))
+ggsave(plot = neuron_classes_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/neuron_classes_dimplot.pdf", device = "pdf", width = 6, height = 4)
+neuron_classes_dimplot
+# 
+# neuron_classes_dimplot <- DimPlot(multi_neuronal, reduction = "umap_harmony", cols = c("#3554af", "#4662ba", "#01afec", "#5570c4", "#647ecf", "#00b5ee", "#00baef", "#09c0f0", "#17c6f1", "#23cbf2", "#2fd0f2", "#748dd9", "#3ad6f3", "#839ce3", "#45dbf3", "#50e0f3", "#5be5f3", "#66eaf3", "#c21296", "#92abee", "#70eff3","#fda1e6", "#7bf4f3", "#85f9f3", "#90fef3", "#a2baf8", "#41168A"), pt.size = 1, label = T) + NoLegend()
+# ggsave(plot = neuron_classes_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/neuron_classes_clusters_dimplot.pdf", device = "pdf", width = 6, height = 4)
+```
+
+```{r}
+multi_neuro_gaba_classes_dimplot <- DimPlot(multi_neuro_gaba, reduction = "umap_harmony", cols = c("#6b040b", "#85050e", "#932020", "#a03331", "#ac4443", "#b85554", "#c16363", "#c86d6e", "#ce7778", "#d48183", "#da8b8e"), label = T) + NoLegend()
+ggsave(plot = multi_neuro_gaba_classes_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multi_neuro_gaba_classes_dimplot_red_smalldots.pdf", device = "pdf", width = 6, height = 4)
+multi_neuro_gaba_classes_dimplot
+```
+
+```{r}
+microd_cond = multi_neuro_gaba@meta.data$chem=="v3.1"
+
+combined_meta = data.frame(row.names = c(rownames(multi_neuro_gaba@meta.data)[microd_cond], rownames(WP_region_pred)), 
+                           "all_reg_pred" = c(multi_neuro_gaba@meta.data$region[microd_cond], WP_region_pred$pred_lr),
+                           "all_reg_pred_top" = c(multi_neuro_gaba@meta.data$region[microd_cond], WP_region_pred$pred_regions_top),
+                           "all_reg_pred_all" = c(multi_neuro_gaba@meta.data$region[microd_cond], WP_region_pred$pred_regions_all))
+
+multi_neuro_gaba = AddMetaData(multi_neuro_gaba, combined_meta)
+
+neuro_gaba_regions_dimplot <- DimPlot(multi_neuro_gaba, reduction = "umap_harmony", label = F, group.by = 'all_reg_pred_top') + scale_color_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + NoLegend()
+
+ggsave(plot = neuro_gaba_regions_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/neuro_gaba_regions_dimplot.pdf", device = "pdf", width = 6, height = 4)
+neuro_gaba_regions_dimplot
+```
+
+
+```{r}
+tab1 <- as.data.frame(prop.table(x = table(multi_neuro_gaba$seurat_clusters, multi_neuro_gaba$all_reg_pred_top), 2) * 100)
+
+# tab1$Var1 <- factor(tab1$Var1, levels = c("10", "0", "8", "7", "6", "3", "5", "4",'1','9','2'))
+tab1$Var1 <- factor(tab1$Var1, levels = c("10", "0", "4", "2", "5", "3", "6", "7",'8','1','9'))
+gaba_region_occ_cellclusters <- ggplot(tab1, aes(x = Var1, y = Freq)) + geom_col(aes(fill= Var2), position = 'fill') + theme_minimal() + scale_fill_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave(plot = gaba_region_occ_cellclusters, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/gaba_region_occ_cellclusters_main.pdf", device = "pdf", width = 6, height = 4)
+
+gaba_region_occ_cellclusters
+```
+
+```{r}
+microd_cond = multi_neuro_glut@meta.data$chem=="v3.1"
+
+combined_meta = data.frame(row.names = c(rownames(multi_neuro_glut@meta.data)[microd_cond], rownames(WP_region_pred)), 
+                           "all_reg_pred" = c(multi_neuro_glut@meta.data$region[microd_cond], WP_region_pred$pred_lr),
+                           "all_reg_pred_top" = c(multi_neuro_glut@meta.data$region[microd_cond], WP_region_pred$pred_regions_top),
+                           "all_reg_pred_all" = c(multi_neuro_glut@meta.data$region[microd_cond], WP_region_pred$pred_regions_all))
+
+multi_neuro_glut = AddMetaData(multi_neuro_glut, combined_meta)
+
+multi_neuro_glut_regions_dimplot <- DimPlot(multi_neuro_glut, reduction = "umap_harmony", label = F, group.by = 'all_reg_pred_top') + scale_color_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + NoLegend()
+
+ggsave(plot = multi_neuro_glut_regions_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/neuro_glut_regions_dimplot.pdf", device = "pdf", width = 6, height = 4)
+multi_neuro_glut_regions_dimplot
+```
+
+
+```{r}
+WP_region_pred <- read.csv('/links/groups/treutlein/USERS/tomasgomes/projects/pallium_evo/data/processed/multiome/WP_region_predictions.csv')
+
+WP_region_pred$X = gsub("-a1-1", "-1_1", WP_region_pred$X)
+WP_region_pred$X = gsub("-a1-2", "-1_2", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-1", "-1_3", WP_region_pred$X)
+WP_region_pred$X = gsub("-a3-2", "-1_4", WP_region_pred$X)
+
+WP_region_pred$pred_lr = paste0(WP_region_pred$pred_lr, "_pred")
+WP_region_pred$pred_regions_top = paste0(WP_region_pred$pred_regions_top, "_pred")
+WP_region_pred$pred_regions_all = paste0(WP_region_pred$pred_regions_all, "_pred")
+rownames(WP_region_pred) <- WP_region_pred$X
+
+
+tab1 <- as.data.frame(prop.table(x = table(multi_neuro_glut$seurat_clusters, multi_neuro_glut$all_reg_pred_top), 2) * 100)
+table(multi_neuro_glut$seurat_clusters)
+# tab1$Var1 <- factor(tab1$Var1, levels = c("10", "0", "8", "7", "6", "3", "5", "4",'1','9','2'))
+tab1$Var1 <- factor(tab1$Var1, levels = c("1", "2", "9", "0", "5", "8", "3", "4",'6','11','7', '10'))
+glut_region_occ_cellclusters <- ggplot(tab1, aes(x = Var1, y = Freq)) + geom_col(aes(fill= Var2), position = 'fill') + theme_minimal() + scale_fill_manual(values = c("#C56007", "#ED7307","#118392", "#16A3B6", "#52168D", "#661CB0", "#C7CCC7")) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave(plot = glut_region_occ_cellclusters, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/glut_region_occ_cellclusters_main.pdf", device = "pdf", width = 6, height = 4)
+
+glut_region_occ_cellclusters
+```
+
+
+```{r}
+table(Idents(multi_neuro_glut)) #12 clusters
+
+multi_neuro_glut_classes_dimplot <- DimPlot(multi_neuro_glut, reduction = "umap_harmony", cols = c('#023559', "#0c3e64", "#194b74", "#275c87", "#346d9b", "#3c78a8", "#4686b8", "#4e91c5", "#569cd1", "#5da8de", "#65b3eb", "#6dbff8"), label = T) + NoLegend()
+ggsave(plot = multi_neuro_glut_classes_dimplot, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multi_neuro_glut_classes_dimplot_blue_smalldots.pdf", device = "pdf", width = 6, height = 4)
+multi_neuro_glut_classes_dimplot
+```
+
+
+
+
+
+```{r}
+Idents(multi_combine) <- 'seurat_clusters'
+multi_combine$cellclusters <- factor(multi_combine$cellclusters, levels = c("ependymal_3", "endothelial", "microglia", "ependymal_5", "ependymal_2", "ependymal_4","ependymal_0", "ependymal_1", "ependymal_6", "ependymal_7", "oligodendrocyte", "glut_SUBSET_1", "glut_SUBSET_2", "glut_SUBSET_9", "glut_SUBSET_0", "glut_SUBSET_5", "glut_SUBSET_8", "glut_SUBSET_3", "glut_SUBSET_4", "glut_SUBSET_6","neuro_26", "glut_SUBSET_11", "glut_SUBSET_7", "npc_SUBSET_5", "npc_SUBSET_2","npc_SUBSET_8", "npc_SUBSET_0",'npc_SUBSET_1','npc_SUBSET_6','npc_SUBSET_3','npc_SUBSET_4','npc_SUBSET_10','npc_SUBSET_9','npc_SUBSET_7','GABA_SUBSET_0','GABA_SUBSET_10','GABA_SUBSET_4','GABA_SUBSET_2','GABA_SUBSET_5','GABA_SUBSET_3','GABA_SUBSET_6','GABA_SUBSET_7','GABA_SUBSET_8','GABA_SUBSET_1','GABA_SUBSET_9','glut_SUBSET_10'))
+
+cell_cluster_markers <- DotPlot(multi_combine, features =c("SNAP25", "SLC17A6", "GAD1", "GLI2", "MEX3A", "SLC6A6", "CSF1R"), group.by = 'cellclusters') +
+    RotatedAxis() +
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    scale_colour_viridis(option="magma") +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))
+ggsave(plot = cell_cluster_markers, filename = "/links/groups/treutlein/USERS/Ashley/projects/axolotl/nucseq_axolotl/multiRNA_and_pallium/multi_combine_cell_cluster_markers_dotplot.pdf", device = "pdf", width = 6, height = 12)
+cell_cluster_markers
+```
+
+
+
+

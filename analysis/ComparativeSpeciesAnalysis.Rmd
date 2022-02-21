@@ -1216,6 +1216,76 @@ pheatmap::pheatmap(t(ccc1$r), clustering_method = "ward.D",
 dev.off()
 ```
 
+Axolotl GABAergic and npc correlation
+
+```{r}
+sp1 = "axolotl"
+
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+
+cond_axo = meta_sp_l$axolotl$cellclusters %in% c("npc_SUBSET_5", "npc_SUBSET_6", 
+                                                 "npc_SUBSET_8", "npc_SUBSET_10",
+                                                 "npc_SUBSET_12")
+cond_axo2 = (meta_sp_l$axolotl$subclasses=="GABAergic")
+
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[cond_axo]),
+               "axolotl" = unique(meta_sp_l$axolotl$cellclusters[cond_axo2]))
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c(sp1, sp1), ct_sets = ct_sets, norm_all = F)
+
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(ccc1$r)), max(abs(ccc1$r)), length.out = 101)
+cols = cols[!(br>max(ccc1$r) | br<min(ccc1$r))]
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_GABA_npc.pdf", height = 4, width = 2.8)
+pheatmap::pheatmap(t(ccc1$r), clustering_method = "ward.D", 
+                   treeheight_row = 30, treeheight_col = 20, fontsize = 6,
+                   fontsize_row = 7, fontsize_col = 7, color = cols)
+dev.off()
+```
+
+Axolotl all neurons and NPC
+
+```{r}
+sp1 = "axolotl"
+
+gg = "cellclusters"
+pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
+m = if(gg=="subclasses") subcl_m_list else celcl_m_list
+
+cond_axo = meta_sp_l$axolotl$cellclusters %in% c("npc_SUBSET_5", "npc_SUBSET_6", "npc_SUBSET_8",
+                                                 "npc_SUBSET_10", "npc_SUBSET_12",
+                                                 "npc_SUBSET_0", "npc_SUBSET_1", "npc_SUBSET_2",
+                                                 "npc_SUBSET_3", "npc_SUBSET_4", "npc_SUBSET_7",
+                                                 "npc_SUBSET_9", "npc_SUBSET_11",
+                                                 "npc_SUBSET_13")
+glut_axo = (meta_sp_l$axolotl$subclasses=="Glutamatergic" & 
+              meta_sp_l$axolotl$cellclusters!="glut_SUBSET_23")
+gaba_cond = (meta_sp_l$axolotl$subclasses=="GABAergic")
+cond_axo2 = (gaba_cond | glut_axo)
+
+ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[cond_axo]),
+               "axolotl" = unique(meta_sp_l$axolotl$cellclusters[cond_axo2]))
+
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c(sp1, sp1), ct_sets = ct_sets, norm_all = F)
+
+cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
+                          RColorBrewer::brewer.pal(9, "Reds")))(101)
+br = seq(-max(abs(ccc1$r)), max(abs(ccc1$r)), length.out = 101)
+cols = cols[!(br>max(ccc1$r) | br<min(ccc1$r))]
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_neu_npc.pdf", height = 6.25, width = 3.5)
+pheatmap::pheatmap(t(ccc1$r), clustering_method = "ward.D", 
+                   treeheight_row = 30, treeheight_col = 20, fontsize = 6,
+                   fontsize_row = 6.8, fontsize_col = 6.8, color = cols)
+dev.off()
+```
+
 Axolotl glutamatergic and npc correlation - Div-seq
 
 ```{r}

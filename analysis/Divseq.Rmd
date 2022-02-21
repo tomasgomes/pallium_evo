@@ -1052,6 +1052,12 @@ DimPlot(ep_wpi_srat, group.by = "Phase",
         reduction = "umap_harmony", label = T)+NoLegend()
 ```
 
+Save data
+
+```{r}
+saveRDS(ep_wpi_srat, file = "results/Div-seq/ep_wpi_srat.RDS")
+```
+
 Plot UMAPs
 
 ```{r, fig.height=2.5, fig.width=2.5}

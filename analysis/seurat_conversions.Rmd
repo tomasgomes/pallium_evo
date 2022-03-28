@@ -5,6 +5,14 @@ output: html_notebook
 
 Notebook for converting collected data into Seurat objects, when necessary. Datasets will not be saved within this project folder, only soft linked in data/expression
 
+Converting Tosches et al., 2018 data (and Seurat v1 in general):
+
+Original data is Seurat V1
+to convert to V3, first conversion to V2 is necessary
+Thread on installing Seurat V2: satijalab/seurat#2625
+use the UpdateSeuratObject function
+then run it again for V2 to V3
+
 
 
 # General Setup

@@ -955,6 +955,11 @@ ax_srat = AddMetaData(ax_srat, metadata = meta_regs)
 ax_srat$regions_all = ax_srat$pred_regions_top
 ax_srat$regions_all[is.na(ax_srat$regions_all)] = ax_srat$regions[is.na(ax_srat$regions_all)]
 
+meta_ss_simp = ax_srat@meta.data[,c("sample", "chem", "seurat_clusters", "classes", "subclasses", 
+                                    "cellclusters", "regions", "pred_regions_top", "regions_all")]
+write.csv(meta_ss_simp, file = "results/Div-seq/pallium_metadata_simp.csv", 
+          col.names = T, row.names = T, quote = F)
+
 # div-seq
 div_srat = readRDS("data/expression/axolotl_reclust/Edu_1_2_4_6_8_12_fil_highvarfeat.RDS")
 meta_div_pred = read.csv("results/Div-seq/divseq_predicted_metadata.csv", 
@@ -1055,6 +1060,7 @@ DimPlot(ep_wpi_srat, group.by = "Phase",
 Save data
 
 ```{r}
+ep_wpi_srat@meta.data$clusters_used = ep_wpi_srat@meta.data$integEp_res.1.5
 saveRDS(ep_wpi_srat, file = "results/Div-seq/ep_wpi_srat.RDS")
 ```
 
@@ -1158,7 +1164,7 @@ Get markers
 ```{r}
 # all clusters
 mk_cl = presto::wilcoxauc(ep_wpi_srat, group_by = "integEp_res.1.5")
-saveRDS(mk_cl, file = "results/Div-seq/ep_wpi_srat_res1_DE.RDS")
+saveRDS(mk_cl, file = "results/Div-seq/ep_wpi_srat_res1.5_DE.RDS")
 
 mk_cl = mk_cl[!startsWith(mk_cl$feature, "AMEX") &
                 !startsWith(mk_cl$feature, "LOC") &

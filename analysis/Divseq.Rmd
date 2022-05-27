@@ -80,6 +80,41 @@ Load Div-seq
 div_dat = readRDS("data/expression/axolotl_reclust/Edu_1_2_4_6_8_12_fil_highvarfeat.RDS")
 ```
 
+
+```{r}
+ax_srat = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
+plot_df = div_dat@meta.data[,c("sample","nCount_RNA","nFeature_RNA")]
+plot_df$exp = "regen"
+ax_df = ax_srat@meta.data[,c("chem","nCount_RNA","nFeature_RNA")]
+ax_df$exp = "ss"
+colnames(ax_df)[1] = "sample"
+
+plot_df = rbind(plot_df, ax_df)
+
+plt_counts = ggplot(plot_df, aes(x = sample, y = nCount_RNA, fill = sample))+
+  facet_grid(~exp, scales = "free_x", space='free')+
+  geom_violin(scale = "width")+
+  theme_classic()+
+  theme(axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7),
+        legend.position = "none", 
+        strip.text = element_text(size = 7))
+
+plt_feats = ggplot(plot_df, aes(x = sample, y = nFeature_RNA, fill = sample))+
+  facet_grid(~exp, scales = "free_x", space='free')+
+  geom_violin(scale = "width")+
+  theme_classic()+
+  theme(axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7),
+        legend.position = "none", 
+        strip.text = element_text(size = 7))
+
+pdf("results/Div-seq/counts_features_div_ss.pdf", height = 7, width = 4)
+print(plt_counts/plt_feats)
+dev.off()
+```
+
+
 Save necessary data
 
 ```{r}

@@ -1,0 +1,471 @@
+---
+title: "Pseudotime for Div-seq"
+output: html_notebook
+---
+
+
+
+# General setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(harmony)
+library(ggplot2)
+library(Matrix)
+library(mgcv)
+library(foreach)
+library(doParallel)
+library(parallel)
+library(URD)
+library(slingshot)
+library(RColorBrewer)
+```
+
+Set colours for cell types and regions
+
+```{r}
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+cols_cc = c(
+#epen
+"#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472",
+#gaba
+"#700209", "#75090e","#7a0f13", "#801517", "#851a1b", "#8a1f1f", "#902423", "#952927", "#9a2d2c","#a03230", "#a53634", "#aa3a39", "#b03f3d","#b54342", "#ba4846", "#c04c4b", "#c5504f", "#ca5554", "#d05959", "#d55e5e","#73050c", "#780c11","#8d2221", "#982b2a","#a23432", "#a83837", "#b2413f", "#b84544", "#bd4a49", "#c85352", #"#cd5756",
+#glut
+"#054674", "#134d7b","#1d5481", "#265a88", "#2e618e", "#73a4cb", "#366995", "#3e709c", "#4677a2","#4d7ea9", "#5586b0", "#5c8db7", "#6495bd","#6b9cc4", "#7bacd2", "#8ebfe4", "#96c7eb", "#9ecff2", "#18507e", "#18507e","#2a5e8b", "#497ba6","#5889b3", "#6fa0c8","#7fafd6", "#6091ba", "#5182ac", "#3a6c98", "#a6d7f9",
+#npc
+"#ffb120", "#feb72a","#fdbc34", "#fcc13d", "#fbc745", "#facc4e", "#f9d156", "#f8d65f", "#f8da68","#f7df70", "#f7e479", "#f7e882", "#f7ed8a", "#f7f193", "#eca319"
+)
+ccnames = unique(sort(meta$cellclusters))
+names(cols_cc) = c(ccnames[grepl("epen", ccnames)], ccnames[grepl("GABA", ccnames)],ccnames[grepl("glut", ccnames)],ccnames[grepl("npc", ccnames)])
+
+reg_cols = c("other/unknown_pred" = "#C7CCC7", 
+             "medial" = "#52168D", "medial_pred" = "#661CB0", 
+             "dorsal" = "#C56007", "dorsal_pred" = "#ED7307", 
+             "lateral" = "#118392", "lateral_pred" = "#16A3B6")
+reg_cols_simp = c("medial" = "#52168D", "dorsal" = "#C56007", "lateral" = "#118392")
+
+colors <- colorRampPalette(brewer.pal(11,'Spectral')[-6])(100)
+```
+
+
+
+Load data
+
+```{r}
+div_srat = readRDS("data/expression/axolotl_reclust/Edu_1_2_4_6_8_12_fil_highvarfeat.RDS")
+pred_meta = read.csv("results/Div-seq/divseq_predicted_metadata.csv", 
+                     header = T, row.names = 1)[,4:5]
+colnames(pred_meta) = c("region", "cellclusters")
+div_srat = AddMetaData(div_srat, metadata = pred_meta)
+```
+
+
+
+# Calculate pseudotime
+## Process data
+Define groups
+
+```{r}
+common_cells = c("epen_clus_3", "epen_clus_4")
+r_cells = list("hippocampus" = c("glut_SUBSET_0", "glut_SUBSET_4", "glut_SUBSET_5",
+                                 "glut_SUBSET_7", "npc_SUBSET_7","npc_SUBSET_11",
+                                 "glut_SUBSET_14", "glut_SUBSET_15", "glut_SUBSET_12",
+                                 "glut_SUBSET_16", "glut_SUBSET_17", "glut_SUBSET_3",
+                                 "npc_SUBSET_1", "npc_SUBSET_3", "npc_SUBSET_9"),
+    "lc" = c("glut_SUBSET_9","npc_SUBSET_7","npc_SUBSET_4", "glut_SUBSET_21", "glut_SUBSET_2",
+             "glut_SUBSET_25","npc_SUBSET_14","npc_SUBSET_0"),
+    "cl111" = c("glut_SUBSET_1", "glut_SUBSET_11", "npc_SUBSET_2","npc_SUBSET_4",
+                "npc_SUBSET_7", "npc_SUBSET_13"),
+    "eomes" = c("npc_SUBSET_7","npc_SUBSET_4", "glut_SUBSET_10","glut_SUBSET_22"),
+    "cl8620_ep" = c("glut_SUBSET_8","glut_SUBSET_6","glut_SUBSET_20", "epen_clus_1",
+                    "epen_clus_7", "epen_clus_14"))
+```
+
+Subset data
+
+```{r}
+sub_srat = list()
+for(n in names(r_cells)){
+  sub_srat[[n]] = div_srat[,div_srat$cellclusters %in% c(common_cells, r_cells[[n]])]
+}
+```
+
+Quick processing
+
+```{r}
+for(n in names(sub_srat)){
+  print(n)
+  sub_srat[[n]] = NormalizeData(sub_srat[[n]])
+  sub_srat[[n]] = FindVariableFeatures(sub_srat[[n]])
+  sub_srat[[n]] = ScaleData(sub_srat[[n]], vars.to.regress = c("nCount_RNA"), 
+                            features = VariableFeatures(object = sub_srat[[n]]))
+}
+```
+
+
+
+# URD
+Prepare URD objects
+
+```{r}
+sub_urd = list()
+for(n in names(sub_srat)){
+  sub_urd[[n]] = sub_srat[[n]]
+  sub_urd[[n]] = createURD(count.data = sub_urd[[n]]@assays$RNA@counts, 
+                           meta = sub_urd[[n]]@meta.data, min.cells=3, min.counts=3)
+  sub_urd[[n]]@group.ids$cellclusters = sub_urd[[n]]@meta$cellclusters
+  sub_urd[[n]]@group.ids$subclasses = sub_urd[[n]]@meta$subclasses
+}
+```
+
+Calculate DRs
+
+```{r}
+for(n in names(sub_urd)){
+  sub_urd[[n]]@var.genes = findVariableGenes(sub_urd[[n]], set.object.var.genes=F,do.plot=F,
+                                           diffCV.cutoff=0.3, mean.min=.005, mean.max=100)
+
+  sub_urd[[n]] = calcPCA(sub_urd[[n]], mp.factor = 2)
+  pcSDPlot(sub_urd[[n]])
+  sub_urd[[n]] = calcTsne(object = sub_urd[[n]])
+  plotDim(sub_urd[[n]], "cellclusters")
+  
+  sub_urd[[n]] = calcDM(sub_urd[[n]], knn = 150, sigma=16)
+  
+  plotDimArray(sub_urd[[n]], reduction.use = "dm", dims.to.plot = 1:8, 
+             outer.title = "Diffusion Map (Sigma 16, 150 NNs): Stage", label="cellclusters",
+             plot.title="", legend=F)
+
+  plotDim(sub_urd[[n]], "cellclusters", transitions.plot = 10000)
+}
+```
+
+Pseudotime calculation
+
+```{r}
+end_cc = list("hippocampus" = c("glut_SUBSET_0", "glut_SUBSET_7"),
+              "lc" = c("glut_SUBSET_9","glut_SUBSET_2"),
+              "cl111" = c("glut_SUBSET_1", "glut_SUBSET_11"),
+              "eomes" = c("glut_SUBSET_10","glut_SUBSET_22"),
+              "cl8620_ep" = c("glut_SUBSET_8","glut_SUBSET_6"))
+subset_dat_l = list()
+floods_4_l = list()
+for(n in names(sub_urd)){
+  print(n)
+  # Here we use all cells from the first stage as the root
+  root.cells = cellsInCluster(sub_urd[[n]], clustering = "cellclusters", "epen_clus_4")
+  
+  # Then we run 'flood' simulations
+  floods = floodPseudotime(sub_urd[[n]], root.cells = root.cells, n=250,
+                           minimum.cells.flooded = 2, verbose=F)
+  # fix excessive NA
+  floods = floods[,colSums(!is.na(floods))>1000]
+  
+  # The we process the simulations into a pseudotime
+  sub_urd[[n]] = floodPseudotimeProcess(sub_urd[[n]], floods, floods.name="pseudotime_4")
+  
+  pseudotimePlotStabilityOverall(sub_urd[[n]])
+  
+  plotDists(sub_urd[[n]], "pseudotime_4", "cellclusters", plot.title="Pseudotime by stage")
+  
+  # Create a subsetted object of just those cells from the final stage
+  subsetdat = urdSubset(sub_urd[[n]], 
+                        cells.keep=cellsInCluster(sub_urd[[n]], "cellclusters", end_cc[[n]]))
+  subset_dat_l[[n]] = subsetdat
+  floods_4_l[[n]] = floods
+}
+```
+
+Save
+
+```{r}
+save(subset_dat_l, sub_urd, floods_4_l, file = "data/processed/URD/URD_Div_lists.RData")
+```
+
+Determine new identities for end tips
+
+```{r}
+axials_4_l = list()
+for(n in names(sub_urd)){
+  # Use the variable genes that were calculated only on the final group of stages (which
+  # contain the last stage).
+  subset_dat_l[[n]]@var.genes = sub_urd[[n]]@var.genes[sub_urd[[n]]@var.genes %in% rownames(subset_dat_l[[n]]@logupx.data)]
+  
+  # Calculate PCA and tSNE
+  subset_dat_l[[n]] = calcPCA(subset_dat_l[[n]], mp.factor = 1.5)
+  pcSDPlot(subset_dat_l[[n]])
+  
+  set.seed(20)
+  subsetdat = calcTsne(subset_dat_l[[n]])
+  
+  # Calculate graph clustering of these cells
+  subset_dat_l[[n]] = graphClustering(subset_dat_l[[n]], 
+                                      num.nn = 50, do.jaccard=T, method="Louvain")
+  plotDim(subset_dat_l[[n]], "Louvain-50", 
+          plot.title = "Louvain (50 NN) graph clustering", point.size=3)
+  plotDim(subset_dat_l[[n]], "cellclusters", plot.title = "cellclusters", point.size=3)
+  
+  
+  # Copy cluster identities from axial.6somite object to a new clustering ("tip.clusters") in the full axial object.
+  sub_urd[[n]]@group.ids[rownames(subset_dat_l[[n]]@group.ids), "tip.clusters"] = subset_dat_l[[n]]@group.ids$`Louvain-50`
+  
+  # Determine the parameters of the logistic used to bias the transition probabilities. 
+  # The procedure is relatively robust to this parameter, but the cell numbers may need to be
+  # modified for larger or smaller data sets.
+  axial.ptlogistic = pseudotimeDetermineLogistic(sub_urd[[n]], "pseudotime_4",
+                                                 optimal.cells.forward=20, max.cells.back=20,
+                                                 do.plot = T)
+  
+  axial.biased.tm = as.matrix(pseudotimeWeightTransitionMatrix(sub_urd[[n]], "pseudotime_4",
+                                                               logistic.params=axial.ptlogistic))
+  
+  axials_4_l[[n]] = list("log" = axial.ptlogistic, "tm" = axial.biased.tm)
+}
+```
+
+Random walk simulations
+
+```{r}
+subfix_4_l = list()
+for(n in names(sub_urd)){
+  subsetfix = urdSubset(sub_urd[[n]], 
+                        cells.keep=rownames(sub_urd[[n]]@meta)[rownames(sub_urd[[n]]@meta)%in%rownames(axials_4_l[[n]][["tm"]])])
+  root.cells = cellsInCluster(sub_urd[[n]], clustering = "cellclusters", "epen_clus_4")
+  
+  # Simulate the biased random walks from each tip
+  axial.walks = simulateRandomWalksFromTips(subsetfix, tip.group.id="tip.clusters",
+                                            root.cells=root.cells, n.per.tip = 25000,
+                                            transition.matrix = axials_4_l[[n]][["tm"]], 
+                                            root.visits = 1, max.steps = 10000, verbose = F)
+  
+  # Process the biased random walks into visitation frequencies
+  subsetfix = processRandomWalksFromTips(subsetfix, axial.walks, verbose = F)
+  
+  axials_4_l[[n]][["walks"]] = axial.walks
+  subfix_4_l[[n]] = subsetfix
+}
+```
+
+Save
+
+```{r}
+save(subset_dat_l, floods_4_l, sub_urd, axials_4_l, subfix_4_l,
+     file = "data/processed/URD/URD_Div_lists.RData")
+```
+
+Check tip clusters
+
+```{r, fig.height=3.5, fig.width=8}
+max_vals = list()
+for(n in names(subfix_4_l)){
+  plt1 = plotDim(subfix_4_l[[n]], "cellclusters", plot.title=n)
+  plt2 = plotDim(subfix_4_l[[n]], "tip.clusters", plot.title=n)
+  print(plt1+plt2)
+  
+  max_vals[[n]] = sort(tapply(subfix_4_l[[n]]@pseudotime$pseudotime_4,
+                    subfix_4_l[[n]]@group.ids$tip.clusters, max))
+}
+```
+
+Plot trees
+
+```{r, fig.height=3.5, fig.width=4}
+cl_tips = list(c("4", "5"), c("4", "2"), c("4", "1"), c("2", "3"), c("1", "2"))
+names(cl_tips) = names(subfix_4_l)
+tree_plt_l = list()
+for(n in names(subfix_4_l)){
+  # Load the cells used for each tip into the URD object
+  axial.tree = loadTipCells(subfix_4_l[[n]], "tip.clusters")
+
+  # Build the tree
+  test = buildTree(axial.tree, pseudotime = "pseudotime_4", tips.use=cl_tips[[n]], 
+                  divergence.method = "preference", cells.per.pseudotime.bin = 20,
+                  bins.per.pseudotime.window = 8, save.all.breakpoint.info = T,
+                  p.thresh=0.001,minimum.visits = 2)
+  
+  plt1 = plotTree(test, "tip.clusters")
+  plt2 = plotTree(test, "cellclusters")
+  
+  # add labels
+  clayout = test@tree$cell.layout
+  clayout$ct = test@meta[rownames(clayout),"cellclusters"]
+  labdf = data.frame(x = tapply(clayout$x, clayout$ct, mean),
+                     y = tapply(clayout$y, clayout$ct, mean))
+  labdf$lab = rownames(labdf)
+  condx = labdf$y<min(test@tree$segment.pseudotime.limits$end)
+  labdf[!condx,"x"] = round(labdf[!condx,"x"], 0)
+  labdf[condx,"x"] = 0.5
+  
+  plt3 = plt2+scale_colour_manual(values = cols_cc, limits = force)+
+    ggrepel::geom_label_repel(data = labdf, mapping = aes(x = x, y = y, label = lab), size = 2.2, 
+               label.padding = unit(0.1, "lines"), box.padding = unit(0.1, "lines"))+
+    labs(title = n)+
+    theme(legend.text = element_text(size = 6),
+          legend.key.size = unit(0.2, "lines"),
+          plot.title = element_text(size = 8))
+  print(plt3)
+  tree_plt_l[[n]] = plt3
+}
+```
+
+Save trees
+
+```{r}
+for(n in names(tree_plt_l)){
+  pdf(paste0("results/pseudotime/Div_", n, "_tree.pdf"), height = 3.5, width = 4)
+  print(tree_plt_l[[n]])
+  dev.off()
+}
+```
+
+Load RNA velocity pseudotime
+
+```{r}
+glut_dat_df = read.csv("results/RNAvelocity_Div/heatmap_gen/div_dat_df.csv", 
+                       header = T, row.names = 1)
+newcellnames = rownames(glut_dat_df)
+newcellnames = gsub("_2_wpi", "-1_1", newcellnames)
+newcellnames = gsub("_4_wpi", "-1_2", newcellnames)
+newcellnames = gsub("_6_wpi", "-1_3", newcellnames)
+newcellnames = gsub("_8_wpi", "-1_4", newcellnames)
+newcellnames = gsub("_12_wpi", "-1_5", newcellnames)
+newcellnames = gsub("_1_wpi_pos", "-1", newcellnames)
+rownames(glut_dat_df) = newcellnames
+```
+
+Plot pseudotime comparisons
+
+```{r}
+plt_comp_l = list()
+for(n in names(subfix_l)){
+  plot_df = merge(glut_dat_df, subfix_4_l[[n]]@pseudotime, by = 0)
+  cpe = round(cor(plot_df$newpt, plot_df$pseudotime_4, method = "pe"), 2)
+  
+  plt_comp_l[[n]] = ggplot(plot_df, aes(x = newpt, y = pseudotime_4, 
+                                        colour = pred_ctall))+
+    geom_point()+
+    scale_colour_manual(values = cols_cc, limits = force)+
+    #scale_size_manual(values = c(0.5, 0.95, 1.35))+
+    labs(title = n, subtitle = paste0("PCC = ", cpe), 
+         x = "Pseudotime (scVelo)", y = "Pseudotime (URD)")+
+    theme_classic()+
+    theme(aspect.ratio = 1,
+          axis.text = element_text(colour = "black", size = 6),
+          axis.title = element_text(size = 7),
+          plot.title = element_text(size = 8),
+          plot.subtitle = element_text(size = 7),
+          legend.text = element_text(size = 6),
+          legend.title = element_text(size = 7),
+          legend.key.size = unit(0.35, "cm"))
+}
+```
+
+Save comparisons
+
+```{r}
+for(n in names(plt_comp_l)){
+  pdf(paste0("results/pseudotime/Div_", n, "_comp.pdf"), height = 4, width = 4.5)
+  print(plt_comp_l[[n]])
+  dev.off()
+}
+```
+
+Make proportion plots
+
+```{r}
+smo_prop_list = list()
+for(n in names(subfix_4_l)){
+  # subset data
+  submeta = data.frame("pseudotime" = subfix_4_l[[n]]@pseudotime$pseudotime_4,
+                       "cellclusters" = subfix_4_l[[n]]@meta$cellclusters)
+  
+  med_pt_cc = sort(tapply(submeta$pseudotime, submeta$cellclusters, median))
+  
+  lt_bins = cut(submeta$pseudotime, 100) # 100 equally-sized bins
+  plot_df = data.frame(bins = lt_bins, 
+                       cst = as.character(submeta$cellclusters))
+  tab_df = table(plot_df$bins, plot_df$cst)
+  
+  # remove cell types that are too rare (<5%)
+  tab_df = reshape2::melt(tab_df/rowSums(tab_df))
+  usecl = tapply(tab_df$value, tab_df$Var2, function(x) any(x>0.05))
+  plot_df = plot_df[plot_df$cst %in% names(usecl)[usecl],]
+  tab_df = table(plot_df$bins,plot_df$cst)
+  
+  # normalise by cell type abundance
+  prop_w = prop.table(table(plot_df$cst))
+  tab_df = t(apply(tab_df, 1, function(x) x/prop_w[colnames(tab_df)]))
+  
+  # reshape
+  tab_df = reshape2::melt(tab_df/rowSums(tab_df))
+  tab_df$Var2 = as.character(tab_df$Var2)
+  
+  # prevent discontinuity by copying the previous column (likely not happening)
+  tab_df = tab_df[order(tab_df$Var1, decreasing = F),]
+  for(i in unique(tab_df$Var1)){
+    if(any(is.nan(tab_df$value[tab_df$Var1==i]))){
+      tab_df$value[tab_df$Var1==i] = prev
+    }
+    prev = tab_df$value[tab_df$Var1==i]
+  }
+  
+  # smoothen the proportions (and force constrain to 0-1)
+  tab_df2 = tab_df
+  tab_df2$value2 = tab_df2$value
+  for(i in unique(tab_df2$Var2)){
+    fff = loess(value~as.numeric(Var1), data = tab_df2[tab_df2$Var2==i,], 
+                span = 0.5)
+    pred = predict(fff)
+    pred[pred>1] = 1
+    pred[pred<0] = 0
+    tab_df2$value2[tab_df2$Var2==i] = pred
+  }
+  
+  # force constrain each interval to 0-1 by doing proportion
+  for(i in unique(tab_df2$Var1)){
+    tab_df2$value2[tab_df2$Var1==i] = tab_df2$value2[tab_df2$Var1==i]/sum(tab_df2$value2[tab_df2$Var1==i])
+  }
+  
+  tab_df2$major = unlist(lapply(strsplit(tab_df2$Var2, "_"), function(x) x[1]))
+  res = list()
+  for(nnn in unique(tab_df2$Var1)){
+    ss=tapply(tab_df2[tab_df2$Var1==nnn,"value2"], tab_df2[tab_df2$Var1==nnn,"major"], sum)
+    res[[nnn]] = which.max(ss)
+  }
+
+  smo_prop_list[[n]] = ggplot(tab_df2, aes(x = Var1, y = value2, group = Var2, fill = Var2))+
+    geom_area()+
+    scale_y_continuous(expand = c(0,0))+
+    scale_fill_manual(values = cols_cc[names(cols_cc) %in% tab_df2$Var2])+
+    labs(x = "Bins", y = "Proportion", fill = "Cell type")+
+    theme_classic()+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 6.5, colour = "black"),
+          axis.ticks.x = element_blank(),
+          axis.line = element_blank(),
+          axis.title = element_text(size = 7),
+          legend.text = element_text(size = 6),
+          legend.title = element_text(size = 7),
+          legend.key.size = unit(0.4, "cm"))
+}
+```
+
+Save proportions
+
+```{r}
+for(n in names(smo_prop_list)){
+  pdf(paste0("results/pseudotime/Div_", n, "_prop.pdf"), height = 3, width = 5.2)
+  print(smo_prop_list[[n]])
+  dev.off()
+}
+```

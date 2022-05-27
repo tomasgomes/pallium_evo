@@ -999,9 +999,14 @@ for(r in c("hippocampus", "lc", "eomes", "8620_ep", "111")){
     ld_ss_l[[paste0(l, "..", r)]] = read.csv(paste0(dir, "glutNoEp_ss_", r, "_", l,
                                                      "_lineageDrivers.csv"), 
                                              header = T, row.names = 1)
+    colnames(ld_ss_l[[paste0(l, "..", r)]]) = c("corr", "pval", "qval", "ci_low", "ci_high")
     ld_ss_l[[paste0(l, "..", r)]]$gene = rownames(ld_ss_l[[paste0(l, "..", r)]])
+    ld_ss_l[[paste0(l, "..", r)]]$lineage = l
+    ld_ss_l[[paste0(l, "..", r)]]$group = r
   }
 }
+ld_ss = Reduce(rbind, lapply(ld_ss_l, function(x) x[order(abs(x$corr), decreasing = T),][1:100,]))
+write.csv(ld_ss, file = "results/RNAvelocity_Div/top100_ld_SS.csv", row.names = F, quote = F)
 
 # div drivers
 dir = "results/RNAvelocity_Div/drivers/"
@@ -1011,9 +1016,14 @@ for(r in c("hippocampus", "lc", "eomes", "8620_ep", "111")){
     ld_div_l[[paste0(l, "..", r)]] = read.csv(paste0(dir, "glut_div_", r, "_", l,
                                                      "_lineageDrivers.csv"), 
                                              header = T, row.names = 1)
+    colnames(ld_div_l[[paste0(l, "..", r)]]) = c("corr", "pval", "qval", "ci_low", "ci_high")
     ld_div_l[[paste0(l, "..", r)]]$gene = rownames(ld_div_l[[paste0(l, "..", r)]])
+    ld_div_l[[paste0(l, "..", r)]]$lineage = l
+    ld_div_l[[paste0(l, "..", r)]]$group = r
   }
 }
+ld_div = Reduce(rbind, lapply(ld_div_l, function(x) x[order(abs(x$corr), decreasing = T),][1:100,]))
+write.csv(ld_div, file = "results/RNAvelocity_Div/top100_ld_Div.csv", row.names = F, quote = F)
 
 corr_dat_l = list()
 for(n in names(ld_div_l)[!grepl("epen", names(ld_div_l))]){
@@ -1041,6 +1051,383 @@ for(n in names(corr_dat_l)){
   dev.off()
 }
 ```
+
+Compare genes from SS and Div
+
+```{r}
+# list genes for each traj
+genes_ss = list()
+genes_div = list()
+for(n in names(ld_ss_l)){
+  colcorr = colnames(ld_ss_l[[n]])[grepl("corr", colnames(ld_ss_l[[n]]))]
+  colqval = colnames(ld_ss_l[[n]])[grepl("qval", colnames(ld_ss_l[[n]]))]
+  genes_ss[[paste0(n, "..ss")]] = ld_ss_l[[n]]$gene[abs(ld_ss_l[[n]][,colcorr])>=0.2 & 
+                                      ld_ss_l[[n]][,colqval]<=0.05]
+  genes_div[[paste0(n, "..div")]] = ld_div_l[[n]]$gene[abs(ld_div_l[[n]][,colcorr])>=0.2 & 
+                                        ld_div_l[[n]][,colqval]<=0.05]
+}
+genes_ld = c(genes_ss, genes_div)
+
+# calculate intersection
+mat_int_ld = matrix(0,length(genes_ld), length(genes_ld))
+rownames(mat_int_ld) = colnames(mat_int_ld) = names(genes_ld)
+for(i in names(genes_ld)){
+  for(j in names(genes_ld)){
+    mat_int_ld[i,j] = length(intersect(genes_ld[[i]], genes_ld[[j]]))
+  }
+}
+norm_mat = apply(mat_int_ld, 1, function(x) x/diag(mat_int_ld))
+
+# genes per group
+genes_g_ld = list()
+for(g in c("eomes", "hippocampus", "lc", "111", "8620_ep")){
+  nn = names(genes_ld)[grepl("ss", names(genes_ld)) & grepl(g, names(genes_ld)) &
+                         !grepl("epen", names(genes_ld))]
+  genes_g_ld[[paste0("ss_", g)]] = unique(unlist(genes_ld[nn]))
+  nn = names(genes_ld)[grepl("div", names(genes_ld)) & grepl(g, names(genes_ld))]
+  genes_g_ld[[paste0("div_", g)]] = unique(unlist(genes_ld[nn]))
+}
+
+# calculate intersection
+mat_int_gld = matrix(0,length(genes_g_ld), length(genes_g_ld))
+rownames(mat_int_gld) = colnames(mat_int_gld) = names(genes_g_ld)
+for(i in names(genes_g_ld)){
+  for(j in names(genes_g_ld)){
+    mat_int_gld[i,j] = length(intersect(genes_g_ld[[i]], genes_g_ld[[j]]))
+  }
+}
+norm_mat = apply(mat_int_gld, 
+                 1, function(x) x/diag(mat_int_gld))
+pheatmap::pheatmap(norm_mat, cluster_rows = F, cluster_cols = F, 
+                   color = viridis::magma(100))
+diag_all = diag(mat_int_gld)
+norm_mat = apply(mat_int_gld, 2, function(x) x/diag_all)
+pheatmap::pheatmap(norm_mat, cluster_rows = F, cluster_cols = F, display_numbers = T, 
+                   color = viridis::magma(100))
+
+# a plot for each
+diag_div = diag(mat_int_gld[grepl("div", rownames(mat_int_gld)), grepl("div", colnames(mat_int_gld))])
+sub_mat = mat_int_gld[grepl("div", rownames(mat_int_gld)), grepl("ss", colnames(mat_int_gld))]
+norm_mat = apply(sub_mat, 2, function(x) x/diag_div)
+pdf("results/RNAvelocity_Div/comp_SS_div/traj_gene_comp_div_ss.pdf", height = 3, width = 3.5)
+pheatmap::pheatmap(norm_mat, cluster_rows = F, cluster_cols = F, display_numbers = T, 
+                   color = viridis::magma(100))
+dev.off()
+
+diag_div = diag(mat_int_gld[grepl("ss", rownames(mat_int_gld)), grepl("ss", colnames(mat_int_gld))])
+sub_mat = mat_int_gld[grepl("ss", rownames(mat_int_gld)), grepl("ss", colnames(mat_int_gld))]
+norm_mat = apply(sub_mat, 2, function(x) x/diag_div)
+pdf("results/RNAvelocity_Div/comp_SS_div/traj_gene_comp_ss_ss.pdf", height = 3, width = 3.5)
+pheatmap::pheatmap(norm_mat, cluster_rows = F, cluster_cols = F, display_numbers = T, 
+                   color = viridis::magma(100))
+dev.off()
+```
+
+Genes missing in SS/Div
+
+```{r}
+genes_g_ss = list()
+genes_g_div = list()
+for(g in c("eomes", "hippocampus", "lc", "111", "8620_ep")){
+  nn = names(genes_ld)[grepl("ss", names(genes_ld)) & grepl(g, names(genes_ld)) &
+                         !grepl("epen", names(genes_ld))]
+  genes_g_ss[[g]] = unique(unlist(genes_ld[nn]))
+  nn = names(genes_ld)[grepl("div", names(genes_ld)) & grepl(g, names(genes_ld))]
+  genes_g_div[[g]] = unique(unlist(genes_ld[nn]))
+}
+
+missing_ss = list()
+missing_div = list()
+for(i in names(genes_g_ss)){
+  for(j in names(genes_g_div)){
+    if(i==j){
+      print(i)
+      missing_div[[i]] = setdiff(genes_g_ss[[i]], genes_g_div[[j]])
+      missing_ss[[j]] = setdiff(genes_g_div[[i]], genes_g_ss[[j]])
+    }
+  }
+}
+bg_g = unique(c(unlist(lapply(ld_ss_l, function(x) x$gene)), 
+                unlist(lapply(ld_div_l, function(x) x$gene))))
+
+miss_ss_go = list()
+miss_div_go = list()
+for(n in names(missing_ss)){
+  miss_ss_go[[n]] = gprofiler2::gost(missing_ss[[n]], custom_bg = bg_g, sources = "GO",
+                                     correction_method = "fdr")$result
+  miss_div_go[[n]] = gprofiler2::gost(missing_div[[n]], custom_bg = bg_g, sources = "GO",
+                                     correction_method = "fdr")$result
+}
+
+save(miss_ss_go, miss_div_go, 
+     file = "results/RNAvelocity_Div/comp_SS_div/diff_genes_SS_Div_GOterms.RData")
+```
+
+Plot GO Terms
+
+```{r}
+plt_go_l = list()
+for(n in names(miss_ss_go)){
+  # missing in SS
+  terms = miss_ss_go[[n]]$result$term_id
+  terms = terms[grepl("GO:", terms, fixed = T)]
+  terms = terms[!(terms %in% unlist(miss_ss_go[[n]]$result$parents))]
+  tnames = unique(miss_ss_go[[n]]$result[grepl("BP", miss_ss_go[[n]]$result$source),c(9,11,3)])
+  tnames = tnames[tnames[,1] %in% terms,]
+  tnames$group = n
+  tnames$miss = "only_Div"
+  plt_go_l[[length(plt_go_l)+1]] = tnames
+  
+  # missing in SS
+  terms = miss_div_go[[n]]$result$term_id
+  terms = terms[grepl("GO:", terms, fixed = T)]
+  terms = terms[!(terms %in% unlist(miss_div_go[[n]]$result$parents))]
+  tnames = unique(miss_div_go[[n]]$result[grepl("BP",
+                                                miss_div_go[[n]]$result$source),c(9,11,3)])
+  tnames = tnames[tnames[,1] %in% terms,]
+  tnames$group = n
+  tnames$miss = "only_SS"
+  plt_go_l[[length(plt_go_l)+1]] = tnames
+}
+dat = Reduce(rbind, plt_go_l)
+
+plt_go_l = list()
+for(n in names(miss_ss_go)){
+  for(nn in c("only_SS", "only_Div")){
+    nameg = paste0(n, "_", nn)
+    subdat = dat[dat$group==n & dat$miss==nn,]
+    subdat = subdat[order(subdat$p_value, decreasing = F),]
+    subdat = subdat %>% group_by(group, miss) %>% top_n(-5, p_value)
+    
+    subdat$term_name = gsub("(.{19,}?)\\s", "\\1\n", subdat$term_name)
+    subdat$term_name = factor(subdat$term_name, levels = rev(unique(subdat$term_name)))
+    
+    plt_go_l[[nameg]] = ggplot(subdat, aes(x = -log10(p_value), y = term_name, 
+                                           group = term_name))+
+      facet_grid(miss~group, scales = "free", space = "free")+
+      geom_segment(mapping = aes(xend = -log10(p_value), yend = term_name), x = 0)+
+      geom_point(size = 2)+
+      labs(x = "-log10(pvalue)")+
+      theme_bw()+
+      theme(axis.text.x = element_text(size = 6, colour = "black"),
+            axis.text.y = element_text(size = 6.5, colour = "black"),
+            axis.title = element_text(size = 6.5),
+            strip.text = element_text(size = 6.5))
+  }
+}
+pdf("results/RNAvelocity_Div/GOTerms_missing_traj.pdf", height = 5, width = 20)
+cowplot::plot_grid(plotlist = plt_go_l, nrow = 2, align = "hv")
+dev.off()
+```
+
+Heatmap by trajectory
+
+```{r}
+# list genes for each traj
+genes_ss = list()
+genes_div = list()
+for(n in names(ld_ss_l)){
+  colcorr = colnames(ld_ss_l[[n]])[grepl("corr", colnames(ld_ss_l[[n]]))]
+  colqval = colnames(ld_ss_l[[n]])[grepl("qval", colnames(ld_ss_l[[n]]))]
+  genes_ss[[paste0(n, "..ss")]] = ld_ss_l[[n]]$gene[abs(ld_ss_l[[n]][,colcorr])>=0.2 & 
+                                      ld_ss_l[[n]][,colqval]<=0.05]
+  genes_div[[paste0(n, "..div")]] = ld_div_l[[n]]$gene[abs(ld_div_l[[n]][,colcorr])>=0.2 & 
+                                        ld_div_l[[n]][,colqval]<=0.05]
+}
+genes_ld = c(genes_ss, genes_div)
+
+# calculate intersection
+mat_int_ld = matrix(0,length(genes_ld), length(genes_ld))
+rownames(mat_int_ld) = colnames(mat_int_ld) = names(genes_ld)
+for(i in names(genes_ld)){
+  for(j in names(genes_ld)){
+    mat_int_ld[i,j] = length(intersect(genes_ld[[i]], genes_ld[[j]]))
+  }
+}
+mat_int_ld = mat_int_ld[!grepl("epen", rownames(mat_int_ld)),
+                        !grepl("epen", colnames(mat_int_ld))]
+
+diag_div = diag(mat_int_ld[grepl("ss", rownames(mat_int_ld)), 
+                            grepl("ss", colnames(mat_int_ld))])
+sub_mat = mat_int_ld[grepl("ss", rownames(mat_int_ld)), 
+                      grepl("ss", colnames(mat_int_ld))]
+norm_mat = apply(sub_mat, 2, function(x) x/diag_div)
+pheatmap::pheatmap(norm_mat, cluster_rows = F, cluster_cols = F, display_numbers = T)
+
+diag_div = diag(mat_int_ld[grepl("div", rownames(mat_int_ld)), 
+                            grepl("div", colnames(mat_int_ld))])
+sub_mat = mat_int_ld[grepl("div", rownames(mat_int_ld)), 
+                      grepl("ss", colnames(mat_int_ld))]
+norm_mat = apply(sub_mat, 2, function(x) x/diag_div)
+pheatmap::pheatmap(norm_mat, cluster_rows = F, cluster_cols = F, display_numbers = T)
+```
+
+Compare TF cascades in SS and Div
+
+```{r}
+taj_n = c("glut_SUBSET_1", "glut_SUBSET_11", "glut_SUBSET_0", "glut_SUBSET_7",
+          "glut_SUBSET_2", "glut_SUBSET_9", "glut_SUBSET_10", "glut_SUBSET_22",
+          "glut_SUBSET_8", "glut_SUBSET_6")
+# load var dfs
+ss_var = read.csv("results/RNAvelocity/glut_corr/heatmap_gen/all_genes_variable.csv", 
+                  row.names = 1, header = T)
+div_var = read.csv("results/RNAvelocity_Div/heatmap_gen/all_genes_variable.csv", 
+                   row.names = 1, header = T)
+
+# load TFs
+tfs = read.csv("../../gene_refs/human/Homo_sapiens_TF_AnimalTFDB3.txt", 
+               header = T, sep = "\t")$Symbol
+
+# filter TF
+ss_tf = ss_var[ss_var$gene %in% tfs,]
+div_tf = div_var[div_var$gene %in% tfs,]
+
+# calculate stats
+stats_share_l = list()
+max_l = list()
+for(n in taj_n){
+  sub_ss = ss_tf#[ss_tf[,paste0(n, "_isLin")] & !is.na(ss_tf[,paste0(n, "_isLin")]),]
+  sub_div = div_tf#[div_tf[,paste0(n, "_isLin")] & !is.na(div_tf[,paste0(n, "_isLin")]),]
+  
+  max_ss = sub_ss[,c("gene", paste0("max_", n))]
+  max_div = sub_div[,c("gene", paste0("max_", n))]
+  max_df = merge(max_ss, max_div, by = 1, all = T)
+  colnames(max_df) = c("gene", "max_ss", "max_div")
+  cor_common = cor(max_df$max_ss, max_df$max_div, use = "na.or.complete", method = "sp")
+  n_ss = sum(!is.na(max_df$max_ss))
+  n_div = sum(!is.na(max_df$max_div))
+  n_common = length(intersect(max_df$gene[!is.na(max_df$max_ss)],
+                              max_df$gene[!is.na(max_df$max_div)]))
+  
+  stats_share_l[[n]] = c(cor_common, n_ss, n_div, n_common)
+  max_l[[n]] = max_df
+}
+stats_share = t(data.frame(stats_share_l, row.names = c("cor", "n_ss", "n_div", "n_common")))
+```
+
+Load and reformat network degree data
+
+```{r}
+grn_net = read.table('../../../jfleck/projects/axolotl/data/grn/glm_modules.tsv', header = T)
+
+group_da <- read_tsv('../../../jfleck/projects/axolotl/data/diff_expression/ATAC_linked_peaks_group_da.tsv')
+#### Get group-specific GRNs ####
+group_da_sig <- group_da %>% 
+    filter(padj<0.05, coef>0, detect_ratio>1.5) 
+group_da_peaks <- group_da_sig %>% 
+    group_by(group) %>% group_split()
+names(group_da_peaks) <- map_chr(group_da_peaks, function(x) x$group[1])
+da_peaks_all <- group_da_peaks %>% map(~.x$feature) %>% purrr::reduce(union)
+group_spec_peaks <- group_da_sig %>% 
+    group_by(feature) %>% 
+    filter(detect_ratio==max(detect_ratio)) %>% 
+    distinct(group, feature, detect_ratio)
+
+
+grn_net <- grn_net %>% 
+    group_by(tf) %>% 
+    mutate(
+        n_common = sum(regions%in%da_peaks_all),
+        n_group_111 = sum(regions%in%group_da_peaks$group_111$feature),
+        n_group_8620_ep = sum(regions%in%group_da_peaks$group_8620_ep$feature),
+        n_group_eomes = sum(regions%in%group_da_peaks$group_eomes$feature),
+        n_group_hippocampus = sum(regions%in%group_da_peaks$group_hippocampus$feature),
+        n_group_lc = sum(regions%in%group_da_peaks$group_lc$feature)
+    ) %>% 
+    mutate(
+        frac_common = n_common / length(unique(regions)),
+        frac_group_111 = n_group_111 / length(unique(regions)),
+        frac_group_8620_ep = n_group_8620_ep / length(unique(regions)),
+        frac_group_eomes = n_group_eomes / length(unique(regions)),
+        frac_group_hippocampus = n_group_hippocampus / length(unique(regions)),
+        frac_group_lc = n_group_lc / length(unique(regions))
+    )
+
+grn_net_annot <- grn_net %>% 
+    left_join(group_spec_peaks, by=c('regions'='feature')) %>% 
+    group_by(tf) %>% 
+    mutate(count=n()) %>% 
+    ungroup()
+
+
+plot_df <- grn_net_annot %>% 
+    select(tf, n_common:frac_group_lc) %>% distinct() %>% 
+    arrange(desc(n_group_111)) %>% 
+    #filter(row_number()<=25) %>% 
+    mutate(tf=factor(tf, levels=unique(.$tf))) #%>% 
+    #filter(n_group_111>5)
+
+dat_all_deg = unique(grn_net_annot[,c(1,7:19)])
+write.csv(dat_all_deg, file = "results/RNAvelocity_Div/dat_allNet_deg.csv",  
+          row.names = F, quote = F)
+```
+
+Compare TFs in trajectories
+
+```{r, fig.height=4, fig.width=10}
+traj_groups = c("111", "111", "hippocampus", "hippocampus", "lc", 
+                "lc", "eomes", "eomes", "8620_ep", "8620_ep")
+names(traj_groups) = names(max_l)
+deg_sc = c(min(dat_all_deg[,3:7]), max(dat_all_deg[,3:7]))
+
+leg = NULL
+plt_list_max = list()
+for(n in names(max_l)){
+  plot_df = max_l[[n]]
+  plot_df$na_ss = is.na(plot_df$max_ss)
+  plot_df$max_ss[plot_df$na_ss] = 0
+  plot_df$na_div = is.na(plot_df$max_div)
+  plot_df$max_div[plot_df$na_div] = 0
+  plot_df = plot_df[!plot_df$na_ss | !plot_df$na_div,]
+  
+  # add frac deg
+  plot_df = merge(plot_df, unique(dat_all_deg[,c("tf", 
+                                                 paste0("n_group_", traj_groups[n]))]), 
+                  by = 1, all.x = T)
+  colnames(plot_df)[6] = "degree"
+  plot_df = plot_df[order(plot_df$degree, decreasing = T),]
+  
+  comm_df = plot_df[!plot_df$na_ss & !plot_df$na_div,]
+  u_df = plot_df[plot_df$na_ss | plot_df$na_div,]
+  
+  corn = round(stats_share[n,1],2)
+  
+  plt = ggplot(mapping = aes(colour = degree))+
+    geom_text(data = u_df,
+              mapping = aes(x = max_ss, y = max_div, label = gene), size = 1.3, angle = 45)+
+    ggrepel::geom_label_repel(data = comm_df, 
+                             mapping = aes(x = max_ss, y = max_div, label = gene), size = 1.6,
+                             max.overlaps = 100, label.padding = unit(0.1, "lines"))+
+    labs(x = "Max expr time in SS", y = "Max expr time in regen.",
+         title = paste0(gsub("_SUBSET", "", n), " - corr. = ", corn))+
+    scale_color_distiller(palette = "RdPu", direction = 1, limits = deg_sc)+
+    theme_bw()+
+    theme(axis.text = element_text(colour = "black", size = 6),
+          axis.title = element_text(size = 6.5),
+          aspect.ratio = 1,panel.grid = element_blank(),
+          plot.title = element_text(size = 6.5),
+          plot.subtitle = element_text(size = 6.5),
+          legend.text = element_text(size = 6),
+          legend.title = element_text(size = 6.5),
+          legend.key.width = unit(2.75, "lines"), 
+          legend.key.height = unit(0.3, "lines"), 
+          legend.margin = margin(l = 0),
+          legend.direction = "horizontal",
+          legend.position = "bottom")
+  plt_list_max[[n]] = plt+theme(legend.position = "none")
+  leg = cowplot::get_legend(plt)
+}
+
+pdf("results/RNAvelocity_Div/shared_TF_lineage.pdf", width = 3.4, height = 9.2)
+cowplot::plot_grid(cowplot::plot_grid(plotlist = plt_list_max, nrow = 5), leg, 
+                   rel_heights = c(1, 0.03), nrow = 2)
+dev.off()
+```
+
+
+
+
+
 
 
 

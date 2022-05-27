@@ -76,8 +76,7 @@ Load expression data
 
 ```{r}
 ax_srat = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
-meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
-                header = T, row.names = 1)
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", header = T, row.names = 1)
 ax_srat = AddMetaData(ax_srat, metadata = meta)
 ```
 
@@ -817,6 +816,126 @@ dev.off()
 
 
 ## Cluster dendrogrammes
+### Cluster representation
+General metadata
+
+```{r}
+plot_df = ax_srat@meta.data[,c("subclasses", "cellclusters", "sample")]
+plot_df$sample_type = ifelse(grepl("animal",plot_df$sample), "whole pallium", "microdissected")
+plot_df$animal = plot_df$sample
+plot_df$animal[grepl("M", plot_df$animal)] = "animal M"
+plot_df$animal[grepl("D", plot_df$animal)] = "animal D"
+plot_df$animal[grepl("L", plot_df$animal)] = "animal L"
+plot_df$sample[plot_df$sample=="animal1" & grepl("_1", rownames(plot_df))] = "a1-1"
+plot_df$sample[plot_df$sample=="animal1" & grepl("_2", rownames(plot_df))] = "a1-2"
+plot_df$sample[plot_df$sample=="animal3" & grepl("_3", rownames(plot_df))] = "a3-1"
+plot_df$sample[plot_df$sample=="animal3" & grepl("_4", rownames(plot_df))] = "a3-2"
+
+plot_df$x = paste(plot_df$sample_type, plot_df$animal, plot_df$sample, sep = "..")
+plot_df$y = paste(plot_df$subclasses, plot_df$cellclusters, sep = "..")
+```
+
+Cluster proportions
+
+```{r}
+plot_n = reshape2::dcast(data = plot_df, y ~ x)
+rownames(plot_n) = plot_n$y
+plot_n = plot_n[,-1]
+plot_norm = t(apply(plot_n, 1, function(x) x/sum(x)))
+plot_norm = t(apply(plot_norm, 1, function(x) x/colSums(plot_n)))
+hcl = hclust(dist(plot_norm), method = "ward.D")
+
+plot_nn = reshape2::melt(plot_norm)
+plot_nn$subclasses = unlist(lapply(strsplit(as.character(plot_nn$Var1), "..", fixed = T),
+                                     function(x) x[1]))
+plot_nn$cellclusters = unlist(lapply(strsplit(as.character(plot_nn$Var1), "..", fixed = T),
+                                       function(x) x[2]))
+plot_nn$sample_type = unlist(lapply(strsplit(as.character(plot_nn$Var2), "..", fixed = T),
+                                     function(x) x[1]))
+plot_nn$animal = unlist(lapply(strsplit(as.character(plot_nn$Var2), "..", fixed = T),
+                                     function(x) x[2]))
+plot_nn$sample = unlist(lapply(strsplit(as.character(plot_nn$Var2), "..", fixed = T),
+                                     function(x) x[3]))
+plot_nn$Var1 = factor(plot_nn$Var1, levels = hcl$labels[hcl$order])
+plot_nn = plot_nn[order(plot_nn$Var1),]
+plot_nn$subclasses = factor(plot_nn$subclasses, levels = unique(plot_nn$subclasses))
+plot_nn$cellclusters = factor(plot_nn$cellclusters, levels = unique(plot_nn$cellclusters))
+plot_nn$animal = factor(plot_nn$animal, levels = unique(plot_nn$animal))
+plot_nn$sample_type = factor(plot_nn$sample_type, 
+                             levels = c("whole pallium", "microdissected"))
+plot_nn$sample = factor(plot_nn$sample, levels = unique(plot_nn$sample))
+
+plot_nn$value[plot_nn$value==0] = NA
+
+ggplot(plot_nn)+
+  ggh4x::facet_nested(subclasses ~ sample_type+animal+sample, drop = T, scales = "free", 
+             space = "free", shrink = T)+
+  geom_tile(data = plot_nn, mapping = aes(x = sample, y = cellclusters, fill = value))+
+  scale_x_discrete(expand = c(0,0), position = "top")+
+  scale_y_discrete(expand = c(0,0))+
+  scale_fill_viridis_c(option = "B", na.value = "grey75")+
+  theme_classic()+
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(), 
+        axis.text.y = element_text(size = 7, colour = "black"),
+        strip.text = element_text(size = 7.5))
+```
+
+Binary representation
+
+```{r}
+# clustering
+rownames(plot_n) = plot_n$y
+ndat = plot_n[,-1]
+hcl = hclust(dist(ndat<2, method = "man"), method = "ward.D")
+
+
+plot_n = reshape2::dcast(data = plot_df, y ~ x)
+
+plot_nn = reshape2::melt(plot_n)
+plot_nn$subclasses = unlist(lapply(strsplit(as.character(plot_nn$y), "..", fixed = T),
+                                     function(x) x[1]))
+plot_nn$cellclusters = unlist(lapply(strsplit(as.character(plot_nn$y), "..", fixed = T),
+                                       function(x) x[2]))
+plot_nn$sample_type = unlist(lapply(strsplit(as.character(plot_nn$variable), "..", fixed = T),
+                                     function(x) x[1]))
+plot_nn$animal = unlist(lapply(strsplit(as.character(plot_nn$variable), "..", fixed = T),
+                                     function(x) x[2]))
+plot_nn$sample = unlist(lapply(strsplit(as.character(plot_nn$variable), "..", fixed = T),
+                                     function(x) x[3]))
+plot_nn$y = factor(plot_nn$y, levels = hcl$labels[hcl$order])
+plot_nn = plot_nn[order(plot_nn$y),]
+plot_nn$subclasses = factor(plot_nn$subclasses, levels = unique(plot_nn$subclasses))
+plot_nn$cellclusters = factor(plot_nn$cellclusters, levels = unique(plot_nn$cellclusters))
+plot_nn$animal = factor(plot_nn$animal, 
+                        levels = c("animal1", "animal3", "animal M", "animal D", "animal L"))
+plot_nn$sample_type = factor(plot_nn$sample_type, 
+                             levels = c("whole pallium", "microdissected"))
+plot_nn$sample = factor(plot_nn$sample, levels = unique(plot_nn$sample))
+
+plot_nn$cluster = c("present", "absent")[(plot_nn$value<2)+1]
+
+plt_heat = ggplot(plot_nn)+
+  ggh4x::facet_nested(subclasses ~ sample_type+animal+sample, drop = T, scales = "free", 
+             space = "free", shrink = T)+
+  geom_tile(data = plot_nn, mapping = aes(x = sample, y = cellclusters, fill = cluster),
+            colour = "black")+
+  scale_x_discrete(expand = c(0,0), position = "top")+
+  scale_y_discrete(expand = c(0,0))+
+  scale_fill_manual(values = c("grey88", "grey12"))+
+  theme_classic()+
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(), 
+        axis.text.y = element_text(size = 7, colour = "black"),
+        strip.text = element_text(size = 7.5))
+
+pdf("results/RegionAnalysis/heat_binary_cluster_sample.pdf", height = 9.5, width = 7)
+print(plt_heat)
+dev.off()
+```
+
 ### Clustering on markers
 Load data required
 

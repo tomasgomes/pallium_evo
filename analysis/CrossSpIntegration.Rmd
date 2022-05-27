@@ -1,0 +1,1637 @@
+---
+title: "Cross-species integration"
+output: html_notebook
+---
+
+
+
+
+# General Setup
+Setup chunk
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 8)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$get("root.dir")
+```
+
+Setup reticulate
+
+```{r}
+library(reticulate)
+knitr::knit_engines$set(python = reticulate::eng_python)
+py_available(initialize = FALSE)
+use_python(Sys.which("python"))
+py_config()
+```
+
+Load libraries
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(harmony)
+
+source("scripts/crossSpeciesFunctions.R")
+```
+
+Colours
+
+```{r}
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", 
+                header = T, row.names = 1)
+cols_cc = c(
+#epen
+"#12400c", "#2d6624","#1d4f15", "#174711", "#2d6624", "#3d7f33", "#3b7b30", "#468b3b", "#4f9843","#5dae50", "#66bb58", "#72cd64", "#306a26", "#78d669", "#81e472",
+#gaba
+"#700209", "#75090e","#7a0f13", "#801517", "#851a1b", "#8a1f1f", "#902423", "#952927", "#9a2d2c","#a03230", "#a53634", "#aa3a39", "#b03f3d","#b54342", "#ba4846", "#c04c4b", "#c5504f", "#ca5554", "#d05959", "#d55e5e","#73050c", "#780c11","#8d2221", "#982b2a","#a23432", "#a83837", "#b2413f", "#b84544", "#bd4a49", "#c85352", #"#cd5756",
+#glut
+"#054674", "#134d7b","#1d5481", "#265a88", "#2e618e", "#73a4cb", "#366995", "#3e709c", "#4677a2","#4d7ea9", "#5586b0", "#5c8db7", "#6495bd","#6b9cc4", "#7bacd2", "#8ebfe4", "#96c7eb", "#9ecff2", "#18507e", "#18507e","#2a5e8b", "#497ba6","#5889b3", "#6fa0c8","#7fafd6", "#6091ba", "#5182ac", "#3a6c98", "#a6d7f9",
+#npc
+"#ffb120", "#feb72a","#fdbc34", "#fcc13d", "#fbc745", "#facc4e", "#f9d156", "#f8d65f", "#f8da68","#f7df70", "#f7e479", "#f7e882", "#f7ed8a", "#f7f193", "#eca319"
+)
+ccnames = unique(sort(meta$cellclusters))
+names(cols_cc) = c(ccnames[grepl("epen", ccnames)], ccnames[grepl("GABA", ccnames)],ccnames[grepl("glut", ccnames)],ccnames[grepl("npc", ccnames)])
+```
+
+
+
+
+# Load data for predictions and integration
+## Prepare orthologs matching
+Load necessary orthology data
+
+```{r}
+ort_alt_ens_list = readRDS(file = "data/eggNOG/ort_alt_ens_list.RDS")
+ort_alt_egg_list = readRDS(file = "data/eggNOG/ort_alt_egg_list.RDS")
+
+# join ensemble and eggnog tables
+ort_list_use = c(ort_alt_ens_list, 
+                 ort_alt_egg_list[which(grepl("axolotl", names(ort_alt_egg_list)) |
+                                          grepl("lizard", names(ort_alt_egg_list)))])
+# add bengalese finch tables (same as zebrafinch)
+bfmats = ort_alt_egg_list[which(grepl("zebrafinch", names(ort_alt_egg_list)))]
+names(bfmats) = gsub("zebrafinch", "bengalesefinch", names(bfmats))
+for(n in names(bfmats)){
+  colnames(bfmats[[n]]) = gsub("zebrafinch", "bengalesefinch", colnames(bfmats[[n]]))
+}
+
+# make a table for zebrafinch and bengalese finch (and vice-versa)
+## all will be one2one
+bf_cols = unique(Reduce(rbind, lapply(bfmats, function(x) x[,grepl("bengalesefinch", colnames(x))])))
+zf_cols = unique(Reduce(rbind, lapply(ort_alt_egg_list, function(x) x[,grepl("zebrafinch", colnames(x))])))
+finches_l = list("zebrafinch.vs.bengalesefinch" = cbind(zf_cols, bf_cols, rep("ortholog_one2one", nrow(bf_cols))),
+                 "bengalesefinch.vs.zebrafinch" = cbind(bf_cols, zf_cols, rep("ortholog_one2one", nrow(bf_cols))))
+colnames(finches_l[[1]])[5] = colnames(finches_l[[2]])[5] = "homology.type"
+
+# put all together
+ort_list_use = c(ort_list_use, bfmats, finches_l)
+```
+
+
+## Load actual data
+### Adult
+Load data
+
+```{r}
+zebrafish = readRDS("data/expression/drerio_brain_v3.RDS")
+meta = read.csv("data/annotations/drerio_all_umeta.csv", header = T, row.names = 1)
+zebrafish = AddMetaData(zebrafish, metadata = meta)
+
+bengalesefinch = readRDS("data/expression/bfinch_seurat.RDS")
+meta = read.csv("data/annotations/bfinch_all_umeta.csv", header = T, row.names = 1)
+bengalesefinch = AddMetaData(bengalesefinch, metadata = meta)
+
+zebrafinch = readRDS("data/expression/zfinch_seurat.RDS")
+meta = read.csv("data/annotations/zfinch_all_umeta.csv", header = T, row.names = 1)
+zebrafinch = AddMetaData(zebrafinch, metadata = meta)
+
+axolotl = readRDS("data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS")
+meta = read.csv("data/annotations/axolotl_all_umeta.csv", header = T, row.names = 1)
+axolotl = AddMetaData(axolotl, metadata = meta)
+
+turtle = readRDS("data/expression/turtle_all_v3.RDS")
+meta = read.csv("data/annotations/turtle_all_umeta.csv", header = T, row.names = 1)
+turtle = AddMetaData(turtle, metadata = meta)
+
+lizard = readRDS("data/expression/lizard_all_v3.RDS")
+meta = read.csv("data/annotations/lizard_all_umeta.csv", header = T, row.names = 1)
+lizard = AddMetaData(lizard, metadata = meta)
+
+mouse = readRDS("data/expression/l5_all_seurat.RDS")
+meta = read.csv("data/annotations/mouse_all_umeta.csv", header = T, row.names = 1)
+mouse = AddMetaData(mouse, metadata = meta)
+
+human = readRDS("data/expression/human_10x.RDS")
+meta = read.csv("data/annotations/human10x_all_umeta.csv", header = T, row.names = 1)
+human = AddMetaData(human, metadata = meta)
+```
+
+List these species
+
+```{r}
+allsp_list = list(zebrafish = zebrafish, axolotl = axolotl, paintedturtle = turtle,
+                  lizard = lizard, bengalesefinch = bengalesefinch, zebrafinch = zebrafinch,
+                  mouse = mouse, human = human)
+```
+
+### Dev
+
+```{r}
+mousevsvz = readRDS("data/expression/sc_dat.RDS")
+meta = read.csv("data/annotations/mouseabcsc_umeta.csv", header = T, row.names = 1)
+mousevsvz = AddMetaData(mousevsvz, metadata = meta)
+
+mousedev = readRDS("data/expression/mouse_dibella_filt.RDS")
+meta = read.csv("data/annotations/mousedibella_umeta.csv", header = T, row.names = 1)
+mousedev = AddMetaData(mousedev, metadata = meta)
+```
+
+
+## Prepare adult data
+Get important cell type subsets
+
+```{r}
+# glutamatergic
+glut_mouse = unique(mouse@meta.data$cellclusters[startsWith(mouse@meta.data$cellclusters, 
+                                                            "DGG") |
+                                                   startsWith(mouse@meta.data$cellclusters,
+                                                              "TEGL") ])
+glut_turtle = unique(turtle@meta.data$cellclusters[startsWith(turtle@meta.data$cellclusters,
+                                                              "e")])
+glut_axolotl = unique(axolotl@meta.data$cellclusters[startsWith(axolotl@meta.data$cellclusters,
+                                                              "glut") & axolotl@meta.data$cellclusters!="glut_SUBSET_23"])
+
+srat_a_glut = axolotl[,axolotl@meta.data$cellclusters %in% glut_axolotl]
+srat_m_glut = mouse[,mouse@meta.data$cellclusters %in% glut_mouse]
+srat_t_glut = turtle[,turtle@meta.data$cellclusters %in% glut_turtle]
+
+# GABAergic
+gaba_mouse = unique(mouse@meta.data$cellclusters[mouse@meta.data$classes=="GABAergic"])
+gaba_turtle = unique(turtle@meta.data$cellclusters[startsWith(turtle@meta.data$cellclusters,
+                                                              "i")])
+gaba_axolotl = unique(axolotl@meta.data$cellclusters[startsWith(axolotl@meta.data$cellclusters,
+                                                              "GABA")])
+
+srat_a_gaba = axolotl[,axolotl@meta.data$cellclusters %in% gaba_axolotl]
+srat_m_gaba = mouse[,mouse@meta.data$cellclusters %in% gaba_mouse]
+srat_t_gaba = turtle[,turtle@meta.data$cellclusters %in% gaba_turtle]
+
+# make lists
+glut_l = list("axolotl" = srat_a_glut, "mouse" = srat_m_glut, "paintedturtle" = srat_t_glut)
+gaba_l = list("axolotl" = srat_a_gaba, "mouse" = srat_m_gaba, "paintedturtle" = srat_t_gaba)
+```
+
+All species
+
+```{r}
+glut_ort_3 = list()
+glut_ort_3[["all"]] = seuratOrthologs(glut_l, names(glut_l), 
+                                      ortMatch(ort_list_use, names(glut_l), ort_scope = NULL))
+
+glut_ort_3[["one2one"]] = seuratOrthologs(glut_l, names(glut_l), 
+                                          ortMatch(ort_list_use, names(glut_l), 
+                                                   ort_scope = "ortholog_one2one"))
+gaba_ort_3 = list()
+gaba_ort_3[["all"]] = seuratOrthologs(gaba_l, names(gaba_l), 
+                                      ortMatch(ort_list_use, names(gaba_l), ort_scope = NULL))
+
+gaba_ort_3[["one2one"]] = seuratOrthologs(gaba_l, names(gaba_l), 
+                                          ortMatch(ort_list_use, names(gaba_l), 
+                                                   ort_scope = "ortholog_one2one"))
+```
+
+Normalise data and save
+
+```{r}
+for(n in names(glut_ort_3)){
+  for(sp in names(glut_ort_3[[n]])){
+    glut_ort_3[[n]][[sp]] = suppressWarnings(
+      SCTransform(glut_ort_3[[n]][[sp]], do.correct.umi = T,verbose = F,
+                  variable.features.rv.th = 1, vars.to.regress = "nCount_RNA",
+                  return.only.var.genes = F, seed.use = 1, variable.features.n = NULL)
+      )
+    gaba_ort_3[[n]][[sp]] = suppressWarnings(
+      SCTransform(gaba_ort_3[[n]][[sp]], do.correct.umi = T,verbose = F,
+                  variable.features.rv.th = 1, vars.to.regress = "nCount_RNA",
+                  return.only.var.genes = F, seed.use = 1, variable.features.n = NULL)
+      )
+  }
+}
+saveRDS(glut_ort_3, file = "./data/processed/integration_evo/glut_ort_3.RDS")
+saveRDS(gaba_ort_3, file = "./data/processed/integration_evo/gaba_ort_3.RDS")
+```
+
+
+## Prepare dev data
+Get important cell type subsets
+
+```{r}
+# axolotl NB+Ep
+nbep_axolotl = unique(axolotl@meta.data$cellclusters[startsWith(axolotl@meta.data$cellclusters,
+                                                                "npc") |
+                                                    startsWith(axolotl@meta.data$cellclusters,
+                                                               "epen")])
+srat_a_nbep = axolotl[,axolotl@meta.data$cellclusters %in% nbep_axolotl]
+
+# mouse vsvz
+vz_mouse = unique(mousevsvz$cellclusters[startsWith(mousevsvz$cellclusters,"Ependy") | 
+                                         grepl("A cells", mousevsvz$cellclusters) |
+                                         grepl("B cells", mousevsvz$cellclusters) |
+                                         grepl("C cells", mousevsvz$cellclusters) |
+                                         startsWith(mousevsvz$cellclusters,"Mitosis")])
+srat_m_vsvz = mousevsvz[,mousevsvz@meta.data$cellclusters %in% vz_mouse]
+
+# mouse dev
+ct_mouse = unique(mousedev$cellclusters[!(grepl("Microglia", mousedev$classes) |
+                                          grepl("Vasculature", mousedev$classes) |
+                                          grepl("Interneurons", mousedev$classes) |
+                                          grepl("Excitatory neurons", mousedev$classes) |
+                                          grepl("Oligodendrocytes", mousedev$subclasses) |
+                                          grepl("Astroc", mousedev$subclasses)) | 
+                                          grepl("Migrating", mousedev$subclasses)])
+srat_m_dev1 = mousedev[,mousedev@meta.data$cellclusters %in% ct_mouse]
+
+# make lists
+ax_vz = list("axolotl" = srat_a_nbep, "mouse" = srat_m_vsvz)
+ax_dev1 = list("axolotl" = srat_a_nbep, "mouse" = srat_m_dev1)
+```
+
+All species
+
+```{r}
+ax_vz_allort = seuratOrthologs(ax_vz, names(ax_vz), 
+                               ortMatch(ort_list_use, names(ax_vz), ort_scope = NULL))
+ax_dev1_allort = seuratOrthologs(ax_dev1, names(ax_dev1), 
+                                 ortMatch(ort_list_use, names(ax_dev1), ort_scope = NULL))
+```
+
+Normalise data and save
+
+```{r}
+for(n in names(ax_vz_allort)){
+  print(n)
+  ax_vz_allort[[n]] = suppressWarnings(
+    SCTransform(ax_vz_allort[[n]], do.correct.umi = T,verbose = F,
+                variable.features.rv.th = 1, vars.to.regress = "nCount_RNA",
+                return.only.var.genes = F, seed.use = 1, variable.features.n = NULL)
+    )
+  ax_dev1_allort[[n]] = suppressWarnings(
+    SCTransform(ax_dev1_allort[[n]], do.correct.umi = T,verbose = F,
+                variable.features.rv.th = 1, vars.to.regress = "nCount_RNA",
+                return.only.var.genes = F, seed.use = 1, variable.features.n = NULL)
+    )
+}
+
+saveRDS(ax_vz_allort, file = "./data/processed/integration_evo/ax_vz_allort.RDS")
+saveRDS(ax_dev1_allort, file = "./data/processed/integration_evo/ax_dev1_allort.RDS")
+```
+
+
+
+# Run integration
+## Adult
+Double integration with Harmony for three species
+
+```{r}
+glut_ort_l = readRDS("data/processed/integration_evo/glut_ort_3.RDS")
+names(glut_ort_l) = paste0("glut_", names(glut_ort_l), "_3")
+gaba_ort_l = readRDS("data/processed/integration_evo/gaba_ort_3.RDS")
+names(gaba_ort_l) = paste0("gaba_", names(gaba_ort_l), "_3")
+glut_gaba = c(glut_ort_l[1], gaba_ort_l[1])
+
+integ_dat_l = list()
+for(n in names(glut_gaba)){
+  print(n)
+  integr_feat = Reduce(intersect, lapply(glut_gaba[[n]], VariableFeatures))
+  srat_m = Reduce(merge, glut_gaba[[n]])
+  srat_m = AddMetaData(srat_m, 
+                       metadata = unlist(lapply(names(glut_gaba[[n]]), function(x) rep(x, ncol(glut_gaba[[n]][[x]])))), col.name = "species")
+  srat_m$capt_type = ifelse(srat_m$species=="axolotl", "nuclei", "cells")
+  #srat_m = suppressWarnings(SCTransform(srat_m, do.correct.umi = T,verbose = F,
+  #                variable.features.rv.th = 1, vars.to.regress = "nCount_RNA",
+  #                return.only.var.genes = F, seed.use = 1, variable.features.n = NULL))
+  
+  VariableFeatures(srat_m) = integr_feat
+  srat_ort_harm = RunPCA(srat_m, verbose = FALSE, assay = "SCT", npcs = 50,
+                         features = integr_feat)
+  # Run Harmony
+  srat_ort_harm = RunHarmony(srat_ort_harm, "species", tau = 30, 
+                             reduction = "pca", dims.use = 1:15,
+                             plot_convergence = F, assay.use = "SCT")
+  srat_ort_harm = RunUMAP(srat_ort_harm, reduction = "harmony", dims = 1:15)
+  # Run Harmony again
+  srat_ort_harm2 = RunHarmony(srat_ort_harm, "capt_type", tau = 30, max.iter.harmony = 50,
+                              reduction = "harmony", dims.use = 1:15,
+                              plot_convergence = F, assay.use = "SCT")
+  srat_ort_harm2 = RunUMAP(srat_ort_harm2, reduction = "harmony", dims = 1:15)
+  
+  integ_dat_l[[n]] = srat_ort_harm2
+}
+```
+
+Clustering integrated data
+
+```{r}
+for(n in names(integ_dat_l)){
+  integ_dat_l[[n]] = FindNeighbors(integ_dat_l[[n]], reduction = "harmony", dims = 1:15, 
+                                   compute.SNN = T, force.recalc = T, graph.name = "harm15")
+  integ_dat_l[[n]] = FindClusters(integ_dat_l[[n]], graph.name = "harm15", algorithm = 2,
+                                  resolution = seq(0.4, 2, 0.2), verbose = F)
+}
+```
+
+
+## Dev
+Double integration with Harmony
+
+```{r}
+ax_vz_allort = readRDS("./data/processed/integration_evo/ax_vz_allort.RDS")
+ax_dev1_allort = readRDS("./data/processed/integration_evo/ax_dev1_allort.RDS")
+all_dat = list("vz" = ax_vz_allort, "dev1" = ax_dev1_allort)
+
+integ_dat_l1 = list()
+integ_dat_l2 = list()
+for(n in names(all_dat)){
+  print(n)
+  integr_feat = Reduce(intersect, lapply(all_dat[[n]], VariableFeatures))
+  srat_m = Reduce(merge, all_dat[[n]])
+  srat_m = AddMetaData(srat_m, 
+                       metadata = unlist(lapply(names(all_dat[[n]]), function(x) rep(x, ncol(all_dat[[n]][[x]])))), col.name = "species")
+  srat_m$capt_type = ifelse(srat_m$species=="axolotl", "nuclei", "cells")
+  
+  VariableFeatures(srat_m) = integr_feat
+  srat_ort_harm = RunPCA(srat_m, verbose = FALSE, assay = "SCT", npcs = 50,
+                         features = integr_feat)
+  # Run Harmony
+  srat_ort_harm = RunHarmony(srat_ort_harm, "species", tau = 30, 
+                             reduction = "pca", dims.use = 1:15,
+                             plot_convergence = F, assay.use = "SCT")
+  srat_ort_harm = RunUMAP(srat_ort_harm, reduction = "harmony", dims = 1:15)
+  # Run Harmony again
+  srat_ort_harm2 = RunHarmony(srat_ort_harm, "capt_type", tau = 30, max.iter.harmony = 50,
+                              reduction = "harmony", dims.use = 1:15,
+                              plot_convergence = F, assay.use = "SCT")
+  srat_ort_harm2 = RunUMAP(srat_ort_harm2, reduction = "harmony", dims = 1:15)
+  
+  integ_dat_l1[[n]] = srat_ort_harm
+  integ_dat_l2[[n]] = srat_ort_harm2
+}
+```
+
+Clustering integrated data
+
+```{r}
+for(n in names(integ_dat_l2)){
+  integ_dat_l2[[n]] = FindNeighbors(integ_dat_l2[[n]], reduction = "harmony", dims = 1:15, 
+                                    compute.SNN = T, force.recalc = T, graph.name = "harm15")
+  integ_dat_l2[[n]] = FindClusters(integ_dat_l2[[n]], graph.name = "harm15", algorithm = 2,
+                                   resolution = seq(0.4, 2, 0.2), verbose = F)
+}
+```
+
+
+
+# Determine cluster matches
+## Adult
+Proximity to centroids
+
+```{r}
+closest_mouse = list()
+closest_turtle = list()
+for(n in names(integ_dat_l)){
+  n2 = substr(n, 1, 4)
+  centroids = apply(integ_dat_l[[n]]@reductions$harmony@cell.embeddings, 2, 
+                    function(x) tapply(x, integ_dat_l[[n]]$cellclusters, mean))
+  dists_cl = dist(centroids)
+  
+  ax_ct = unique(integ_dat_l[[n]]$cellclusters[integ_dat_l[[n]]$species=="axolotl"])
+  mo_ct = unique(integ_dat_l[[n]]$cellclusters[integ_dat_l[[n]]$species=="mouse"])
+  tu_ct = unique(integ_dat_l[[n]]$cellclusters[integ_dat_l[[n]]$species=="paintedturtle"])
+  
+  closest_mouse[[n2]] = apply(as.matrix(dists_cl)[ax_ct,mo_ct], 1, 
+                             function(x) mo_ct[which.min(x)])
+  closest_turtle[[n2]] = apply(as.matrix(dists_cl)[ax_ct,tu_ct], 1, 
+                              function(x) tu_ct[which.min(x)])
+  pheatmap::pheatmap(-as.matrix(dists_cl)[ax_ct,mo_ct], 
+                     clustering_method = "ward.D", scale = "row")
+  pheatmap::pheatmap(-as.matrix(dists_cl)[ax_ct,tu_ct], 
+                     clustering_method = "ward.D", scale = "row")
+}
+```
+
+Projections
+
+```{r}
+meta_umaps = list()
+for(n in names(integ_dat_l)){
+  integ_dat_l[[n]]$axolotl = integ_dat_l[[n]]$cellclusters
+  integ_dat_l[[n]]$axolotl[integ_dat_l[[n]]$species!="axolotl"] = NA
+  integ_dat_l[[n]]$mouse = integ_dat_l[[n]]$cellclusters
+  integ_dat_l[[n]]$mouse[integ_dat_l[[n]]$species!="mouse"] = NA
+  integ_dat_l[[n]]$turtle = integ_dat_l[[n]]$cellclusters
+  integ_dat_l[[n]]$turtle[integ_dat_l[[n]]$species!="paintedturtle"] = NA
+  
+  meta_umaps[[n]] = merge(integ_dat_l[[n]]@meta.data[,c("species","axolotl",
+                                                        "mouse","turtle")],
+                          integ_dat_l[[n]]@reductions$umap@cell.embeddings, by = 0)
+}
+
+umap_plt_l = list()
+colssp = rev(MetBrewer::met.brewer(name = "Demuth", n = 3))[c(1,3,2)]
+for(n in names(meta_umaps)){
+  for(v in c("species", "axolotl", "mouse", "turtle")){
+    plot_df = meta_umaps[[n]]
+    if(v=="species"){
+      plot_df = plot_df[sample(1:nrow(plot_df), nrow(plot_df), replace = F),]
+      cols = colssp
+    } else{
+      plot_df = plot_df[order(plot_df[,v], na.last = F),]
+      cols = cols_cc
+    }
+    
+    if(v!="axolotl" & v!="species"){
+      if(n=="glut_all_3"){
+        cols = unname(cols[grepl("glut_", names(cols))])
+      } else{
+        cols = unname(cols[grepl("GABA_", names(cols))])
+      }
+      cols = colorRampPalette(c(cols[1], cols[length(cols)]))
+      cols = cols(length(unique(plot_df[,v])))
+    }
+    if(v=="axolotl"){
+      cols = cols[unique(plot_df[,v])]
+    }
+    plot_df$isNa = is.na(plot_df[,v])
+    
+    labs_df = data.frame("UMAP_1" = tapply(plot_df$UMAP_1, plot_df[,v], median),
+                         "UMAP_2" = tapply(plot_df$UMAP_2, plot_df[,v], median))
+    labs_df$lab = rownames(labs_df)
+    
+    plt = ggplot(plot_df, aes_string(x = "UMAP_1", y = "UMAP_2"))+
+      geom_point(mapping = aes_string(colour = v, size = "isNa"))+
+      scale_colour_manual(values = cols)+
+      scale_size_manual(values = c(0.4, 0.2))+
+      theme_classic()+
+      theme(aspect.ratio = 1,
+            legend.position = "none")
+    if(v!="species"){
+      plt = plt+
+        geom_text(fontface = "bold", mapping = aes(label = lab), data = labs_df, size = 2.6)
+    }
+    
+    umap_plt_l[[paste0(n, "_", v)]] = plt
+  }
+}
+
+for(n in names(umap_plt_l)){
+  pdf(paste0("results/CrossSpIntegration/", n, ".pdf"), height = 4.5, width = 4.5)
+  print(umap_plt_l[[n]])
+  dev.off()
+}
+```
+
+Load correlation tables and make matches
+
+```{r}
+glut_turtle_cor = read.csv("results/ComparativeSpeciesAnalysis/Glut_all_axolotl_turtle_tab.csv",
+                           header = T)
+gaba_turtle_cor = read.csv("results/ComparativeSpeciesAnalysis/GABA_all_axolotl_turtle_tab.csv",
+                           header = T)
+glut_mouse_cor = read.csv("results/ComparativeSpeciesAnalysis/Glut_all_axolotl_mouse_tab.csv",
+                           header = T)
+gaba_mouse_cor = read.csv("results/ComparativeSpeciesAnalysis/GABA_all_axolotl_mouse_tab.csv",
+                           header = T)
+
+corr_mouse = list("glut" = glut_mouse_cor$Var2[glut_mouse_cor$rowmax],
+                  "gaba" = gaba_mouse_cor$Var2[gaba_mouse_cor$rowmax])
+names(corr_mouse$glut) = glut_mouse_cor$Var1[glut_mouse_cor$rowmax]
+names(corr_mouse$gaba) = gaba_mouse_cor$Var1[gaba_mouse_cor$rowmax]
+corr_turtle = list("glut" = glut_turtle_cor$Var2[glut_turtle_cor$rowmax],
+                  "gaba" = gaba_turtle_cor$Var2[gaba_turtle_cor$rowmax])
+names(corr_turtle$glut) = glut_turtle_cor$Var1[glut_turtle_cor$rowmax]
+names(corr_turtle$gaba) = gaba_turtle_cor$Var1[gaba_turtle_cor$rowmax]
+```
+
+Matches Glut: mouse
+
+```{r}
+dat_mouse = merge(data.frame(corr_mouse$glut), data.frame(closest_mouse$glut), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "correlation", "integration")
+dat_mouse$Freq = 1
+
+mouse_regs = c("TEGLU19" = "ON", "TEGLU18" = "ON", "TEGLU5" = "E", 
+               "TEGLU13" = "Hippo","TEGLU14" = "Hippo","TEGLU21" = "Hippo",
+               "TEGLU23" = "Hippo","TEGLU24" = "Hippo", "DGGRC1" = "Hippo", "DGGRC2" = "Hippo",
+               "TEGLU15" = "Piri","TEGLU16" = "Piri","TEGLU17" = "Piri",
+               "TEGLU2" = "Cortex","TEGLU3" = "Cortex","TEGLU4" = "Cortex","TEGLU7" = "Cortex",
+               "TEGLU8" = "Cortex","TEGLU10" = "Cortex","TEGLU11" = "Cortex",
+               "TEGLU20" = "Cortex",
+               "TEGLU1" = "Cing","TEGLU6" = "Cing","TEGLU9" = "Cing",
+               "TEGLU12" = "L", "TEGLU22" = "A")
+dat_mouse$regs_cor = mouse_regs[dat_mouse$correlation]
+dat_mouse$regs_int = mouse_regs[dat_mouse$integration]
+dat_mouse = dat_mouse[order(dat_mouse$regs_cor),]
+
+dat_mouse$correlation = factor(dat_mouse$correlation, 
+                           levels = unique(dat_mouse$correlation))
+dat_mouse$axolotl = factor(dat_mouse$axolotl, 
+                           levels = unique(dat_mouse$axolotl))
+
+plot_df = reshape2::melt(dat_mouse[,1:3], id.vars = "axolotl")
+plot_df$regs = mouse_regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_mouse[order(dat_mouse$regs_cor, dat_mouse$regs_int),"axolotl"]))
+
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7))
+
+pdf("results/CrossSpIntegration/mouse_glut_comp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+Matches GABA: mouse
+
+```{r}
+dat_mouse = merge(data.frame(corr_mouse$gaba), data.frame(closest_mouse$gaba), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "correlation", "integration")
+dat_mouse$Freq = 1
+
+mouse_regs = unique(c(dat_mouse$correlation, dat_mouse$integration))
+n = mouse_regs
+mouse_regs = substr(mouse_regs, 1, 3)
+names(mouse_regs) = n
+
+dat_mouse$regs_cor = mouse_regs[dat_mouse$correlation]
+dat_mouse$regs_int = mouse_regs[dat_mouse$integration]
+dat_mouse = dat_mouse[order(dat_mouse$regs_cor),]
+
+dat_mouse$correlation = factor(dat_mouse$correlation, 
+                           levels = unique(dat_mouse$correlation))
+dat_mouse$axolotl = factor(dat_mouse$axolotl, 
+                           levels = unique(dat_mouse$axolotl))
+
+plot_df = reshape2::melt(dat_mouse[,1:3], id.vars = "axolotl")
+plot_df$regs = mouse_regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_mouse[order(dat_mouse$regs_cor, dat_mouse$regs_int),"axolotl"]))
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7))
+
+pdf("results/CrossSpIntegration/mouse_GABA_comp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+Matches Glut: turtle
+
+```{r}
+dat_turtle = merge(data.frame(corr_turtle$glut), data.frame(closest_turtle$glut), 
+                  by = 0, all = T)
+colnames(dat_turtle) = c("axolotl", "correlation", "integration")
+dat_turtle$Freq = 1
+dat_turtle$correlation = unlist(lapply(strsplit(dat_turtle$correlation, "_"), function(x) x[1]))
+
+clu = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[1]))
+regs = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[2]))
+names(regs) = clu
+
+dat_turtle$regs_cor = regs[dat_turtle$correlation]
+dat_turtle$regs_int = regs[dat_turtle$integration]
+dat_turtle = dat_turtle[order(dat_turtle$regs_cor),]
+
+dat_turtle$correlation = factor(dat_turtle$correlation, 
+                           levels = unique(dat_turtle$correlation))
+dat_turtle$axolotl = factor(dat_turtle$axolotl, 
+                           levels = unique(dat_turtle$axolotl))
+
+plot_df = reshape2::melt(dat_turtle[,1:3], id.vars = "axolotl")
+plot_df$regs = regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_turtle[order(dat_turtle$regs_cor, dat_turtle$regs_int),"axolotl"]))
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7))
+
+pdf("results/CrossSpIntegration/turtle_glut_comp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+Matches GABA: turtle
+
+```{r}
+dat_turtle = merge(data.frame(corr_turtle$gaba), data.frame(closest_turtle$gaba), 
+                  by = 0, all = T)
+colnames(dat_turtle) = c("axolotl", "correlation", "integration")
+dat_turtle$Freq = 1
+dat_turtle$correlation = unlist(lapply(strsplit(dat_turtle$correlation, "_"), function(x) x[1]))
+
+regs = c("i01" = "LGE","i02" = "Septum","i04" = "LGE","i05" = "LGE",
+         "i06" = "LGE","i08" = "MGE","i09" = "MGE","i10" = "MGE",
+         "i11" = "MGE","i12" = "MGE","i13" = "MGE","i14" = "CGE",
+         "i15" = "CGE","i16" = "CGE","i17" = "CGE","i18" = "CGE")
+dat_turtle$regs_cor = regs[dat_turtle$correlation]
+dat_turtle$regs_int = regs[dat_turtle$integration]
+dat_turtle = dat_turtle[order(dat_turtle$regs_cor),]
+
+dat_turtle$correlation = factor(dat_turtle$correlation, 
+                           levels = unique(dat_turtle$correlation))
+dat_turtle$axolotl = factor(dat_turtle$axolotl, 
+                           levels = unique(dat_turtle$axolotl))
+
+plot_df = reshape2::melt(dat_turtle[,1:3], id.vars = "axolotl")
+plot_df$regs = regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_turtle[order(dat_turtle$regs_cor, dat_turtle$regs_int),"axolotl"]))
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7))
+
+pdf("results/CrossSpIntegration/turtle_GABA_comp.pdf", height = 6.5, width = 3)
+print(plt)
+dev.off()
+```
+
+
+## Developmental
+Proximity to centroids
+
+```{r}
+# for comparison with subclasses
+integ_dat_l2$dev1$cellclusters_sub = integ_dat_l2$dev1$cellclusters
+integ_dat_l2$dev1$cellclusters_sub[integ_dat_l2$dev1$species=="mouse"] = integ_dat_l2$dev1$subclasses[integ_dat_l2$dev1$species=="mouse"]
+
+closest_vz = list()
+closest_dev = list()
+closest_devsub = list()
+for(n in names(integ_dat_l2)){
+  ax_ct = unique(integ_dat_l2[[n]]$cellclusters[integ_dat_l2[[n]]$species=="axolotl"])
+  
+  if(n=="vz"){
+    centroids = apply(integ_dat_l2[[n]]@reductions$harmony@cell.embeddings, 2, 
+                      function(x) tapply(x, integ_dat_l2[[n]]$cellclusters, mean))
+    dists_cl = dist(centroids)
+    other_ct = unique(integ_dat_l2[[n]]$cellclusters[integ_dat_l2[[n]]$species=="mouse"])
+    closest_vz[[n]] = apply(as.matrix(dists_cl)[ax_ct,other_ct], 1, 
+                               function(x) other_ct[which.min(x)])
+  } else{
+    centroids = apply(integ_dat_l2[[n]]@reductions$harmony@cell.embeddings, 2, 
+                      function(x) tapply(x, integ_dat_l2[[n]]$cellclusters, mean))
+    dists_cl = dist(centroids)
+    other_ct = unique(integ_dat_l2[[n]]$cellclusters[integ_dat_l2[[n]]$species=="mouse"])
+    closest_dev[[n]] = apply(as.matrix(dists_cl)[ax_ct,other_ct], 1, 
+                              function(x) other_ct[which.min(x)])
+    
+    centroids = apply(integ_dat_l2[[n]]@reductions$harmony@cell.embeddings, 2, 
+                      function(x) tapply(x, integ_dat_l2[[n]]$cellclusters_sub, mean))
+    dists_cl = dist(centroids)
+    other_ct = unique(integ_dat_l2[[n]]$subclasses[integ_dat_l2[[n]]$species=="mouse"])
+    closest_devsub[[n]] = apply(as.matrix(dists_cl)[ax_ct,other_ct], 1, 
+                              function(x) other_ct[which.min(x)])
+  }
+}
+```
+
+Projections
+
+```{r}
+meta_umaps = list()
+for(n in names(integ_dat_l2)){
+  integ_dat_l2[[n]]$axolotl = integ_dat_l2[[n]]$cellclusters
+  integ_dat_l2[[n]]$axolotl[integ_dat_l2[[n]]$species!="axolotl"] = NA
+  integ_dat_l2[[n]]$mouse = integ_dat_l2[[n]]$cellclusters
+  integ_dat_l2[[n]]$mouse[integ_dat_l2[[n]]$species!="mouse"] = NA
+  integ_dat_l2[[n]]$mousesub = integ_dat_l2[[n]]$subclasses
+  integ_dat_l2[[n]]$mousesub[integ_dat_l2[[n]]$species!="mouse"] = NA
+  
+  meta_umaps[[n]] = merge(integ_dat_l2[[n]]@meta.data[,c("species","axolotl",
+                                                         "mouse","mousesub")],
+                          integ_dat_l2[[n]]@reductions$umap@cell.embeddings, by = 0)
+}
+
+umap_plt_l = list()
+colssp = rev(MetBrewer::met.brewer(name = "Demuth", n = 3))[c(1,3,2)]
+for(n in names(meta_umaps)){
+  for(v in c("species", "axolotl", "mouse", "mousesub")){
+    plot_df = meta_umaps[[n]]
+    if(v=="species"){
+      plot_df = plot_df[sample(1:nrow(plot_df), nrow(plot_df), replace = F),]
+      cols = colssp
+    } else{
+      plot_df = plot_df[order(plot_df[,v], na.last = F),]
+      cols = cols_cc
+    }
+    
+    if(v!="axolotl" & v!="species"){
+      cols = unname(cols[grepl("npc_", names(cols))])
+
+      cols = colorRampPalette(c(cols[1], cols[length(cols)]))
+      cols = cols(length(unique(plot_df[,v])))
+    }
+    if(v=="axolotl"){
+      cols = cols[unique(plot_df[,v])]
+    }
+    plot_df$isNa = is.na(plot_df[,v])
+    
+    labs_df = data.frame("UMAP_1" = tapply(plot_df$UMAP_1, plot_df[,v], median),
+                         "UMAP_2" = tapply(plot_df$UMAP_2, plot_df[,v], median))
+    labs_df$lab = rownames(labs_df)
+    
+    plt = ggplot(plot_df, aes_string(x = "UMAP_1", y = "UMAP_2"))+
+      geom_point(mapping = aes_string(colour = v, size = "isNa"))+
+      scale_colour_manual(values = cols)+
+      scale_size_manual(values = c(0.4, 0.2))+
+      theme_classic()+
+      theme(aspect.ratio = 1,
+            legend.position = "none")
+    if(v!="species"){
+      plt = plt+
+        geom_text(fontface = "bold", mapping = aes(label = lab), data = labs_df, size = 2.6)
+    }
+    
+    umap_plt_l[[paste0(n, "_", v)]] = plt
+  }
+}
+
+for(n in names(umap_plt_l)){
+  pdf(paste0("results/CrossSpIntegration/NBEpen_", n, ".pdf"), height = 4.5, width = 4.5)
+  print(umap_plt_l[[n]])
+  dev.off()
+}
+```
+
+Load correlation tables and make matches
+
+```{r}
+nbep_vz_cor = read.csv("results/ComparativeSpeciesAnalysis/NBEpen_all_axolotl_mouseVSVZsc_tab.csv",
+                       header = T)
+nbep_devct_cor = read.csv("results/ComparativeSpeciesAnalysis/NBEpenStg_all_axolotl_mouseDiBella_tab.csv",
+                           header = T)
+nbep_devsub_cor = read.csv("results/ComparativeSpeciesAnalysis/NBEpen_TFs_axolotl_mouseDiBella_tab.csv",
+                           header = T)
+
+corr_mouse = list("vz" = nbep_vz_cor$Var2[nbep_vz_cor$rowmax],
+                  "devct" = nbep_devct_cor$Var2[nbep_devct_cor$rowmax],
+                  "devsub" = nbep_devsub_cor$Var2[nbep_devsub_cor$rowmax])
+names(corr_mouse$vz) = nbep_vz_cor$Var1[nbep_vz_cor$rowmax]
+names(corr_mouse$devct) = nbep_devct_cor$Var1[nbep_devct_cor$rowmax]
+names(corr_mouse$devsub) = nbep_devsub_cor$Var1[nbep_devsub_cor$rowmax]
+```
+
+Matches VSVZ
+
+```{r}
+dat_mouse = merge(data.frame(corr_mouse$vz), data.frame(closest_vz$vz), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "correlation", "integration")
+
+mouse_regs = unique(c(dat_mouse$correlation, dat_mouse$integration))
+nam = mouse_regs
+mouse_regs = unlist(lapply(strsplit(mouse_regs, "_"), function(x) x[1]))
+names(mouse_regs) = nam
+mouse_regs[mouse_regs=="Ependymal cells"] = "EC"
+dat_mouse$regs_cor = mouse_regs[dat_mouse$correlation]
+dat_mouse$regs_int = mouse_regs[dat_mouse$integration]
+dat_mouse = dat_mouse[order(dat_mouse$regs_cor),]
+
+plot_df = reshape2::melt(dat_mouse[,1:3], id.vars = "axolotl")
+plot_df$regs = mouse_regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_mouse[order(dat_mouse$regs_cor, dat_mouse$regs_int),"axolotl"]))
+
+levels(plot_df$value)[grepl("Epen", levels(plot_df$value))] = gsub("Ependymal cells",
+                                                                   "EC",
+                                                                   levels(plot_df$value)[grepl("Epen", levels(plot_df$value))])
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7),
+        legend.key.size = unit(0.3, "cm"))
+
+pdf("results/CrossSpIntegration/mouse_VSVZ_comp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+Matches dev ct
+
+```{r}
+dat_mouse = merge(data.frame(corr_mouse$devct), data.frame(closest_dev$dev1), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "correlation", "integration")
+dat_mouse$correlation = gsub("Ependymocytes", "EC", dat_mouse$correlation)
+dat_mouse$correlation = gsub("Migrating neurons", "MN", dat_mouse$correlation)
+dat_mouse$correlation = gsub("Apical progenitors", "AP", dat_mouse$correlation)
+dat_mouse$correlation = gsub("Cycling glial cells", "CGC", dat_mouse$correlation)
+dat_mouse$correlation = gsub("Intermediate progenitors", "IP", dat_mouse$correlation)
+dat_mouse$integration = gsub("Ependymocytes", "EC", dat_mouse$integration)
+dat_mouse$integration = gsub("Migrating neurons", "MN", dat_mouse$integration)
+dat_mouse$integration = gsub("Apical progenitors", "AP", dat_mouse$integration)
+dat_mouse$integration = gsub("Cycling glial cells", "CGC", dat_mouse$integration)
+dat_mouse$integration = gsub("Intermediate progenitors", "IP", dat_mouse$integration)
+
+mouse_regs = unique(c(dat_mouse$correlation, dat_mouse$integration))
+nam = mouse_regs
+mouse_regs = unlist(lapply(strsplit(mouse_regs, "_"), function(x) x[1]))
+names(mouse_regs) = nam
+dat_mouse$regs_cor = mouse_regs[dat_mouse$correlation]
+dat_mouse$regs_int = mouse_regs[dat_mouse$integration]
+dat_mouse = dat_mouse[order(dat_mouse$regs_cor),]
+
+plot_df = reshape2::melt(dat_mouse[,1:3], id.vars = "axolotl")
+plot_df$regs = mouse_regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_mouse[order(dat_mouse$regs_cor, dat_mouse$regs_int),"axolotl"]))
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7),
+        legend.key.size = unit(0.3, "cm"))
+
+pdf("results/CrossSpIntegration/mouse_devct_comp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+
+
+# All gene vs TF comparison
+Mouse Glut
+
+```{r}
+glut_mouse_cor = read.csv("results/ComparativeSpeciesAnalysis/Glut_all_axolotl_mouse_tab.csv",
+                           header = T)
+matches_cor_all = glut_mouse_cor$Var2[glut_mouse_cor$rowmax]
+names(matches_cor_all) = glut_mouse_cor$Var1[glut_mouse_cor$rowmax]
+glut_mouse_cor = read.csv("results/ComparativeSpeciesAnalysis/Glut_TFs_axolotl_mouse_tab.csv",
+                           header = T)
+matches_cor_TFs = glut_mouse_cor$Var2[glut_mouse_cor$rowmax]
+names(matches_cor_TFs) = glut_mouse_cor$Var1[glut_mouse_cor$rowmax]
+
+
+dat_mouse = merge(data.frame(matches_cor_all), data.frame(matches_cor_TFs), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "all genes", "TFs")
+dat_mouse$Freq = 1
+
+mouse_regs = c("TEGLU19" = "ON", "TEGLU18" = "ON", "TEGLU5" = "E", 
+               "TEGLU13" = "Hippo","TEGLU14" = "Hippo","TEGLU21" = "Hippo",
+               "TEGLU23" = "Hippo","TEGLU24" = "Hippo", "DGGRC1" = "Hippo", "DGGRC2" = "Hippo",
+               "TEGLU15" = "Piri","TEGLU16" = "Piri","TEGLU17" = "Piri",
+               "TEGLU2" = "Cortex","TEGLU3" = "Cortex","TEGLU4" = "Cortex","TEGLU7" = "Cortex",
+               "TEGLU8" = "Cortex","TEGLU10" = "Cortex","TEGLU11" = "Cortex",
+               "TEGLU20" = "Cortex",
+               "TEGLU1" = "Cing","TEGLU6" = "Cing","TEGLU9" = "Cing",
+               "TEGLU12" = "L", "TEGLU22" = "A")
+dat_mouse$regs_cor = mouse_regs[dat_mouse$`all genes`]
+dat_mouse$regs_int = mouse_regs[dat_mouse$TFs]
+dat_mouse = dat_mouse[order(dat_mouse$regs_cor),]
+
+dat_mouse$`all genes` = factor(dat_mouse$`all genes`, 
+                           levels = unique(dat_mouse$`all genes`))
+dat_mouse$axolotl = factor(dat_mouse$axolotl, 
+                           levels = unique(dat_mouse$axolotl))
+
+plot_df = reshape2::melt(dat_mouse[,1:3], id.vars = "axolotl")
+plot_df$regs = mouse_regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_mouse[order(dat_mouse$regs_cor, dat_mouse$regs_int),"axolotl"]))
+
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7))
+
+pdf("results/CrossSpIntegration/mouse_glut_TFcomp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+Mouse GABA
+
+```{r}
+GABA_mouse_cor = read.csv("results/ComparativeSpeciesAnalysis/GABA_all_axolotl_mouse_tab.csv",
+                           header = T)
+matches_cor_all = GABA_mouse_cor$Var2[GABA_mouse_cor$rowmax]
+names(matches_cor_all) = GABA_mouse_cor$Var1[GABA_mouse_cor$rowmax]
+GABA_mouse_cor = read.csv("results/ComparativeSpeciesAnalysis/GABA_TFs_axolotl_mouse_tab.csv",
+                           header = T)
+matches_cor_TFs = GABA_mouse_cor$Var2[GABA_mouse_cor$rowmax]
+names(matches_cor_TFs) = GABA_mouse_cor$Var1[GABA_mouse_cor$rowmax]
+
+
+dat_mouse = merge(data.frame(matches_cor_all), data.frame(matches_cor_TFs), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "all genes", "TFs")
+dat_mouse$Freq = 1
+
+mouse_regs = unique(c(dat_mouse$`all genes`, dat_mouse$TFs))
+n = mouse_regs
+mouse_regs = substr(mouse_regs, 1, 3)
+names(mouse_regs) = n
+dat_mouse$regs_cor = mouse_regs[dat_mouse$`all genes`]
+dat_mouse$regs_int = mouse_regs[dat_mouse$TFs]
+dat_mouse = dat_mouse[order(dat_mouse$regs_cor),]
+
+dat_mouse$`all genes` = factor(dat_mouse$`all genes`, 
+                           levels = unique(dat_mouse$`all genes`))
+dat_mouse$axolotl = factor(dat_mouse$axolotl, 
+                           levels = unique(dat_mouse$axolotl))
+
+plot_df = reshape2::melt(dat_mouse[,1:3], id.vars = "axolotl")
+plot_df$regs = mouse_regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_mouse[order(dat_mouse$regs_cor, dat_mouse$regs_int),"axolotl"]))
+
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7))
+
+pdf("results/CrossSpIntegration/mouse_GABA_TFcomp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+Turtle Glut
+
+```{r}
+glut_turtle_cor = read.csv("results/ComparativeSpeciesAnalysis/Glut_all_axolotl_turtle_tab.csv",
+                           header = T)
+matches_cor_all = glut_turtle_cor$Var2[glut_turtle_cor$rowmax]
+names(matches_cor_all) = glut_turtle_cor$Var1[glut_turtle_cor$rowmax]
+glut_turtle_cor = read.csv("results/ComparativeSpeciesAnalysis/Glut_TFs_axolotl_turtle_tab.csv",
+                           header = T)
+matches_cor_TFs = glut_turtle_cor$Var2[glut_turtle_cor$rowmax]
+names(matches_cor_TFs) = glut_turtle_cor$Var1[glut_turtle_cor$rowmax]
+
+
+dat_turtle = merge(data.frame(matches_cor_all), data.frame(matches_cor_TFs), by = 0, all = T)
+colnames(dat_turtle) = c("axolotl", "all genes", "TFs")
+dat_turtle$Freq = 1
+dat_turtle$`all genes` = unlist(lapply(strsplit(dat_turtle$`all genes`, "_"), function(x) x[1]))
+dat_turtle$TFs = unlist(lapply(strsplit(dat_turtle$TFs, "_"), function(x) x[1]))
+
+clu = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[1]))
+regs = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[2]))
+names(regs) = clu
+
+dat_turtle$regs_cor = regs[dat_turtle$`all genes`]
+dat_turtle$regs_int = regs[dat_turtle$TFs]
+dat_turtle = dat_turtle[order(dat_turtle$regs_cor),]
+
+dat_turtle$`all genes` = factor(dat_turtle$`all genes`, 
+                           levels = unique(dat_turtle$`all genes`))
+dat_turtle$axolotl = factor(dat_turtle$axolotl, 
+                           levels = unique(dat_turtle$axolotl))
+
+plot_df = reshape2::melt(dat_turtle[,1:3], id.vars = "axolotl")
+plot_df$regs = regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_turtle[order(dat_turtle$regs_cor, dat_turtle$regs_int),"axolotl"]))
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7))
+
+pdf("results/CrossSpIntegration/turtle_glut_TFscomp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+Turtle GABA
+
+```{r}
+GABA_turtle_cor = read.csv("results/ComparativeSpeciesAnalysis/GABA_all_axolotl_turtle_tab.csv",
+                           header = T)
+matches_cor_all = GABA_turtle_cor$Var2[GABA_turtle_cor$rowmax]
+names(matches_cor_all) = GABA_turtle_cor$Var1[GABA_turtle_cor$rowmax]
+GABA_turtle_cor = read.csv("results/ComparativeSpeciesAnalysis/GABA_TFs_axolotl_turtle_tab.csv",
+                           header = T)
+matches_cor_TFs = GABA_turtle_cor$Var2[GABA_turtle_cor$rowmax]
+names(matches_cor_TFs) = GABA_turtle_cor$Var1[GABA_turtle_cor$rowmax]
+
+
+dat_turtle = merge(data.frame(matches_cor_all), data.frame(matches_cor_TFs), by = 0, all = T)
+colnames(dat_turtle) = c("axolotl", "all genes", "TFs")
+dat_turtle$Freq = 1
+dat_turtle$`all genes` = unlist(lapply(strsplit(dat_turtle$`all genes`, "_"), function(x) x[1]))
+dat_turtle$TFs = unlist(lapply(strsplit(dat_turtle$TFs, "_"), function(x) x[1]))
+
+
+regs = c("i01" = "LGE","i02" = "Septum","i04" = "LGE","i05" = "LGE",
+         "i06" = "LGE","i08" = "MGE","i09" = "MGE","i10" = "MGE",
+         "i11" = "MGE","i12" = "MGE","i13" = "MGE","i14" = "CGE",
+         "i15" = "CGE","i16" = "CGE","i17" = "CGE","i18" = "CGE")
+dat_turtle$regs_cor = regs[dat_turtle$`all genes`]
+dat_turtle$regs_int = regs[dat_turtle$TFs]
+dat_turtle = dat_turtle[order(dat_turtle$regs_cor),]
+
+dat_turtle$`all genes` = factor(dat_turtle$`all genes`, 
+                           levels = unique(dat_turtle$`all genes`))
+dat_turtle$axolotl = factor(dat_turtle$axolotl, 
+                           levels = unique(dat_turtle$axolotl))
+
+plot_df = reshape2::melt(dat_turtle[,1:3], id.vars = "axolotl")
+plot_df$regs = regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_turtle[order(dat_turtle$regs_cor, dat_turtle$regs_int),"axolotl"]))
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7))
+
+pdf("results/CrossSpIntegration/turtle_GABA_TFscomp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+NPC/Epen VSVZ
+
+```{r}
+vsvz_mouse_cor = read.csv("results/ComparativeSpeciesAnalysis/NBEpen_all_axolotl_mouseVSVZsc_tab.csv",
+                           header = T)
+matches_cor_all = vsvz_mouse_cor$Var2[vsvz_mouse_cor$rowmax]
+names(matches_cor_all) = vsvz_mouse_cor$Var1[vsvz_mouse_cor$rowmax]
+vsvz_mouse_cor = read.csv("results/ComparativeSpeciesAnalysis/NBEpen_TFs_axolotl_mouseVSVZsc_tab.csv",
+                           header = T)
+matches_cor_TFs = vsvz_mouse_cor$Var2[vsvz_mouse_cor$rowmax]
+names(matches_cor_TFs) = vsvz_mouse_cor$Var1[vsvz_mouse_cor$rowmax]
+
+
+dat_mouse = merge(data.frame(matches_cor_all), data.frame(matches_cor_TFs), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "all genes", "TFs")
+dat_mouse$Freq = 1
+
+mouse_regs = unique(c(dat_mouse$`all genes`, dat_mouse$TFs))
+nam = mouse_regs
+mouse_regs = unlist(lapply(strsplit(mouse_regs, "_"), function(x) x[1]))
+names(mouse_regs) = nam
+mouse_regs[mouse_regs=="Ependymal cells"] = "EC"
+dat_mouse$regs_cor = mouse_regs[dat_mouse$`all genes`]
+dat_mouse$regs_int = mouse_regs[dat_mouse$TFs]
+dat_mouse = dat_mouse[order(dat_mouse$regs_cor),]
+
+dat_mouse$`all genes` = factor(dat_mouse$`all genes`, 
+                           levels = unique(dat_mouse$`all genes`))
+dat_mouse$axolotl = factor(dat_mouse$axolotl, 
+                           levels = unique(dat_mouse$axolotl))
+
+plot_df = reshape2::melt(dat_mouse[,1:3], id.vars = "axolotl")
+plot_df$regs = mouse_regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_mouse[order(dat_mouse$regs_cor, dat_mouse$regs_int),"axolotl"]))
+
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7))
+
+pdf("results/CrossSpIntegration/mouse_vsvz_TFcomp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+NPC/Epen dev
+
+```{r}
+dev_mouse_cor = read.csv("results/ComparativeSpeciesAnalysis/NBEpenStg_all_axolotl_mouseDiBella_tab.csv",
+                           header = T)
+matches_cor_all = dev_mouse_cor$Var2[dev_mouse_cor$rowmax]
+names(matches_cor_all) = dev_mouse_cor$Var1[dev_mouse_cor$rowmax]
+dev_mouse_cor = read.csv("results/ComparativeSpeciesAnalysis/NBEpenStg_TFs_axolotl_mouseDiBella_tab.csv",
+                           header = T)
+matches_cor_TFs = dev_mouse_cor$Var2[dev_mouse_cor$rowmax]
+names(matches_cor_TFs) = dev_mouse_cor$Var1[dev_mouse_cor$rowmax]
+
+
+dat_mouse = merge(data.frame(matches_cor_all), data.frame(matches_cor_TFs), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "all genes", "TFs")
+dat_mouse$Freq = 1
+dat_mouse$`all genes` = gsub("Ependymocytes", "EC", dat_mouse$`all genes`)
+dat_mouse$`all genes` = gsub("Migrating neurons", "MN", dat_mouse$`all genes`)
+dat_mouse$`all genes` = gsub("Apical progenitors", "AP", dat_mouse$`all genes`)
+dat_mouse$`all genes` = gsub("Cycling glial cells", "CGC", dat_mouse$`all genes`)
+dat_mouse$`all genes` = gsub("Intermediate progenitors", "IP", dat_mouse$`all genes`)
+dat_mouse$TFs = gsub("Ependymocytes", "EC", dat_mouse$TFs)
+dat_mouse$TFs = gsub("Migrating neurons", "MN", dat_mouse$TFs)
+dat_mouse$TFs = gsub("Apical progenitors", "AP", dat_mouse$TFs)
+dat_mouse$TFs = gsub("Cycling glial cells", "CGC", dat_mouse$TFs)
+dat_mouse$TFs = gsub("Intermediate progenitors", "IP", dat_mouse$TFs)
+
+mouse_regs = unique(c(dat_mouse$`all genes`, dat_mouse$TFs))
+nam = mouse_regs
+mouse_regs = unlist(lapply(strsplit(mouse_regs, "_"), function(x) x[1]))
+names(mouse_regs) = nam
+dat_mouse$regs_cor = mouse_regs[dat_mouse$`all genes`]
+dat_mouse$regs_int = mouse_regs[dat_mouse$TFs]
+dat_mouse = dat_mouse[order(dat_mouse$regs_cor),]
+
+dat_mouse$`all genes` = factor(dat_mouse$`all genes`, 
+                           levels = unique(dat_mouse$`all genes`))
+dat_mouse$axolotl = factor(dat_mouse$axolotl, 
+                           levels = unique(dat_mouse$axolotl))
+
+plot_df = reshape2::melt(dat_mouse[,1:3], id.vars = "axolotl")
+plot_df$regs = mouse_regs[plot_df$value]
+plot_df$Freq = 1
+plot_df$value = factor(plot_df$value, levels = unique(plot_df[order(plot_df$regs),"value"]))
+plot_df$axolotl = factor(plot_df$axolotl, 
+                         levels = unique(dat_mouse[order(dat_mouse$regs_cor, dat_mouse$regs_int),"axolotl"]))
+
+
+plt = ggplot(plot_df, aes(x = variable, y = axolotl))+
+  geom_tile(mapping = aes(fill = regs))+
+  geom_label(mapping = aes(label = value, fill = regs), fontface = "bold",
+             size = 2.2, label.padding = unit(0.1, "cm"))+
+  scale_fill_brewer(palette = "Set1")+
+  labs(x = "comparison", y = "axolotl cluster")+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(aspect.ratio = 5/1,
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(size = 7))
+
+pdf("results/CrossSpIntegration/mouse_dev_TFcomp.pdf", height = 6, width = 3)
+print(plt)
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Old code
+Get pairwise ortholog-matched Seurats
+
+```{r}
+sp_use = c("axolotl", "paintedturtle", "mouse")
+pair_mat = combn(sp_use, 2)
+
+glut_ort_l = list()
+gaba_ort_l = list()
+for(i in 1:ncol(pair_mat)){
+  sps = pair_mat[,i]
+  pair_n = paste0(sps, collapse = "_")
+  print(pair_n)
+  glut_ort_l[[paste0(pair_n, "_all")]] = seuratOrthologs(glut_l, sps, 
+                                                         ortMatch(ort_list_use, sps, 
+                                                                  ort_scope = NULL))
+  
+  glut_ort_l[[paste0(pair_n, "_one2one")]] = seuratOrthologs(glut_l, sps, 
+                                                             ortMatch(ort_list_use, sps, 
+                                                                      ort_scope = "ortholog_one2one"))
+  
+  gaba_ort_l[[paste0(pair_n, "_all")]] = seuratOrthologs(gaba_l, sps, 
+                                                         ortMatch(ort_list_use, sps, 
+                                                                  ort_scope = NULL))
+  
+  gaba_ort_l[[paste0(pair_n, "_one2one")]] = seuratOrthologs(gaba_l, sps, 
+                                                             ortMatch(ort_list_use, sps, 
+                                                                      ort_scope = "ortholog_one2one"))
+}
+```
+
+Normalise data and save
+
+```{r}
+for(sp_pair in names(glut_ort_l)){
+  for(sp in names(glut_ort_l[[sp_pair]])){
+    print(sp)
+    glut_ort_l[[sp_pair]][[sp]] = suppressWarnings(
+      SCTransform(glut_ort_l[[sp_pair]][[sp]], do.correct.umi = T,verbose = F,
+                  variable.features.rv.th = 1, vars.to.regress = "nCount_RNA",
+                  return.only.var.genes = F, seed.use = 1, variable.features.n = NULL)
+      )
+    gaba_ort_l[[sp_pair]][[sp]] = suppressWarnings(
+      SCTransform(gaba_ort_l[[sp_pair]][[sp]], do.correct.umi = T,verbose = F,
+                  variable.features.rv.th = 1, vars.to.regress = "nCount_RNA",
+                  return.only.var.genes = F, seed.use = 1, variable.features.n = NULL)
+      )
+  }
+}
+
+saveRDS(glut_ort_l, file = "./data/processed/integration_evo/glut_ort_l.RDS")
+saveRDS(gaba_ort_l, file = "./data/processed/integration_evo/gaba_ort_l.RDS")
+```
+
+
+```{r}
+n = 1
+srat_m = Reduce(merge, glut_ort_l[[n]])
+srat_m = AddMetaData(srat_m, 
+                     metadata = unlist(lapply(names(glut_ort_l[[n]]), function(x) rep(x, ncol(glut_ort_l[[n]][[x]])))), col.name = "species")
+srat_m$capt_type = ifelse(srat_m$species=="axolotl", "nuclei", "cells")
+#srat_m = SCTransform(srat_m, do.correct.umi = T,verbose = F,
+#                variable.features.rv.th = 1, vars.to.regress = "nCount_RNA",
+#                return.only.var.genes = F, seed.use = 1, variable.features.n = NULL)
+
+VariableFeatures(srat_m) = integr_feat
+srat_ort_harm = RunPCA(srat_m, verbose = FALSE, assay = "SCT", npcs = 50,
+                       features = integr_feat)
+# Run Harmony
+srat_ort_harm = RunHarmony(srat_ort_harm, "species", tau = 30, 
+                           reduction = "pca", dims.use = 1:15,
+                           plot_convergence = F, assay.use = "SCT")
+srat_ort_harm = RunUMAP(srat_ort_harm, reduction = "harmony", dims = 1:15)
+# Run Harmony again
+srat_ort_harm2 = RunHarmony(srat_ort_harm, "capt_type", tau = 30, 
+                            reduction = "harmony", dims.use = 1:15,
+                            plot_convergence = F, assay.use = "SCT")
+srat_ort_harm2 = RunUMAP(srat_ort_harm2, reduction = "harmony", dims = 1:15)
+```
+
+
+
+Load data
+
+```{r}
+dir = "data/processed/integration_evo/"
+glut_all_both = readRDS(paste0(dir, "glut_all_3_srat_ort_both.RDS"))
+UMAPPlot(glut_all_both, group.by = "species")
+glut_all_rpca = readRDS(paste0(dir, "glut_all_3_srat_ort_rpca.RDS"))
+UMAPPlot(glut_all_rpca, group.by = "species")
+glut_all_harm = readRDS(paste0(dir, "glut_all_3_srat_ort_harm.RDS"))
+UMAPPlot(glut_all_harm, group.by = "species")
+
+gaba_all_both = readRDS(paste0(dir, "gaba_all_3_srat_ort_both.RDS"))
+UMAPPlot(gaba_all_both, group.by = "species")
+gaba_all_rpca = readRDS(paste0(dir, "gaba_all_3_srat_ort_rpca.RDS"))
+UMAPPlot(gaba_all_rpca, group.by = "species")
+gaba_all_harm = readRDS(paste0(dir, "gaba_all_3_srat_ort_harm.RDS"))
+UMAPPlot(gaba_all_harm, group.by = "species")
+```
+
+```{r}
+dir = "data/processed/integration_evo/"
+glut_one2one_both = readRDS(paste0(dir, "glut_one2one_3_srat_ort_both.RDS"))
+UMAPPlot(glut_one2one_both, group.by = "species")
+glut_one2one_rpca = readRDS(paste0(dir, "glut_one2one_3_srat_ort_rpca.RDS"))
+UMAPPlot(glut_one2one_rpca, group.by = "species")
+glut_one2one_harm = readRDS(paste0(dir, "glut_one2one_3_srat_ort_harm.RDS"))
+UMAPPlot(glut_one2one_harm, group.by = "species")
+
+gaba_one2one_both = readRDS(paste0(dir, "gaba_one2one_3_srat_ort_both.RDS"))
+UMAPPlot(gaba_one2one_both, group.by = "species")
+gaba_one2one_rpca = readRDS(paste0(dir, "gaba_one2one_3_srat_ort_rpca.RDS"))
+UMAPPlot(gaba_one2one_rpca, group.by = "species")
+gaba_one2one_harm = readRDS(paste0(dir, "gaba_one2one_3_srat_ort_harm.RDS"))
+UMAPPlot(gaba_one2one_harm, group.by = "species")
+```
+
+
+
+```{r}
+glut_all_both = FindNeighbors(glut_all_both, reduction = "harmony", dims = 1:15, 
+                              compute.SNN = T, force.recalc = T, graph.name = "harm15")
+glut_all_both = FindClusters(glut_all_both, graph.name = "harm15", algorithm = 2,
+                             resolution = seq(0.4, 2, 0.2), verbose = F)
+```
+
+
+
+```{r}
+UMAPPlot(glut_all_both, group.by = "harm15_res.2")
+```
+
+
+
+```{r}
+tab_cl_ct = table(glut_all_both$cellclusters[glut_all_both$species=="axolotl"],
+                  glut_all_both$harm15_res.2[glut_all_both$species=="axolotl"])
+matches = apply(tab_cl_ct, 1, function(x) colnames(tab_cl_ct)[which.max(x)])
+
+m_numbs = table(glut_all_both$cellclusters[glut_all_both$species=="mouse"])
+t_numbs = table(glut_all_both$cellclusters[glut_all_both$species=="paintedturtle"])
+
+for(n in names(matches)){
+  mouse_matches = glut_all_both$cellclusters[glut_all_both$harm15_res.2==matches[n] &
+                                               glut_all_both$species=="mouse"]
+  turtle_matches = glut_all_both$cellclusters[glut_all_both$harm15_res.2==matches[n] &
+                                                glut_all_both$species=="paintedturtle"]
+  print(paste0(n, " ", matches[n]))
+  #print(round(sort(table(mouse_matches)/m_numbs[names(table(mouse_matches))]), 2))
+  #print(round(sort(table(turtle_matches)/t_numbs[names(table(turtle_matches))]), 2))
+  print(sort(table(mouse_matches)))
+  print(sort(table(turtle_matches)))
+}
+```
+
+
+
+
+```{r}
+dsSeurat = function(srat, variable, assay = "RNA", numis = "nCount_RNA", seed = 1){
+  # input Seurat object and variable to do the downsample based on
+  # return Seurat object
+  
+  set.seed(seed)
+  
+  # downsample taking the minimum median of UMI counts as a reference
+  fact = srat@meta.data[,numis]/min(tapply(srat@meta.data[,numis], srat@meta.data[,variable], median))
+  fact = ifelse(fact<=1, 0, log2(fact))
+  thinned_counts = seqgendiff::thin_lib(as.matrix(srat@assays[[assay]]@counts), 
+                                        thinlog2 = fact, relative = T)
+  rownames(thinned_counts$mat) = rownames(srat@assays[[assay]]@data)
+  colnames(thinned_counts$mat) = colnames(srat@assays[[assay]]@data)
+  #srat@assays[[assay]]@counts = Matrix::Matrix(thinned_counts$mat, sparse = T)
+  #srat@assays[[assay]]@data = log1p(srat@assays[[assay]]@counts)
+  
+  srat = CreateSeuratObject(counts = Matrix::Matrix(thinned_counts$mat, sparse = T), 
+                            meta.data = srat@meta.data)
+  
+  return(srat)
+}
+
+glut_ort_l = readRDS("data/processed/integration_evo/glut_ort_3.RDS")
+names(glut_ort_l) = paste0("glut_", names(glut_ort_l), "_3")
+gaba_ort_l = readRDS("data/processed/integration_evo/gaba_ort_3.RDS")
+names(gaba_ort_l) = paste0("gaba_", names(gaba_ort_l), "_3")
+
+glut_gaba = c(glut_ort_l[1], gaba_ort_l[1])
+
+integ_ds_l = list()
+for(n in names(glut_gaba)){
+  print(n)
+  # merge data
+  srat_m = Reduce(merge, glut_gaba[[n]])
+  srat_m = AddMetaData(srat_m, 
+                       metadata = unlist(lapply(names(glut_gaba[[n]]), function(x) rep(x, ncol(glut_gaba[[n]][[x]])))), col.name = "species")
+  
+  srat_m = dsSeurat(srat_m, "species", "SCT", "nCount_SCT")
+  
+  srat_m = SCTransform(srat_m, do.correct.umi = T,verbose = F,
+                  variable.features.rv.th = 1, vars.to.regress = "nCount_RNA",
+                  return.only.var.genes = F, seed.use = 1, variable.features.n = NULL)
+  
+  # select integration features
+  #integr_feat = rownames(srat_m@assays$SCT@scale.data)
+  integr_feat = Reduce(intersect, lapply(glut_gaba[[n]], VariableFeatures))
+  
+  # calculate possible missing Pearson residuals for SCTransform
+  srat_ort_int = PrepSCTIntegration(glut_gaba[[n]], anchor.features = integr_feat, verbose = T)
+  
+  srat_ort_int <- lapply(X = srat_ort_int, FUN = function(x) {
+    #x <- ScaleData(x, features = integr_feat, verbose = FALSE)
+    x <- RunPCA(x, features = integr_feat, verbose = FALSE)
+  })
+  
+  # finding the anchors for integration
+  all_cell_anchors = FindIntegrationAnchors(srat_ort_int, normalization.method = "SCT", 
+                                            anchor.features = integr_feat, reduction = "rpca",
+                                            assay = rep("SCT", length(srat_ort_int)), 
+                                            k.anchor = 25, dims = 1:15, n.trees = 200,
+                                            max.features = 500, verbose = T)
+  
+  # actual data integration
+  allgenes = rownames(srat_ort_int[[1]]@assays$RNA@counts)
+  srat_ort_rpca = IntegrateData(all_cell_anchors, normalization.method = "SCT", dims = 1:15,
+                                verbose = T, features.to.integrate = allgenes,
+                                sample.tree = matrix(c(-1,-2,1,-3), 
+                                                     nrow = 2, ncol = 2, byrow = T))
+  
+  # run PCA and UMAP to see how it looks
+  srat_ort_rpca = RunPCA(srat_ort_rpca, verbose = F)
+  srat_ort_rpca = RunUMAP(srat_ort_rpca, dims = 1:15)
+  
+  srat_ort_rpca = AddMetaData(srat_ort_rpca,  metadata = unlist(lapply(names(glut_gaba[[n]]), 
+                                                                       function(x) rep(x, ncol(glut_gaba[[n]][[x]])))), col.name = "species")
+  
+  
+  VariableFeatures(srat_m) = integr_feat
+  #srat_ort_harm = ScaleData(srat_m, features = integr_feat, use.umi = T, 
+  #                          do.scale = F, verbose = FALSE)
+  srat_ort_harm = RunPCA(srat_m, verbose = FALSE, assay = "SCT", npcs = 50,
+                         features = integr_feat)
+  
+  # Run Harmony
+  srat_ort_harm = RunHarmony(srat_ort_harm, "species", tau = 30, 
+                             plot_convergence = F, assay.use = "SCT")
+  
+  # Run UMAP on Harmony dimensions
+  srat_ort_harm = RunUMAP(srat_ort_harm, reduction = "harmony", dims = 1:15)
+  
+  # Run Harmony
+  srat_ort_both = RunHarmony(srat_ort_rpca, "species", tau = 30, 
+                             reduction = "pca", dims.use = 1:15,
+                             plot_convergence = F, assay.use = "SCT")
+  
+  # Run UMAP on Harmony dimensions
+  srat_ort_both = RunUMAP(srat_ort_both, reduction = "harmony", dims = 1:15)
+  integ_ds_l[[n]] = srat_ort_both
+}
+```
+
+
+
+
+
+
+## Load integration results
+
+```{r}
+dir = "data/processed/integration_evo/"
+glut_ax_mo_all_both = readRDS(paste0(dir, "axolotl_mouse_all_srat_ort_both.RDS"))
+UMAPPlot(glut_ax_mo_all_both, group.by = "species")
+glut_ax_mo_all_rpca = readRDS(paste0(dir, "axolotl_mouse_all_srat_ort_rpca.RDS"))
+UMAPPlot(glut_ax_mo_all_rpca, group.by = "species")
+glut_ax_mo_all_harm = readRDS(paste0(dir, "axolotl_mouse_all_srat_ort_harm.RDS"))
+UMAPPlot(glut_ax_mo_all_harm, group.by = "species")
+
+glut_ax_tu_all_both = readRDS(paste0(dir, "axolotl_paintedturtle_all_srat_ort_both.RDS"))
+UMAPPlot(glut_ax_tu_all_both, group.by = "species")
+glut_ax_tu_all_rpca = readRDS(paste0(dir, "axolotl_paintedturtle_all_srat_ort_rpca.RDS"))
+UMAPPlot(glut_ax_tu_all_rpca, group.by = "species")
+glut_ax_tu_all_harm = readRDS(paste0(dir, "axolotl_paintedturtle_all_srat_ort_harm.RDS"))
+UMAPPlot(glut_ax_tu_all_harm, group.by = "species")
+```
+
+
+```{r}
+tab_cl_ct = table(srat_ort_harm2$cellclusters[srat_ort_harm2$species=="axolotl"],
+                  srat_ort_harm2$harm15_res.2[srat_ort_harm2$species=="axolotl"])
+matches = apply(tab_cl_ct, 1, function(x) colnames(tab_cl_ct)[which.max(x)])
+
+m_numbs = table(srat_ort_harm2$cellclusters[srat_ort_harm2$species=="mouse"])
+t_numbs = table(srat_ort_harm2$cellclusters[srat_ort_harm2$species=="paintedturtle"])
+
+for(n in names(matches)){
+  mouse_matches = srat_ort_harm2$cellclusters[srat_ort_harm2$harm15_res.2==matches[n] &
+                                               srat_ort_harm2$species=="mouse"]
+  turtle_matches = srat_ort_harm2$cellclusters[srat_ort_harm2$harm15_res.2==matches[n] &
+                                                srat_ort_harm2$species=="paintedturtle"]
+  print(paste0(n, " ", matches[n]))
+  print(round(sort(table(mouse_matches)/m_numbs[names(table(mouse_matches))]), 2))
+  print(round(sort(table(turtle_matches)/t_numbs[names(table(turtle_matches))]), 2))
+  #print(sort(table(mouse_matches)))
+  #print(sort(table(turtle_matches)))
+}
+```

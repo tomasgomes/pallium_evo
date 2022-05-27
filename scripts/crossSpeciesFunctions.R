@@ -115,7 +115,7 @@ calcTSI = function(mk_l, sp_pair, ort_l, ort_scope = "ortholog_one2one", ct_sets
 # Function to match cells from 2 species and compare
 corrCellTypesPW = function(means_list, pwde_list, ort_l, ort_scope = "ortholog_one2one", 
                            sp_pair = c("human", "mouse"), ct_sets = NULL, 
-                           gene_filter = NULL, norm_all = T, filter_ct = T){
+                           gene_filter = NULL, genes_rem = NULL, norm_all = T, filter_ct = T){
   # which cells to use
   if(is.null(ct_sets)){
     ct_sets = list(colnames(means_list[[sp_pair[1]]]), colnames(means_list[[sp_pair[2]]]))
@@ -149,6 +149,11 @@ corrCellTypesPW = function(means_list, pwde_list, ort_l, ort_scope = "ortholog_o
   # only use group of genes
   if(!is.null(gene_filter)){
     ort_tab = ort_tab[ort_tab[,1] %in% gene_filter | ort_tab[,2] %in% gene_filter,]
+  }
+  
+  # genes to remove
+  if(!is.null(genes_rem)){
+    ort_tab = ort_tab[!(ort_tab[,1] %in% genes_rem) & !(ort_tab[,2] %in% genes_rem),]
   }
   
   message(paste0(nrow(ort_tab), " genes used."))
@@ -196,6 +201,7 @@ corrCellTypesPW = function(means_list, pwde_list, ort_l, ort_scope = "ortholog_o
   cort$maxcol = apply(cort$r, 2, which.max)
   cort[[paste0("sp1_", sp_pair[1])]] = sp1dat
   cort[[paste0("sp2_", sp_pair[2])]] = sp2dat
+  cort[["gene_set"]] = ort_tab
   return(cort)
 }
 
@@ -404,9 +410,11 @@ ortMatch = function(ort_l, sp_vec, ort_scope = "ortholog_one2one"){
 
 # Subsetting Seurat objects using the same orthologs
 seuratOrthologs = function(s_l, sp_samples, o_all){
+  
+  s_l = s_l[sp_samples]
   # only orthologs present in the Seurat objects
-  for(sp in names(s_l)){
-    o_all = o_all[o_all[,sp_samples[sp]] %in% rownames(s_l[[sp]]),]
+  for(sp in sp_samples){
+    o_all = o_all[o_all[,sp] %in% rownames(s_l[[sp]]),]
   }
   
   # get a unique name for the genes
@@ -416,20 +424,24 @@ seuratOrthologs = function(s_l, sp_samples, o_all){
   for(i in 1:nrow(o_all)){
     nname = unlist(lapply(o_all[i,], function(x) sum(allg==x)))
     g = unlist(o_all[i,names(nname[nname==1])])
+    
     # if there are acceptable unique names
     if(any(nname==1) & (!is.null(g) & !all(grepl("..", g, fixed = T)))){ # no weird axololt annot
       g = g[!grepl("..", g, fixed = T)] # no weird axololt annot
       g = c(g[!grepl("LOC", g)], g[grepl("LOC", g)])[1] #prioritize non-LOC
       jointnames = c(jointnames, g)
       rep_n[[g]] = 1
+      
     } else{ # we'll add a number to those names
       g = unlist(o_all[i,])
       g = g[!grepl("..", g, fixed = T)] # no weird axololt annot
       g = c(g[!grepl("LOC", g)], g[grepl("LOC", g)])[1] #prioritize non-LOC
+      
       if(g %in% names(rep_n)){
         gn = rep_n[[g]]
         rep_n[[g]] = gn+1
         jointnames = c(jointnames, paste0(g, "-", gn+1))
+        
       } else{
         rep_n[[g]] = 1
         jointnames = c(jointnames, paste0(g, "-", 1))
@@ -439,8 +451,8 @@ seuratOrthologs = function(s_l, sp_samples, o_all){
   
   # filter the Seurats by the orthologs
   ## this requires redoing the Seurat with new names, since some genes will be duplicated
-  for(sp in names(s_l)){
-    cnts = s_l[[sp]]@assays$RNA@counts[o_all[,sp_samples[sp]],]
+  for(sp in sp_samples){
+    cnts = s_l[[sp]]@assays$RNA@counts[o_all[,sp],]
     rownames(cnts) = jointnames
     m = s_l[[sp]]@meta.data
     s_l[[sp]] = CreateSeuratObject(cnts, project = sp, meta.data = m)
@@ -448,3 +460,5 @@ seuratOrthologs = function(s_l, sp_samples, o_all){
   
   return(s_l)
 }
+
+

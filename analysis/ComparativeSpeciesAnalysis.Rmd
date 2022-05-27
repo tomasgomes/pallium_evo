@@ -446,6 +446,24 @@ pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GABAergic.pdf", height 
 plotCorr(corr_dat_atl_gaba$axolotl_mouse, "axolotl", "mouse")+
   theme(axis.text = element_text(size = 6.8))
 dev.off()
+
+cort = corr_dat_atl_gaba$axolotl_mouse
+plot_df = reshape2::melt(cort$r)
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+write.csv(plot_df, 
+           file = "results/ComparativeSpeciesAnalysis/GABA_all_axolotl_mouse_tab.csv", 
+           col.names = T, row.names = F, quote = F)
+
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_zebrafinch_GABAergic.pdf", height = 5, width = 5)
 plotCorr(corr_dat_atl_gaba$axolotl_zebrafinch, "axolotl", "zebrafinch")+
   theme(axis.text = element_text(size = 6.8))
@@ -495,6 +513,10 @@ cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
 br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
 cols = cols[!(br>max(cort$r) | br<min(cort$r))]
 
+write.csv(plot_df, 
+          file = "results/ComparativeSpeciesAnalysis/GABA_all_axolotl_turtle_tab.csv", 
+          col.names = T, row.names = F, quote = F)
+
 corplot = ggplot()+
   #facet_grid(~reg, scales = "free", space = "free_x")+
   geom_point(data = plot_df, mapping = aes(x = Var2, y = Var1, fill = value, size = padj), 
@@ -521,6 +543,10 @@ pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_GABAergic_i_ord.pdf",
     height = 5, width = 5.5)
 print(corplot)
 dev.off()
+
+write.csv(cort$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/GABA_all_axolotl_turtle_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 ```
 
 GABAergic turtle reordered, TF only
@@ -582,6 +608,10 @@ cols = colorRampPalette(c(rev(RColorBrewer::brewer.pal(9, "Blues")),
 br = seq(-max(abs(cort$r)), max(abs(cort$r)), length.out = 101)
 cols = cols[!(br>max(cort$r) | br<min(cort$r))]
 
+write.csv(plot_df, 
+          file = "results/ComparativeSpeciesAnalysis/GABA_TFs_axolotl_turtle_tab.csv", 
+          col.names = T, row.names = F, quote = F)
+
 corplot = ggplot()+
   #facet_grid(~reg, scales = "free", space = "free_x")+
   geom_point(data = plot_df, mapping = aes(x = Var2, y = Var1, fill = value, size = padj), 
@@ -603,6 +633,10 @@ corplot = ggplot()+
         legend.title = element_text(size = 7.5),
         legend.text = element_text(size = 6.5),
         strip.text = element_text(size = 7.5))
+
+write.csv(cort$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/GABA_TFs_axolotl_turtle_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_GABAergic_i_TF.pdf", 
     height = 5, width = 5.5)
@@ -723,6 +757,10 @@ plot_df$Var1 = factor(plot_df$Var1,
                                         8, 6, 13, 28, 27, 26, 16, 3, 0, 5, 12, 
                                         17, 18, 4, 7, 14, 15)))
 
+write.csv(plot_df, 
+          file = "results/ComparativeSpeciesAnalysis/Glut_all_axolotl_turtle_tab.csv", 
+          col.names = T, row.names = F, quote = F)
+
 corplot = ggplot()+
   geom_point(data = plot_df, mapping = aes(x = Var1, y = Var2, fill = value, size = padj), 
              shape = 21)+
@@ -743,6 +781,10 @@ corplot = ggplot()+
         legend.title = element_text(size = 7.5),
         legend.text = element_text(size = 6.5),
         strip.text = element_text(size = 7.5))
+
+write.csv(cort$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/Glut_all_axolotl_turtle_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_Glutamatergic_ord.pdf", 
     height = 6.25, width = 6.7)
@@ -815,6 +857,10 @@ plot_df$Var2 = factor(paste0(plot_df$Var2, "_", plot_df$V2),
                       levels = rev(unique(paste0(plot_df$Var2, "_", 
                                              plot_df$V2)[order(plot_df$V2, decreasing = F)])))
 
+write.csv(plot_df, 
+          file = "results/ComparativeSpeciesAnalysis/Glut_TFs_axolotl_turtle_tab.csv", 
+          col.names = T, row.names = F, quote = F)
+
 corplot = ggplot()+
   geom_point(data = plot_df, mapping = aes(x = Var1, y = Var2, fill = value, size = padj), 
              shape = 21)+
@@ -835,6 +881,10 @@ corplot = ggplot()+
         legend.title = element_text(size = 7.5),
         legend.text = element_text(size = 6.5),
         strip.text = element_text(size = 7.5))
+
+write.csv(cort$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/Glut_TFs_axolotl_turtle_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_turtle_Glutamatergic_TF.pdf", 
     height = 6.25, width = 6.7)
@@ -963,7 +1013,9 @@ ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolo
 
 ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
-
+write.csv(ccc1$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/Glut_all_axolotl_mouse_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 
 sp1 = "axolotl"
 sp2 = "mouse"
@@ -1016,6 +1068,10 @@ plot_df$Var1 = factor(plot_df$Var1,
                                         8, 6, 13, 28, 27, 26, 16, 3, 0, 5, 12, 
                                         17, 18, 4, 7, 14, 15))))
 
+write.csv(plot_df, 
+           file = "results/ComparativeSpeciesAnalysis/Glut_all_axolotl_mouse_tab.csv", 
+           col.names = T, row.names = F, quote = F)
+
 corplot = ggplot()+
   geom_point(data = plot_df, mapping = aes(x = Var2, y = Var1, fill = value, size = padj), 
              shape = 21)+
@@ -1061,6 +1117,10 @@ ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                        gene_filter = tfs,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
 
+write.csv(ccc1$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/Glut_TFs_axolotl_mouse_genes.csv", 
+          col.names = T, row.names = F, quote = F)
+
 
 sp1 = "axolotl"
 sp2 = "mouse"
@@ -1098,6 +1158,10 @@ mouse_ord = c(paste0("TEGLU", c(18,19,5,13,14,21,24,23)), "DGGRC2", "DGGRC1",
               paste0("TEGLU", c(15,17,16, 20,3,2, 7,8,10,11,
                               4,9,1,6, 12,22)))
 plot_df$Var2 = factor(plot_df$Var2, levels = mouse_ord)
+
+write.csv(plot_df, 
+           file = "results/ComparativeSpeciesAnalysis/Glut_TFs_axolotl_mouse_tab.csv", 
+           col.names = T, row.names = F, quote = F)
 
 corplot = ggplot()+
   geom_point(data = plot_df, mapping = aes(x = Var2, y = Var1, fill = value, size = padj), 
@@ -1138,6 +1202,9 @@ ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolo
 
 ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, 
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc1$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/GABA_all_axolotl_mouse_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GABAergicTE.pdf", height = 4.75, width = 6.1)
 plotCorr(ccc1, "axolotl", "mouse")
@@ -1147,6 +1214,9 @@ dev.off()
 GABAergic more specific with mouse, TFs only
 
 ```{r}
+tfs = read.csv("../../gene_refs/human/Homo_sapiens_TF_AnimalTFDB3.txt", 
+               header = T, sep = "\t")$Symbol
+
 gg = "cellclusters"
 pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
 m = if(gg=="subclasses") subcl_m_list else celcl_m_list
@@ -1155,6 +1225,9 @@ ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolo
 
 ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, gene_filter = tfs,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc1$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/GABA_TFs_axolotl_mouse_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GABAergicTE_TF.pdf", 
     height = 5, width = 6.5)
@@ -1165,6 +1238,9 @@ dev.off()
 All GABAergic more specific with mouse, TFs only
 
 ```{r}
+tfs = read.csv("../../gene_refs/human/Homo_sapiens_TF_AnimalTFDB3.txt", 
+               header = T, sep = "\t")$Symbol
+
 gg = "cellclusters"
 pwde = if(gg=="subclasses") subcl_pwde_list else celcl_pwde_list
 m = if(gg=="subclasses") subcl_m_list else celcl_m_list
@@ -1174,6 +1250,23 @@ ct_sets = list("axolotl" = unique(meta_sp_l$axolotl$cellclusters[meta_sp_l$axolo
 ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, 
                        gene_filter = tfs, sp_pair = c("axolotl", "mouse"), 
                        ct_sets = ct_sets, norm_all = F)
+
+cort = ccc1
+plot_df = reshape2::melt(cort$r)
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+write.csv(plot_df, 
+           file = "results/ComparativeSpeciesAnalysis/GABA_TFs_axolotl_mouse_tab.csv", 
+           col.names = T, row.names = F, quote = F)
 
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouse_GABAergic_TF.pdf", 
     height = 6, width = 15)
@@ -1325,8 +1418,6 @@ dev.off()
 ```
 
 
-
-
 ## Development
 Subclasses matching
 
@@ -1436,11 +1527,33 @@ ct_sets = list(
     
 ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc1$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/VSVZsc_all_axolotl_mouse_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseVSVZsc.pdf", height = 4.75, width = 6.1)
 plotCorr(ccc1, "axolotl", "mouse")
 dev.off()
 
+cort = ccc1
+plot_df = reshape2::melt(cort$r)
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
 
+
+write.csv(plot_df, 
+          file = "results/ComparativeSpeciesAnalysis/NBEpen_all_axolotl_mouseVSVZsc_tab.csv", 
+          col.names = T, row.names = F, quote = F)
+
+
+# single-nuc
 ds1 = "axolotl"
 ds2 = "mouse_abc_sn"
 m = dev_m_list[c(ds1, ds2)]
@@ -1457,6 +1570,10 @@ ct_sets = list(
 
 ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/VSVZsn_all_axolotl_mouse_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseVSVZsn.pdf", height = 4.75, width = 6.1)
 plotCorr(ccc2, "axolotl", "mouse")
 dev.off()
@@ -1491,9 +1608,30 @@ ct_sets = list(
     
 ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, gene_filter = tfs,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc1$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/VSVZsc_TFs_axolotl_mouse_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseVSVZsc_TF.pdf", height = 4.75, width = 6.1)
 plotCorr(ccc1, "axolotl", "mouse")
 dev.off()
+
+cort = ccc1
+plot_df = reshape2::melt(cort$r)
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+
+write.csv(plot_df, 
+          file = "results/ComparativeSpeciesAnalysis/NBEpen_TFs_axolotl_mouseVSVZsc_tab.csv", 
+          col.names = T, row.names = F, quote = F)
 
 
 ds1 = "axolotl"
@@ -1512,8 +1650,62 @@ ct_sets = list(
 
 ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, gene_filter = tfs,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/VSVZsn_TFs_axolotl_mouse_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseVSVZsn_TF.pdf", height = 4.75, width = 6.1)
 plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+```
+
+NPC and ependymal only, adult neurogenesis, no cell cycle
+
+```{r}
+dev_m_list = c(mdev_m_list[c(2,4,6)], celcl_m_list[2])
+dev_pwde_list = c(mdev_pwde_list[c(2,4,6)], celcl_pwde_list[2])
+dev_meta_l = c(mdev_meta_l, meta_sp_l[2])
+names(dev_m_list) = names(dev_pwde_list) = names(dev_meta_l)[c(3,1,2, 4)]
+
+ds1 = "axolotl"
+ds2 = "mouse_abc_sc"
+m = dev_m_list[c(ds1, ds2)]
+pwde = dev_pwde_list[c(ds1, ds2)]
+names(m) = names(pwde) = c("axolotl", "mouse")
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_abc_sc$cellclusters[startsWith(dev_meta_l$mouse_abc_sc$cellclusters,"Ependy") | 
+                                                     grepl("A cells", dev_meta_l$mouse_abc_sc$cellclusters) |
+                                                     grepl("B cells", dev_meta_l$mouse_abc_sc$cellclusters) |
+                                                     grepl("C cells", dev_meta_l$mouse_abc_sc$cellclusters) |
+                                                       startsWith(dev_meta_l$mouse_abc_sc$cellclusters,"Mitosis")])
+)
+    
+cc_genes = c(Seurat::cc.genes.updated.2019$s.genes, Seurat::cc.genes.updated.2019$g2m.genes,
+             Seurat::cc.genes$s.genes, Seurat::cc.genes$g2m.genes)
+cc_genes = unique(cc_genes)
+
+mm.pairs = readRDS(system.file("exdata", "mouse_cycle_markers.rds", package="scran"))
+hs.pairs = readRDS(system.file("exdata", "human_cycle_markers.rds", package="scran"))
+hscc = unique(unlist(lapply(hs.pairs, function(x) c(x$first, x$second))))
+hscc = gprofiler2::gconvert(hscc, organism = "hsapiens", target = "ENSG")
+hscc = unique(c(hscc$target, hscc$name))
+mmcc = unique(unlist(lapply(mm.pairs, function(x) c(x$first, x$second))))
+mmcc = gprofiler2::gconvert(mmcc, organism = "mmusculus", target = "ENSG")
+mmcc = unique(c(mmcc$target, mmcc$name))
+
+cc_genes = c(cc_genes, mmcc, hscc)
+
+
+ccc1n = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+ccc1 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F,
+                      genes_rem = cc_genes)
+
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseVSVZsc_noCC.pdf", height = 4.75, width = 6.1)
+plotCorr(ccc1, "axolotl", "mouse")
 dev.off()
 ```
 
@@ -1533,6 +1725,9 @@ names(m) = names(pwde) = c("axolotl", "mouse")
 
 ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                       sp_pair = c("axolotl", "mouse"), norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/All_all_axolotl_mouseDiBella_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_all.pdf", height = 14, width = 6.5)
 plotCorr(ccc2, "axolotl", "mouse")
 dev.off()
@@ -1550,9 +1745,29 @@ ct_sets = list(
 )
 ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/NPCEp_all_axolotl_mouseDiBella_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_NPCEp.pdf", height = 8, width = 4.3)
 plotCorr(ccc2, "axolotl", "mouse")
 dev.off()
+
+cort = ccc2
+plot_df = reshape2::melt(cort$r)
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+write.csv(plot_df, 
+          file = "results/ComparativeSpeciesAnalysis/NBEpen_all_axolotl_mouseDiBella_tab.csv", 
+          col.names = T, row.names = F, quote = F)
 
 
 ct_sets = list(
@@ -1565,6 +1780,9 @@ ct_sets = list(
 )
 ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                       sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/NPCEpvAll_all_axolotl_mouseDiBella_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_NPCEpvAll.pdf", height = 8, width = 6.5)
 plotCorr(ccc2, "axolotl", "mouse")
 dev.off()
@@ -1589,6 +1807,9 @@ names(m) = names(pwde) = c("axolotl", "mouse")
 
 ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                        gene_filter = tfs, sp_pair = c("axolotl", "mouse"), norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/All_TFs_axolotl_mouseDiBella_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_all_TF.pdf", height = 14, width = 6.5)
 plotCorr(ccc2, "axolotl", "mouse")
 dev.off()
@@ -1606,9 +1827,29 @@ ct_sets = list(
 )
 ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                        gene_filter = tfs, sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/NPCEp_TFs_axolotl_mouseDiBella_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_NPCEp_TF.pdf", height = 8, width = 4.3)
 plotCorr(ccc2, "axolotl", "mouse")
 dev.off()
+
+cort = ccc2
+plot_df = reshape2::melt(cort$r)
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+write.csv(plot_df, 
+          file = "results/ComparativeSpeciesAnalysis/NBEpen_TFs_axolotl_mouseDiBella_tab.csv", 
+          col.names = T, row.names = F, quote = F)
 
 
 ct_sets = list(
@@ -1621,9 +1862,148 @@ ct_sets = list(
 )
 ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
                        gene_filter = tfs, sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/NPCEpvAll_TFs_axolotl_mouseDiBella_genes.csv", 
+          col.names = T, row.names = F, quote = F)
 pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_subcl_NPCEpvAll_TF.pdf", height = 8, width = 6.5)
 plotCorr(ccc2, "axolotl", "mouse")
 dev.off()
 ```
+
+NPC and ependymal only, dev neurogenesis, all stages
+
+```{r}
+dev_m_list = c(mdev_m_list[1:2], subcl_m_list[2], celcl_m_list[2])
+dev_pwde_list = c(mdev_pwde_list[1:2], subcl_pwde_list[2], celcl_pwde_list[2])
+dev_meta_l = c(mdev_meta_l[3], meta_sp_l[2])
+names(dev_m_list) = names(dev_pwde_list) = unlist(lapply(names(dev_meta_l), function(x) paste0(x, c("_subcl", "_celcl"))))
+
+ds1 = "axolotl_celcl"
+ds2 = "mouse_all_celcl"
+m = dev_m_list[c(ds1, ds2)]
+pwde = dev_pwde_list[c(ds1, ds2)]
+names(m) = names(pwde) = c("axolotl", "mouse")
+
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/Allstg_all_axolotl_mouseDiBella_genes.csv", 
+          col.names = T, row.names = F, quote = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_celcl_all.pdf", height = 14, width = 6.5)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_all$cellclusters[!(grepl("Microglia", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Vasculature", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Interneurons", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Excitatory neurons", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Oligodendrocytes", dev_meta_l$mouse_all$subclasses) |
+                                                   grepl("Astroc", dev_meta_l$mouse_all$subclasses)) | 
+                                                     grepl("Migrating", dev_meta_l$mouse_all$subclasses)])
+)
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/NPCEpstg_all_axolotl_mouseDiBella_genes.csv", 
+          col.names = T, row.names = F, quote = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_celcl_NPCEp.pdf", height = 8, width = 4.3)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+
+cort = ccc2
+plot_df = reshape2::melt(cort$r)
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+write.csv(plot_df, 
+          file = "results/ComparativeSpeciesAnalysis/NBEpenStg_all_axolotl_mouseDiBella_tab.csv", 
+          col.names = T, row.names = F, quote = F)
+
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_all$cellclusters[!(grepl("Microglia", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Vasculature", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Oligodendrocytes", dev_meta_l$mouse_all$subclasses) |
+                                                   grepl("Astroc", dev_meta_l$mouse_all$subclasses))])
+)
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use,
+                      sp_pair = c("axolotl", "mouse"), ct_sets = ct_sets, norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/NPCEpvAllstg_all_axolotl_mouseDiBella_genes.csv", 
+          col.names = T, row.names = F, quote = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_celcl_NPCEpvAll.pdf", height = 8, width = 6.5)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+```
+
+NPC and ependymal only, dev neurogenesis, all stages, TFs
+
+```{r}
+tfs = read.csv("../../gene_refs/human/Homo_sapiens_TF_AnimalTFDB3.txt", 
+               header = T, sep = "\t")$Symbol
+
+dev_m_list = c(mdev_m_list[1:2], subcl_m_list[2], celcl_m_list[2])
+dev_pwde_list = c(mdev_pwde_list[1:2], subcl_pwde_list[2], celcl_pwde_list[2])
+dev_meta_l = c(mdev_meta_l[3], meta_sp_l[2])
+names(dev_m_list) = names(dev_pwde_list) = unlist(lapply(names(dev_meta_l), function(x) paste0(x, c("_subcl", "_celcl"))))
+
+ds1 = "axolotl_celcl"
+ds2 = "mouse_all_celcl"
+m = dev_m_list[c(ds1, ds2)]
+pwde = dev_pwde_list[c(ds1, ds2)]
+names(m) = names(pwde) = c("axolotl", "mouse")
+
+ct_sets = list(
+  axolotl = unique(dev_meta_l$axolotl$cellclusters[startsWith(dev_meta_l$axolotl$cellclusters,"epen") | 
+                                                     startsWith(dev_meta_l$axolotl$cellclusters,"npc")]),
+  mouse = unique(dev_meta_l$mouse_all$cellclusters[!(grepl("Microglia", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Vasculature", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Interneurons", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Excitatory neurons", dev_meta_l$mouse_all$classes) |
+                                                   grepl("Oligodendrocytes", dev_meta_l$mouse_all$subclasses) |
+                                                   grepl("Astroc", dev_meta_l$mouse_all$subclasses)) | 
+                                                     grepl("Migrating", dev_meta_l$mouse_all$subclasses)])
+)
+ccc2 = corrCellTypesPW(means_list = m, pwde_list = pwde, ort_l = ort_list_use, 
+                       gene_filter = tfs, sp_pair = c("axolotl", "mouse"), 
+                       ct_sets = ct_sets, norm_all = F)
+write.csv(ccc2$gene_set, 
+          file = "results/ComparativeSpeciesAnalysis/genes_used_correlations/NPCEpstg_TFs_axolotl_mouseDiBella_genes.csv", 
+          col.names = T, row.names = F, quote = F)
+pdf("results/ComparativeSpeciesAnalysis/axolotl_vs_mouseDiBella_celcl_NPCEp_TFs.pdf", height = 8, width = 7)
+plotCorr(ccc2, "axolotl", "mouse")
+dev.off()
+
+cort = ccc2
+plot_df = reshape2::melt(cort$r)
+plot_df$padj = -log10(reshape2::melt(cort$p.adj+min(cort$p.adj[cort$p.adj>0])/10)$value)
+plot_df$rowmax = apply(Reduce(cbind, lapply(names(cort$maxrow), 
+                                            function(n) plot_df$Var1==n &
+                                              plot_df$Var2==colnames(cort$r)[cort$maxrow[n]])), 
+                       1, any)
+plot_df$colmax = apply(Reduce(cbind, lapply(names(cort$maxcol), 
+                                            function(n) plot_df$Var2==n &
+                                              plot_df$Var1==rownames(cort$r)[cort$maxcol[n]])), 
+                       1, any)
+plot_df$markcol = plot_df$value>quantile(plot_df$value, 0.98)
+
+write.csv(plot_df, 
+          file = "results/ComparativeSpeciesAnalysis/NBEpenStg_TFs_axolotl_mouseDiBella_tab.csv", 
+          col.names = T, row.names = F, quote = F)
+```
+
 
 

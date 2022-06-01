@@ -344,7 +344,7 @@ for(n in names(integ_dat_l)){
 ```
 
 
-## Dev
+## Developmental
 Double integration with Harmony
 
 ```{r}
@@ -401,6 +401,8 @@ Proximity to centroids
 ```{r}
 closest_mouse = list()
 closest_turtle = list()
+mats_mouse = list()
+mats_turtle = list()
 for(n in names(integ_dat_l)){
   n2 = substr(n, 1, 4)
   centroids = apply(integ_dat_l[[n]]@reductions$harmony@cell.embeddings, 2, 
@@ -411,6 +413,9 @@ for(n in names(integ_dat_l)){
   mo_ct = unique(integ_dat_l[[n]]$cellclusters[integ_dat_l[[n]]$species=="mouse"])
   tu_ct = unique(integ_dat_l[[n]]$cellclusters[integ_dat_l[[n]]$species=="paintedturtle"])
   
+  mats_mouse[[n]] = -as.matrix(dists_cl)[ax_ct,mo_ct]
+  mats_turtle[[n]] = -as.matrix(dists_cl)[ax_ct,tu_ct]
+  
   closest_mouse[[n2]] = apply(as.matrix(dists_cl)[ax_ct,mo_ct], 1, 
                              function(x) mo_ct[which.min(x)])
   closest_turtle[[n2]] = apply(as.matrix(dists_cl)[ax_ct,tu_ct], 1, 
@@ -420,6 +425,113 @@ for(n in names(integ_dat_l)){
   pheatmap::pheatmap(-as.matrix(dists_cl)[ax_ct,tu_ct], 
                      clustering_method = "ward.D", scale = "row")
 }
+```
+
+Proximity of cells to centroids
+
+```{r}
+closest_mouse = list()
+closest_turtle = list()
+mats_mouse = list()
+mats_turtle = list()
+for(n in names(integ_dat_l)){
+  n2 = substr(n, 1, 4)
+  centroids = apply(integ_dat_l[[n]]@reductions$harmony@cell.embeddings, 2, 
+                    function(x) tapply(x, integ_dat_l[[n]]$cellclusters, mean))
+  centroids_mt = centroids[!grepl("glut_", rownames(centroids)),]
+  ax_cells = integ_dat_l[[n]]$species=="axolotl"
+  dists_cl = dist(rbind(centroids_mt,
+                        integ_dat_l[[n]]@reductions$harmony@cell.embeddings[ax_cells,]))
+  dists_cl = as.matrix(dists_cl)
+  m_clust_names = unique(integ_dat_l[[n]]$cellclusters[integ_dat_l[[n]]$species=="mouse"])
+  t_clust_names = unique(integ_dat_l[[n]]$cellclusters[integ_dat_l[[n]]$species=="paintedturtle"])
+  m_dists_cl = dists_cl[!rownames(dists_cl) %in% c(m_clust_names, t_clust_names),m_clust_names]
+  t_dists_cl = dists_cl[!rownames(dists_cl) %in% c(m_clust_names, t_clust_names),t_clust_names]
+  
+  m_max = apply(m_dists_cl, 1, function(x) colnames(m_dists_cl)[which.min(x)])
+  t_max = apply(t_dists_cl, 1, function(x) colnames(t_dists_cl)[which.min(x)])
+  
+  plot_df = data.frame("ct" = integ_dat_l[[n]]@meta.data[integ_dat_l[[n]]$species=="axolotl","cellclusters"],
+                       row.names = rownames(integ_dat_l[[n]]@meta.data[integ_dat_l[[n]]$species=="axolotl",]))
+  plot_df$m_max = m_max[rownames(plot_df)]
+  plot_df$t_max = t_max[rownames(plot_df)]
+  
+  tab_df = table(plot_df$ct, plot_df$m_max)
+}
+```
+
+Distance heatmaps
+
+```{r}
+glut_mouse_regs = c("TEGLU19" = "ON", "TEGLU18" = "ON", "TEGLU5" = "E", 
+               "TEGLU13" = "Hippo","TEGLU14" = "Hippo","TEGLU21" = "Hippo",
+               "TEGLU23" = "Hippo","TEGLU24" = "Hippo", "DGGRC1" = "Hippo", "DGGRC2" = "Hippo",
+               "TEGLU15" = "Piri","TEGLU16" = "Piri","TEGLU17" = "Piri",
+               "TEGLU2" = "Cortex","TEGLU3" = "Cortex","TEGLU4" = "Cortex","TEGLU7" = "Cortex",
+               "TEGLU8" = "Cortex","TEGLU10" = "Cortex","TEGLU11" = "Cortex",
+               "TEGLU20" = "Cortex",
+               "TEGLU1" = "Cing","TEGLU6" = "Cing","TEGLU9" = "Cing",
+               "TEGLU12" = "L", "TEGLU22" = "A")
+
+gaba_mouse_regs = unique(integ_dat_l$gaba_all_3$cellclusters[integ_dat_l$gaba_all_3$species=="mouse"])
+n = gaba_mouse_regs
+gaba_mouse_regs = substr(gaba_mouse_regs, 1, 3)
+names(gaba_mouse_regs) = n
+
+clu = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[1]))
+glut_turtle_regs = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[2]))
+names(glut_turtle_regs) = clu
+
+gaba_turtle_regs = c("i01" = "LGE","i02" = "Septum","i04" = "LGE","i05" = "LGE",
+         "i06" = "LGE","i08" = "MGE","i09" = "MGE","i10" = "MGE",
+         "i11" = "MGE","i12" = "MGE","i13" = "MGE","i14" = "CGE",
+         "i15" = "CGE","i16" = "CGE","i17" = "CGE","i18" = "CGE")
+
+# glut
+cairo_pdf("results/CrossSpIntegration/mouse_glut_distance_mat.pdf", height = 4, width = 5)
+rownames(mats_mouse$glut_all_3) = gsub("_SUBSET", "", rownames(mats_mouse$glut_all_3))
+max_mat = t(apply(mats_mouse$glut_all_3, 1, function(x) as.character(x==max(x))))
+max_mat[max_mat=="FALSE"] = ""
+max_mat[max_mat=="TRUE"] = "\U2022"
+pheatmap::pheatmap(mats_mouse$glut_all_3, color = viridis::magma(100),border_color = "grey80",
+                   annotation_col = data.frame("region" = glut_mouse_regs), fontsize = 6,
+                   clustering_method = "ward.D", scale = "row", fontsize_number = 12,
+                   treeheight_row = 20 ,treeheight_col = 20, display_numbers = max_mat)
+dev.off()
+
+cairo_pdf("results/CrossSpIntegration/turtle_glut_distance_mat.pdf", height = 4, width = 5)
+rownames(mats_turtle$glut_all_3) = gsub("_SUBSET", "", rownames(mats_turtle$glut_all_3))
+max_mat = t(apply(mats_turtle$glut_all_3, 1, function(x) as.character(x==max(x))))
+max_mat[max_mat=="FALSE"] = ""
+max_mat[max_mat=="TRUE"] = "\U2022"
+pheatmap::pheatmap(mats_turtle$glut_all_3, color = viridis::magma(100),border_color = "grey80",
+                   annotation_col = data.frame("region" = glut_turtle_regs), fontsize = 6,
+                   clustering_method = "ward.D", scale = "row", fontsize_number = 12,
+                   treeheight_row = 20 ,treeheight_col = 20, display_numbers = max_mat)
+dev.off()
+
+# gaba
+cairo_pdf("results/CrossSpIntegration/mouse_gaba_distance_mat.pdf", height = 4, width = 7.2)
+rownames(mats_mouse$gaba_all_3) = gsub("_SUBSET", "", rownames(mats_mouse$gaba_all_3))
+max_mat = t(apply(mats_mouse$gaba_all_3, 1, function(x) as.character(x==max(x))))
+max_mat[max_mat=="FALSE"] = ""
+max_mat[max_mat=="TRUE"] = "\U2022"
+pheatmap::pheatmap(mats_mouse$gaba_all_3, color = viridis::magma(100),border_color = "grey80",
+                   annotation_col = data.frame("region" = gaba_mouse_regs), fontsize = 6,
+                   clustering_method = "ward.D", scale = "row", fontsize_number = 12,
+                   treeheight_row = 20 ,treeheight_col = 20, display_numbers = max_mat)
+dev.off()
+
+cairo_pdf("results/CrossSpIntegration/turtle_gaba_distance_mat.pdf", height = 4, width = 5)
+rownames(mats_turtle$gaba_all_3) = gsub("_SUBSET", "", rownames(mats_turtle$gaba_all_3))
+max_mat = t(apply(mats_turtle$gaba_all_3, 1, function(x) as.character(x==max(x))))
+max_mat[max_mat=="FALSE"] = ""
+max_mat[max_mat=="TRUE"] = "\U2022"
+pheatmap::pheatmap(mats_turtle$gaba_all_3, color = viridis::magma(100),border_color = "grey80",
+                   annotation_col = data.frame("region" = gaba_turtle_regs), fontsize = 6,
+                   clustering_method = "ward.D", scale = "row", fontsize_number = 12,
+                   treeheight_row = 20 ,treeheight_col = 20, display_numbers = max_mat)
+dev.off()
 ```
 
 Projections
@@ -513,6 +625,242 @@ corr_turtle = list("glut" = glut_turtle_cor$Var2[glut_turtle_cor$rowmax],
                   "gaba" = gaba_turtle_cor$Var2[gaba_turtle_cor$rowmax])
 names(corr_turtle$glut) = glut_turtle_cor$Var1[glut_turtle_cor$rowmax]
 names(corr_turtle$gaba) = gaba_turtle_cor$Var1[gaba_turtle_cor$rowmax]
+```
+
+Distance distribution of clusters - mouse
+
+```{r}
+glut_mouse_regs = c("TEGLU19" = "ON", "TEGLU18" = "ON", "TEGLU5" = "E", 
+               "TEGLU13" = "Hippo","TEGLU14" = "Hippo","TEGLU21" = "Hippo",
+               "TEGLU23" = "Hippo","TEGLU24" = "Hippo", "DGGRC1" = "Hippo", "DGGRC2" = "Hippo",
+               "TEGLU15" = "Piri","TEGLU16" = "Piri","TEGLU17" = "Piri",
+               "TEGLU2" = "Cortex","TEGLU3" = "Cortex","TEGLU4" = "Cortex","TEGLU7" = "Cortex",
+               "TEGLU8" = "Cortex","TEGLU10" = "Cortex","TEGLU11" = "Cortex",
+               "TEGLU20" = "Cortex",
+               "TEGLU1" = "Cing","TEGLU6" = "Cing","TEGLU9" = "Cing",
+               "TEGLU12" = "L", "TEGLU22" = "A")
+
+gaba_mouse_regs = unique(integ_dat_l$gaba_all_3$cellclusters[integ_dat_l$gaba_all_3$species=="mouse"])
+n = gaba_mouse_regs
+gaba_mouse_regs = substr(gaba_mouse_regs, 1, 3)
+names(gaba_mouse_regs) = n
+
+# glut
+dat = t(apply(mats_mouse$glut_all_3, 1, scale))
+colnames(dat) = colnames(mats_mouse$glut_all_3)
+glut_dist_dat = merge(reshape2::melt(dat), 
+                      data.frame(glut_mouse_regs), by.x = 2, by.y = 0)
+
+glut_plt = ggplot(glut_dist_dat, aes(x = glut_mouse_regs, y = value, fill = glut_mouse_regs))+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "scaled negative distance")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -30, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+
+# GABA
+dat = t(apply(mats_mouse$gaba_all_3, 1, scale))
+colnames(dat) = colnames(mats_mouse$gaba_all_3)
+gaba_dist_dat = merge(reshape2::melt(dat), 
+                      data.frame(gaba_mouse_regs), by.x = 2, by.y = 0)
+
+gaba_plt = ggplot(gaba_dist_dat, aes(x = gaba_mouse_regs, y = value, fill = gaba_mouse_regs))+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "scaled negative distance")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -90, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+pdf("results/CrossSpIntegration/mouse_glut_boxplots_dist.pdf", height = 4.5, width = 7.3)
+print(glut_plt)
+dev.off()
+
+pdf("results/CrossSpIntegration/mouse_gaba_boxplots_dist.pdf", height = 4.5, width = 7.3)
+print(gaba_plt)
+dev.off()
+```
+
+Distance distribution of clusters - turtle
+
+```{r}
+clu = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[1]))
+glut_turtle_regs = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[2]))
+names(glut_turtle_regs) = clu
+
+gaba_turtle_regs = c("i01" = "LGE","i02" = "Septum","i04" = "LGE","i05" = "LGE",
+         "i06" = "LGE","i08" = "MGE","i09" = "MGE","i10" = "MGE",
+         "i11" = "MGE","i12" = "MGE","i13" = "MGE","i14" = "CGE",
+         "i15" = "CGE","i16" = "CGE","i17" = "CGE","i18" = "CGE")
+
+# glut
+dat = t(apply(mats_turtle$glut_all_3, 1, scale))
+colnames(dat) = colnames(mats_turtle$glut_all_3)
+glut_dist_dat = merge(reshape2::melt(dat), 
+                      data.frame(glut_turtle_regs), by.x = 2, by.y = 0)
+
+glut_plt = ggplot(glut_dist_dat, aes(x = glut_turtle_regs, y = value, fill = glut_turtle_regs))+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "scaled negative distance")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -90, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+
+# GABA
+dat = t(apply(mats_turtle$gaba_all_3, 1, scale))
+colnames(dat) = colnames(mats_turtle$gaba_all_3)
+gaba_dist_dat = merge(reshape2::melt(dat), 
+                      data.frame(gaba_turtle_regs), by.x = 2, by.y = 0)
+
+gaba_plt = ggplot(gaba_dist_dat, aes(x = gaba_turtle_regs, y = value, fill = gaba_turtle_regs))+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "scaled negative distance")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -30, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+pdf("results/CrossSpIntegration/turtle_glut_boxplots_dist.pdf", height = 4.5, width = 7.3)
+print(glut_plt)
+dev.off()
+
+pdf("results/CrossSpIntegration/turtle_gaba_boxplots_dist.pdf", height = 4.5, width = 7.3)
+print(gaba_plt)
+dev.off()
+```
+
+Correlation distribution of clusters - mouse
+
+```{r}
+glut_mouse_regs = c("TEGLU19" = "ON", "TEGLU18" = "ON", "TEGLU5" = "E", 
+               "TEGLU13" = "Hippo","TEGLU14" = "Hippo","TEGLU21" = "Hippo",
+               "TEGLU23" = "Hippo","TEGLU24" = "Hippo", "DGGRC1" = "Hippo", "DGGRC2" = "Hippo",
+               "TEGLU15" = "Piri","TEGLU16" = "Piri","TEGLU17" = "Piri",
+               "TEGLU2" = "Cortex","TEGLU3" = "Cortex","TEGLU4" = "Cortex","TEGLU7" = "Cortex",
+               "TEGLU8" = "Cortex","TEGLU10" = "Cortex","TEGLU11" = "Cortex",
+               "TEGLU20" = "Cortex",
+               "TEGLU1" = "Cing","TEGLU6" = "Cing","TEGLU9" = "Cing",
+               "TEGLU12" = "L", "TEGLU22" = "A")
+
+gaba_mouse_regs = unique(integ_dat_l$gaba_all_3$cellclusters[integ_dat_l$gaba_all_3$species=="mouse"])
+n = gaba_mouse_regs
+gaba_mouse_regs = substr(gaba_mouse_regs, 1, 3)
+names(gaba_mouse_regs) = n
+
+# glut
+plot_df = merge(glut_mouse_cor, data.frame(glut_mouse_regs), by.x = 2, by.y = 0)
+glut_plt = ggplot(plot_df, aes(x = glut_mouse_regs, y = value, fill = glut_mouse_regs))+
+  facet_wrap(~Var1)+
+  geom_boxplot()+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "correlation")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -30, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+# GABA
+plot_df = merge(gaba_mouse_cor, data.frame(gaba_mouse_regs), by.x = 2, by.y = 0)
+gaba_plt = ggplot(plot_df, aes(x = gaba_mouse_regs, y = value, fill = gaba_mouse_regs))+
+  facet_wrap(~Var1)+
+  geom_boxplot()+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "correlation")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -90, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+pdf("results/CrossSpIntegration/mouse_glut_boxplots_corr.pdf", height = 4.5, width = 7.3)
+print(glut_plt)
+dev.off()
+
+pdf("results/CrossSpIntegration/mouse_gaba_boxplots_corr.pdf", height = 4.5, width = 7.3)
+print(gaba_plt)
+dev.off()
+```
+
+Correlation distribution of clusters - turtle
+
+```{r}
+clu = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[1]))
+glut_turtle_regs = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[2]))
+names(glut_turtle_regs) = clu
+
+gaba_turtle_regs = c("i01" = "LGE","i02" = "Septum","i04" = "LGE","i05" = "LGE",
+         "i06" = "LGE","i08" = "MGE","i09" = "MGE","i10" = "MGE",
+         "i11" = "MGE","i12" = "MGE","i13" = "MGE","i14" = "CGE",
+         "i15" = "CGE","i16" = "CGE","i17" = "CGE","i18" = "CGE")
+
+# glut
+xxx = glut_turtle_cor
+xxx$Var2 = unlist(lapply(strsplit(unique(glut_turtle_cor$Var2), "_"), function(x) x[1]))
+plot_df = merge(xxx, data.frame(glut_turtle_regs), by.x = 1, by.y = 0)
+glut_plt = ggplot(plot_df, aes(x = glut_turtle_regs, y = value, fill = glut_turtle_regs))+
+  facet_wrap(~Var1)+
+  geom_boxplot()+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "correlation")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -90, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+# GABA
+plot_df = merge(gaba_turtle_cor, data.frame(gaba_turtle_regs), by.x = 2, by.y = 0)
+gaba_plt = ggplot(plot_df, aes(x = gaba_turtle_regs, y = value, fill = gaba_turtle_regs))+
+  facet_wrap(~Var1)+
+  geom_boxplot()+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "correlation")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -90, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+pdf("results/CrossSpIntegration/turtle_glut_boxplots_corr.pdf", height = 4.5, width = 7.3)
+print(glut_plt)
+dev.off()
+
+pdf("results/CrossSpIntegration/turtle_gaba_boxplots_corr.pdf", height = 4.5, width = 7.3)
+print(gaba_plt)
+dev.off()
 ```
 
 Matches Glut: mouse
@@ -711,6 +1059,9 @@ Proximity to centroids
 integ_dat_l2$dev1$cellclusters_sub = integ_dat_l2$dev1$cellclusters
 integ_dat_l2$dev1$cellclusters_sub[integ_dat_l2$dev1$species=="mouse"] = integ_dat_l2$dev1$subclasses[integ_dat_l2$dev1$species=="mouse"]
 
+mats_svz = list()
+mats_dev = list()
+
 closest_vz = list()
 closest_dev = list()
 closest_devsub = list()
@@ -724,6 +1075,8 @@ for(n in names(integ_dat_l2)){
     other_ct = unique(integ_dat_l2[[n]]$cellclusters[integ_dat_l2[[n]]$species=="mouse"])
     closest_vz[[n]] = apply(as.matrix(dists_cl)[ax_ct,other_ct], 1, 
                                function(x) other_ct[which.min(x)])
+    
+    mats_svz[[n]] = -as.matrix(dists_cl)[ax_ct,other_ct]
   } else{
     centroids = apply(integ_dat_l2[[n]]@reductions$harmony@cell.embeddings, 2, 
                       function(x) tapply(x, integ_dat_l2[[n]]$cellclusters, mean))
@@ -731,6 +1084,8 @@ for(n in names(integ_dat_l2)){
     other_ct = unique(integ_dat_l2[[n]]$cellclusters[integ_dat_l2[[n]]$species=="mouse"])
     closest_dev[[n]] = apply(as.matrix(dists_cl)[ax_ct,other_ct], 1, 
                               function(x) other_ct[which.min(x)])
+    
+    mats_dev[[n]] = -as.matrix(dists_cl)[ax_ct,other_ct]
     
     centroids = apply(integ_dat_l2[[n]]@reductions$harmony@cell.embeddings, 2, 
                       function(x) tapply(x, integ_dat_l2[[n]]$cellclusters_sub, mean))
@@ -826,6 +1181,188 @@ corr_mouse = list("vz" = nbep_vz_cor$Var2[nbep_vz_cor$rowmax],
 names(corr_mouse$vz) = nbep_vz_cor$Var1[nbep_vz_cor$rowmax]
 names(corr_mouse$devct) = nbep_devct_cor$Var1[nbep_devct_cor$rowmax]
 names(corr_mouse$devsub) = nbep_devsub_cor$Var1[nbep_devsub_cor$rowmax]
+```
+
+Distance heatmaps
+
+```{r}
+dat_mouse = merge(data.frame(corr_mouse$vz), data.frame(closest_vz$vz), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "correlation", "integration")
+
+svz_mouse_regs = unique(c(dat_mouse$correlation, dat_mouse$integration))
+nam = svz_mouse_regs
+svz_mouse_regs = unlist(lapply(strsplit(svz_mouse_regs, "_"), function(x) x[1]))
+names(svz_mouse_regs) = nam
+svz_mouse_regs[svz_mouse_regs=="Ependymal cells"] = "EC"
+
+colnames(mats_dev$dev1) = gsub("Ependymocytes", "EC", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Migrating neurons", "MN", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Apical progenitors", "AP", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Cycling glial cells", "CGC", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Intermediate progenitors", "IP", colnames(mats_dev$dev1))
+dev_mouse_regs = unique(colnames(mats_dev$dev1))
+nam = dev_mouse_regs
+dev_mouse_regs = unlist(lapply(strsplit(dev_mouse_regs, "_"), function(x) x[1]))
+names(dev_mouse_regs) = nam
+
+
+cairo_pdf("results/CrossSpIntegration/mouse_svz_distance_mat.pdf", height = 4, width = 5)
+rownames(mats_svz$vz) = gsub("Ependymal cells", "EC", rownames(mats_svz$vz))
+max_mat = t(apply(mats_svz$vz, 1, function(x) as.character(x==max(x))))
+max_mat[max_mat=="FALSE"] = ""
+max_mat[max_mat=="TRUE"] = "\U2022"
+pheatmap::pheatmap(mats_svz$vz, color = viridis::magma(100),border_color = "grey80",
+                   annotation_col = data.frame("region" = svz_mouse_regs), fontsize = 6,
+                   clustering_method = "ward.D", scale = "row", fontsize_number = 12,
+                   treeheight_row = 20 ,treeheight_col = 20, display_numbers = max_mat)
+dev.off()
+
+cairo_pdf("results/CrossSpIntegration/mouse_dev_distance_mat.pdf", height = 4, width = 5)
+max_mat = t(apply(mats_dev$dev1, 1, function(x) as.character(x==max(x))))
+max_mat[max_mat=="FALSE"] = ""
+max_mat[max_mat=="TRUE"] = "\U2022"
+pheatmap::pheatmap(mats_dev$dev1, color = viridis::magma(100), border_color = "grey80",
+                   annotation_col = data.frame("region" = dev_mouse_regs), fontsize = 6,
+                   clustering_method = "ward.D", scale = "row", fontsize_number = 12,
+                   treeheight_row = 20 ,treeheight_col = 20, display_numbers = max_mat)
+dev.off()
+```
+
+Distance distribution of clusters
+
+```{r}
+dat_mouse = merge(data.frame(corr_mouse$vz), data.frame(closest_vz$vz), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "correlation", "integration")
+
+svz_mouse_regs = unique(c(dat_mouse$correlation, dat_mouse$integration))
+nam = svz_mouse_regs
+svz_mouse_regs = unlist(lapply(strsplit(svz_mouse_regs, "_"), function(x) x[1]))
+names(svz_mouse_regs) = nam
+svz_mouse_regs[svz_mouse_regs=="Ependymal cells"] = "EC"
+
+colnames(mats_dev$dev1) = gsub("Ependymocytes", "EC", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Migrating neurons", "MN", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Apical progenitors", "AP", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Cycling glial cells", "CGC", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Intermediate progenitors", "IP", colnames(mats_dev$dev1))
+dev_mouse_regs = unique(colnames(mats_dev$dev1))
+nam = dev_mouse_regs
+dev_mouse_regs = unlist(lapply(strsplit(dev_mouse_regs, "_"), function(x) x[1]))
+names(dev_mouse_regs) = nam
+
+# svz
+dat = t(apply(mats_svz$vz, 1, scale))
+colnames(dat) = colnames(mats_svz$vz)
+svz_dist_dat = merge(reshape2::melt(dat), 
+                      data.frame(svz_mouse_regs), by.x = 2, by.y = 0)
+
+svz_plt = ggplot(svz_dist_dat, aes(x = svz_mouse_regs, y = value, fill = svz_mouse_regs))+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "scaled negative distance")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -90, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+
+# dev
+dat = t(apply(mats_dev$dev1, 1, scale))
+colnames(dat) = colnames(mats_dev$dev1)
+gaba_dist_dat = merge(reshape2::melt(dat), 
+                      data.frame(dev_mouse_regs), by.x = 2, by.y = 0)
+
+dev_plt = ggplot(gaba_dist_dat, aes(x = dev_mouse_regs, y = value, fill = dev_mouse_regs))+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "scaled negative distance")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -90, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+pdf("results/CrossSpIntegration/mouse_svz_boxplots_dist.pdf", height = 4.5, width = 6)
+print(svz_plt)
+dev.off()
+
+pdf("results/CrossSpIntegration/mouse_dev_boxplots_dist.pdf", height = 4.5, width = 6)
+print(dev_plt)
+dev.off()
+```
+
+Correlation distribution of clusters
+
+```{r}
+dat_mouse = merge(data.frame(corr_mouse$vz), data.frame(closest_vz$vz), by = 0, all = T)
+colnames(dat_mouse) = c("axolotl", "correlation", "integration")
+
+svz_mouse_regs = unique(c(dat_mouse$correlation, dat_mouse$integration))
+nam = svz_mouse_regs
+svz_mouse_regs = unlist(lapply(strsplit(svz_mouse_regs, "_"), function(x) x[1]))
+names(svz_mouse_regs) = nam
+svz_mouse_regs[svz_mouse_regs=="Ependymal cells"] = "EC"
+
+colnames(mats_dev$dev1) = gsub("Ependymocytes", "EC", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Migrating neurons", "MN", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Apical progenitors", "AP", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Cycling glial cells", "CGC", colnames(mats_dev$dev1))
+colnames(mats_dev$dev1) = gsub("Intermediate progenitors", "IP", colnames(mats_dev$dev1))
+dev_mouse_regs = unique(colnames(mats_dev$dev1))
+nam = dev_mouse_regs
+dev_mouse_regs = unlist(lapply(strsplit(dev_mouse_regs, "_"), function(x) x[1]))
+names(dev_mouse_regs) = nam
+
+# svz
+plot_df = merge(nbep_vz_cor, data.frame(svz_mouse_regs), by.x = 2, by.y = 0)
+svz_plt = ggplot(plot_df, aes(x = svz_mouse_regs, y = value, fill = svz_mouse_regs))+
+  facet_wrap(~Var1)+
+  geom_boxplot()+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "correlation")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -90, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+# dev
+dat = nbep_devct_cor
+dat$Var2 = gsub("Ependymocytes", "EC", dat$Var2)
+dat$Var2 = gsub("Migrating neurons", "MN", dat$Var2)
+dat$Var2 = gsub("Apical progenitors", "AP", dat$Var2)
+dat$Var2 = gsub("Cycling glial cells", "CGC", dat$Var2)
+dat$Var2 = gsub("Intermediate progenitors", "IP", dat$Var2)
+plot_df = merge(dat, data.frame(dev_mouse_regs), by.x = 2, by.y = 0)
+dev_plt = ggplot(plot_df, aes(x = dev_mouse_regs, y = value, fill = dev_mouse_regs))+
+  facet_wrap(~Var1)+
+  geom_boxplot()+
+  facet_wrap(~Var1, nrow = 4)+
+  geom_boxplot()+
+  labs(y = "correlation")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x = element_text(size = 6, colour = "black", angle = -90, 
+                                   hjust = 0, vjust = 0.5),
+        axis.title = element_text(size = 6.5),
+        legend.position = "none",
+        strip.text = element_text(size = 6.5))
+
+pdf("results/CrossSpIntegration/mouse_svz_boxplots_corr.pdf", height = 4.5, width = 6)
+print(svz_plt)
+dev.off()
+
+pdf("results/CrossSpIntegration/mouse_dev_boxplots_corr.pdf", height = 4.5, width = 6)
+print(dev_plt)
+dev.off()
 ```
 
 Matches VSVZ
@@ -1275,11 +1812,120 @@ dev.off()
 
 
 
+# Compare gene sets
+Glut
 
+```{r}
+# integration genes
+trimatch = ortMatch(ort_list_use, c("axolotl", "mouse", "paintedturtle"), ort_scope = NULL)
+integ_g = integ_dat_l$glut_all_3@assays$SCT@var.features
+sp_gene_i = list()
+for(sp in colnames(trimatch)){
+  hasg = apply(trimatch, 1, function(x) any(x %in% integ_g))
+  sp_gene_i[[sp]] = unique(trimatch[hasg,sp])
+}
+write.csv(sp_gene_i$axolotl, file = "results/CrossSpIntegration/glut_integ_genes_axolotl.csv",
+          col.names = F, row.names = F, quote = F)
 
+# correlation genes
+corr_g_mouse = read.csv("results/ComparativeSpeciesAnalysis/genes_used_correlations/Glut_all_axolotl_mouse_genes.csv", header = T)
+corr_g_turtle = read.csv("results/ComparativeSpeciesAnalysis/genes_used_correlations/Glut_all_axolotl_turtle_genes.csv", header = T)
+corr_g_mouse = unique(corr_g_mouse$axolotlgenename)
+corr_g_turtle = unique(corr_g_turtle$axolotlgenename)
 
+# venn
+pdf("results/CrossSpIntegration/glut_venn genes_mouse_turtle_integ.pdf", 
+    height = 3, width = 3)
+ggvenn::ggvenn(list("correlation with\nmouse" = corr_g_mouse, 
+                  "correlation with\nturtle" = corr_g_turtle, 
+                  "integration" = sp_gene_i$axolotl), text_size = 3, show_percentage = F, 
+               set_name_size = 3)
+dev.off()
+```
 
+GABA
 
+```{r}
+# integration genes
+trimatch = ortMatch(ort_list_use, c("axolotl", "mouse", "paintedturtle"), ort_scope = NULL)
+integ_g = integ_dat_l$gaba_all_3@assays$SCT@var.features
+sp_gene_i = list()
+for(sp in colnames(trimatch)){
+  hasg = apply(trimatch, 1, function(x) any(x %in% integ_g))
+  sp_gene_i[[sp]] = unique(trimatch[hasg,sp])
+}
+write.csv(sp_gene_i$axolotl, file = "results/CrossSpIntegration/gaba_integ_genes_axolotl.csv",
+          col.names = F, row.names = F, quote = F)
+
+# correlation genes
+corr_g_mouse = read.csv("results/ComparativeSpeciesAnalysis/genes_used_correlations/GABA_all_axolotl_mouse_genes.csv", header = T)
+corr_g_turtle = read.csv("results/ComparativeSpeciesAnalysis/genes_used_correlations/GABA_all_axolotl_turtle_genes.csv", header = T)
+corr_g_mouse = unique(corr_g_mouse$axolotlgenename)
+corr_g_turtle = unique(corr_g_turtle$axolotlgenename)
+
+# venn
+pdf("results/CrossSpIntegration/gaba_venn genes_mouse_turtle_integ.pdf", 
+    height = 3, width = 3)
+ggvenn::ggvenn(list("correlation with\nmouse" = corr_g_mouse, 
+                  "correlation with\nturtle" = corr_g_turtle, 
+                  "integration" = sp_gene_i$axolotl), text_size = 3, show_percentage = F, 
+               set_name_size = 3)
+dev.off()
+```
+
+SVZ
+
+```{r}
+# integration genes
+bimatch = ortMatch(ort_list_use, c("axolotl", "mouse"), ort_scope = NULL)
+integ_g = integ_dat_l2$vz@assays$SCT@var.features
+sp_gene_i = list()
+for(sp in colnames(bimatch)){
+  hasg = apply(bimatch, 1, function(x) any(x %in% integ_g))
+  sp_gene_i[[sp]] = unique(bimatch[hasg,sp])
+}
+write.csv(sp_gene_i$axolotl, file = "results/CrossSpIntegration/svz_integ_genes_axolotl.csv",
+          col.names = F, row.names = F, quote = F)
+
+# correlation genes
+corr_g_mouse = read.csv("results/ComparativeSpeciesAnalysis/genes_used_correlations/VSVZsc_all_axolotl_mouse_genes.csv", header = T)
+corr_g_mouse = unique(corr_g_mouse$axolotlgenename)
+
+# venn
+pdf("results/CrossSpIntegration/svz_venn_genes_mouse_integ.pdf", 
+    height = 3, width = 3)
+ggvenn::ggvenn(list("correlation with\nmouse" = corr_g_mouse, 
+                    "integration" = sp_gene_i$axolotl), text_size = 3, show_percentage = F, 
+               set_name_size = 3)
+dev.off()
+```
+
+Dev
+
+```{r}
+# integration genes
+bimatch = ortMatch(ort_list_use, c("axolotl", "mouse"), ort_scope = NULL)
+integ_g = integ_dat_l2$dev1@assays$SCT@var.features
+sp_gene_i = list()
+for(sp in colnames(bimatch)){
+  hasg = apply(bimatch, 1, function(x) any(x %in% integ_g))
+  sp_gene_i[[sp]] = unique(bimatch[hasg,sp])
+}
+write.csv(sp_gene_i$axolotl, file = "results/CrossSpIntegration/dev_integ_genes_axolotl.csv",
+          col.names = F, row.names = F, quote = F)
+
+# correlation genes
+corr_g_mouse = read.csv("results/ComparativeSpeciesAnalysis/genes_used_correlations/NPCEp_all_axolotl_mouseDiBella_genes.csv", header = T)
+corr_g_mouse = unique(corr_g_mouse$axolotlgenename)
+
+# venn
+pdf("results/CrossSpIntegration/dev_venn_genes_mouse_integ.pdf", 
+    height = 3, width = 3)
+ggvenn::ggvenn(list("correlation with\nmouse" = corr_g_mouse, 
+                    "integration" = sp_gene_i$axolotl), text_size = 3, show_percentage = F, 
+               set_name_size = 3)
+dev.off()
+```
 
 
 

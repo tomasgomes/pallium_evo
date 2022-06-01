@@ -1485,6 +1485,39 @@ print(plt)
 dev.off()
 ```
 
+Plot ependymal clusters in pseudotime
+
+```{r}
+# load pseudotime(s)
+div_dat_df = read.csv("results/RNAvelocity_Div/heatmap_gen/div_dat_df.csv", 
+                      header = T, row.names = 1)
+
+meta = ep_wpi_srat@meta.data[ep_wpi_srat@meta.data$sample_simp!="SS" &
+                               ep_wpi_srat@meta.data$ctlabels %in% c("epen_clus_4", "epen_clus_3"),
+                             c("clusters_used", "ctlabels")]
+newrownames = rownames(meta)
+newrownames = gsub("-1_1", "_2_wpi", newrownames)
+newrownames = gsub("-1_2", "_4_wpi", newrownames)
+newrownames = gsub("-1_3", "_6_wpi", newrownames)
+newrownames = gsub("-1_4", "_8_wpi", newrownames)
+newrownames = gsub("-1_5", "_12_wpi", newrownames)
+newrownames = gsub("-1", "_1_wpi", newrownames)
+rownames(meta) = newrownames
+subdiv = div_dat_df[,c("cells","orig_pt","newpt","fate","group")]
+
+plt_list = list()
+for(g in unique(subdiv$group)){
+  plot_df = merge(meta, unique(subdiv[subdiv$group==g,]), by.x = 0, by.y = 1)
+  plot_df$newlabs = as.character(plot_df$clusters_used)
+  plot_df$newlabs[!(plot_df$newlabs %in% c(20, 21, 8))] = as.character(plot_df$ctlabels[!(plot_df$newlabs %in% c(20, 21, 8))])
+  
+  plt_list[[g]] = ggplot(plot_df, aes(x = newpt, colour = newlabs))+
+    geom_density()+
+    labs(title = g)+
+    theme_bw()
+}
+```
+
 
 
 # Mapping Div-seq to SS UMAP

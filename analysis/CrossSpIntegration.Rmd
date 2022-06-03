@@ -1834,7 +1834,7 @@ corr_g_mouse = unique(corr_g_mouse$axolotlgenename)
 corr_g_turtle = unique(corr_g_turtle$axolotlgenename)
 
 # venn
-pdf("results/CrossSpIntegration/glut_venn genes_mouse_turtle_integ.pdf", 
+pdf("results/CrossSpIntegration/glut_venn_genes_mouse_turtle_integ.pdf", 
     height = 3, width = 3)
 ggvenn::ggvenn(list("correlation with\nmouse" = corr_g_mouse, 
                   "correlation with\nturtle" = corr_g_turtle, 

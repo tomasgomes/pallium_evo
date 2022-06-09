@@ -388,53 +388,28 @@ ort_list_use = c(ort_list_use, bfmats, finches_l)</code></pre>
 &lt;!-- rnb-chunk-begin --&gt;
 
 
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxuYXhvbG90bCA9IHJlYWRSRFMoXFxkYXRhL2V4cHJlc3Npb24vYXhvbG90bF9yZWNsdXN0L2FsbF9udWNsZWlfY2x1c3RlcmVkX2hpZ2hsZXZlbF9hbm5vLlJEU1xcKVxuXG5gYGBcbmBgYCJ9 --&gt;
+&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxubW91c2V2c3Z6ID0gcmVhZFJEUyhcImRhdGEvZXhwcmVzc2lvbi9zY19kYXQuUkRTXCIpXG5tZXRhID0gcmVhZC5jc3YoXCJkYXRhL2Fubm90YXRpb25zL21vdXNlYWJjc2NfdW1ldGEuY3N2XCIsIGhlYWRlciA9IFQsIHJvdy5uYW1lcyA9IDEpXG5tb3VzZXZzdnogPSBBZGRNZXRhRGF0YShtb3VzZXZzdnosIG1ldGFkYXRhID0gbWV0YSlcblxubW91c2VkZXYgPSByZWFkUkRTKFwiZGF0YS9leHByZXNzaW9uL21vdXNlX2RpYmVsbGFfZmlsdC5SRFNcIilcbm1ldGEgPSByZWFkLmNzdihcImRhdGEvYW5ub3RhdGlvbnMvbW91c2VkaWJlbGxhX3VtZXRhLmNzdlwiLCBoZWFkZXIgPSBULCByb3cubmFtZXMgPSAxKVxubW91c2VkZXYgPSBBZGRNZXRhRGF0YShtb3VzZWRldiwgbWV0YWRhdGEgPSBtZXRhKVxuYGBgIn0= --&gt;
 
 ```r
-```r
-axolotl = readRDS(\data/expression/axolotl_reclust/all_nuclei_clustered_highlevel_anno.RDS\)
-</code></pre>
-<pre><code>
-&lt;!-- rnb-source-end --&gt;
+mousevsvz = readRDS(&quot;data/expression/sc_dat.RDS&quot;)
+meta = read.csv(&quot;data/annotations/mouseabcsc_umeta.csv&quot;, header = T, row.names = 1)
+mousevsvz = AddMetaData(mousevsvz, metadata = meta)
 
-&lt;!-- rnb-output-begin eyJkYXRhIjoiV2FybmluZzogc3RhY2sgaW1iYWxhbmNlIGluICc9JywgMiB0aGVuIDVcbiJ9 --&gt;
-</code></pre>
-<p>Warning: stack imbalance in ‘=’, 2 then 5</p>
-<pre><code>
-
-
-&lt;!-- rnb-output-end --&gt;
-
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxubWV0YSA9IHJlYWQuY3N2KFxcZGF0YS9hbm5vdGF0aW9ucy9heG9sb3RsX2FsbF91bWV0YS5jc3ZcXCwgaGVhZGVyID0gVCwgcm93Lm5hbWVzID0gMSlcbmF4b2xvdGwgPSBBZGRNZXRhRGF0YShheG9sb3RsLCBtZXRhZGF0YSA9IG1ldGEpXG5gYGBcbmBgYCJ9 --&gt;
-
-```r
-```r
-meta = read.csv(\data/annotations/axolotl_all_umeta.csv\, header = T, row.names = 1)
-axolotl = AddMetaData(axolotl, metadata = meta)</code></pre>
-<pre><code>
-&lt;!-- rnb-source-end --&gt;
-
-&lt;!-- rnb-chunk-end --&gt;
-
-
-&lt;!-- rnb-text-begin --&gt;
-
-
-
-## Prepare adult data
-Get important cell type subsets
-
-
-&lt;!-- rnb-text-end --&gt;
-
-
-&lt;!-- rnb-chunk-begin --&gt;
-
-
-&lt;!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxuYWxsc3BfbGlzdCA9IGxpc3QoemVicmFmaXNoID0gemVicmFmaXNoLCBheG9sb3RsID0gYXhvbG90bCwgcGFpbnRlZHR1cnRsZSA9IHR1cnRsZSxcbiAgICAgICAgICAgICAgICAgIGxpemFyZCA9IGxpemFyZCwgYmVuZ2FsZXNlZmluY2ggPSBiZW5nYWxlc2VmaW5jaCwgemVicmFmaW5jaCA9IHplYnJhZmluY2gsXG4gICAgICAgICAgICAgICAgICBtb3VzZSA9IG1vdXNlLCBodW1hbiA9IGh1bWFuKVxuYGBgXG5gYGAifQ== --&gt;
-
-```r
-```r
+mousedev = readRDS(&quot;data/expression/mouse_dibella_filt.RDS&quot;)
+meta = read.csv(&quot;data/annotations/mousedibella_umeta.csv&quot;, header = T, row.names = 1)
+mousedev = AddMetaData(mousedev, metadata = meta)</code></pre>
+<!-- rnb-source-end -->
+<!-- rnb-chunk-end -->
+<!-- rnb-text-begin -->
+</div>
+</div>
+<div id="prepare-adult-data" class="section level2">
+<h2>Prepare adult data</h2>
+<p>Get important cell type subsets</p>
+<!-- rnb-text-end -->
+<!-- rnb-chunk-begin -->
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuYGBgclxuYWxsc3BfbGlzdCA9IGxpc3QoemVicmFmaXNoID0gemVicmFmaXNoLCBheG9sb3RsID0gYXhvbG90bCwgcGFpbnRlZHR1cnRsZSA9IHR1cnRsZSxcbiAgICAgICAgICAgICAgICAgIGxpemFyZCA9IGxpemFyZCwgYmVuZ2FsZXNlZmluY2ggPSBiZW5nYWxlc2VmaW5jaCwgemVicmFmaW5jaCA9IHplYnJhZmluY2gsXG4gICAgICAgICAgICAgICAgICBtb3VzZSA9IG1vdXNlLCBodW1hbiA9IGh1bWFuKVxuYGBgXG5gYGAifQ== -->
+<pre class="r"><code>```r
 allsp_list = list(zebrafish = zebrafish, axolotl = axolotl, paintedturtle = turtle,
                   lizard = lizard, bengalesefinch = bengalesefinch, zebrafinch = zebrafinch,
                   mouse = mouse, human = human)</code></pre>
@@ -708,7 +683,6 @@ for(n in names(integ_dat_l)){
 <!-- rnb-source-end -->
 <!-- rnb-chunk-end -->
 <!-- rnb-text-begin -->
-</div>
 </div>
 <div id="developmental" class="section level2">
 <h2>Developmental</h2>
